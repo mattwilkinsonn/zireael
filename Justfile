@@ -99,6 +99,11 @@ ci:
         just ci-tap
         ran_any=1
     fi
+    if just _filter-touched docs; then
+        echo "→ markdown paths touched; running markdownlint."
+        just ci-docs
+        ran_any=1
+    fi
     if [ "$ran_any" -eq 0 ]; then
         echo "→ No tool paths touched by the diff. Nothing to do."
         echo "  (Run \`just ci-all\` to force the full suite.)"
@@ -108,7 +113,7 @@ ci:
 
 # Run every tool's CI unconditionally — ignores the path filter.
 [doc('Unconditional CI: run every tool, ignoring path filter. Equivalent to a full remote run.')]
-ci-all: ci-jj-hooks ci-jj-gt ci-akiflow-cli ci-tap
+ci-all: ci-jj-hooks ci-jj-gt ci-akiflow-cli ci-tap ci-docs
 
 # Per-tool CI recipes. Each mirrors what the corresponding
 # .github/workflows/<tool>.yml runs in CI. When the remote recipe
@@ -151,6 +156,10 @@ ci-tap:
         exit 0
     fi
     brew style tap/Formula/*.rb
+
+[doc('Markdown lint: enforces the rules in .markdownlint-cli2.jsonc.')]
+ci-docs:
+    markdownlint-cli2 "**/*.md"
 
 # Shared implementation for the per-filter "did the diff touch any
 # path under <filter-name>?" predicate. Stays private — the public

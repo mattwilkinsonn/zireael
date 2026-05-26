@@ -1,3 +1,4 @@
+<!-- markdownlint-disable-next-line MD033 MD041 -->
 <div align="center">
 
 # akiflow-cli
@@ -208,6 +209,7 @@ af doctor --json                # structured for scripts / agents
 ```
 
 Reports:
+
 - Credentials present + JWT `user_id` + expiry timestamp
 - Supported browsers + which ones are detected
 - Cache state per resource (record count + last sync)

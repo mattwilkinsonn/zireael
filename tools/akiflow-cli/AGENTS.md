@@ -10,7 +10,7 @@ Bun-native CLI for Akiflow task management. TypeScript, citty framework, compile
 
 ## STRUCTURE
 
-```
+```text
 akiflow-cli/
 ├── src/
 │   ├── index.ts              # CLI entry: citty runMain()
@@ -58,9 +58,11 @@ akiflow-cli/
 ## CODE MAP
 
 ### Entry Point
+
 - `src/index.ts` → `runMain(main)` with all subcommands registered
 
 ### Core Classes
+
 | Symbol | Location | Role |
 |--------|----------|------|
 | `AkiflowClient` | lib/api/client.ts | HTTP client with lazy credential loading |
@@ -68,6 +70,7 @@ akiflow-cli/
 | `NetworkError` | lib/api/types.ts | Connection/parse errors |
 
 ### Key Interfaces
+
 | Type | Location | Fields |
 |------|----------|--------|
 | `Task` | lib/api/types.ts | 45+ fields (id, title, date, done, listId...) |
@@ -76,6 +79,7 @@ akiflow-cli/
 | `Credentials` | lib/auth/storage.ts | token, clientId, expiryTimestamp |
 
 ### API Endpoints (via client)
+
 - `getTasks()` → GET /v5/tasks
 - `upsertTasks([])` → PATCH /v5/tasks
 - `getLabels()` → GET /v5/labels
@@ -85,6 +89,7 @@ akiflow-cli/
 ## CONVENTIONS
 
 ### Command Pattern
+
 ```typescript
 export const myCommand = defineCommand({
   meta: { name: "cmd", description: "..." },
@@ -100,6 +105,7 @@ export const myCommand = defineCommand({
 ```
 
 ### Test Pattern (Given-When-Then)
+
 ```typescript
 it("description", async () => {
   // given
@@ -114,6 +120,7 @@ it("description", async () => {
 ```
 
 ### Error Handling
+
 ```typescript
 try {
   const response = await client.getTasks();
@@ -128,6 +135,7 @@ try {
 ```
 
 ### Platform Detection
+
 ```typescript
 if (process.platform === "darwin") {
   // macOS: use Bun.secrets (Keychain)
@@ -147,16 +155,19 @@ if (process.platform === "darwin") {
 ## UNIQUE STYLES
 
 ### Short ID System
+
 - `af ls` saves task context to `~/.cache/af/last-list.json`
 - `af do 1` resolves short ID from cached context
 - Full UUIDs always work as fallback
 
 ### Token Extraction Priority
+
 1. IndexedDB (JWT pattern matching)
 2. Cookies (PBKDF2 decryption for Chrome-family, binary for Safari)
 3. Fail with helpful message
 
 ### Credentials Storage
+
 - macOS: Keychain via `Bun.secrets`
 - Linux: XDG `~/.config/af/credentials.json`
 
@@ -188,15 +199,19 @@ af block 1h "Focus"  # Create time block
 ## NOTES
 
 ### Large File Warning
+
 `src/lib/auth/extract-token.ts` (532 lines) — Complex browser crypto. Touch carefully.
 
 ### Dependency on ls
+
 `af do`, `af task *` commands require `af ls` to be run first for short ID resolution.
 
 ### API Version
+
 Uses Akiflow API v5 with version header "3" (Akiflow-Version: 3).
 
 ### Bun-Specific APIs
+
 - `Bun.secrets` — Keychain access
 - `Bun.file()`, `Bun.write()` — File operations
 - `Bun.$\`cmd\`` — Shell commands

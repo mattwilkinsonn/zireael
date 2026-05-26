@@ -24,6 +24,7 @@ Use this when you want fast task management without leaving your terminal.
 바이너리 설치됨: `/opt/homebrew/bin/af` (또는 `which af`)
 
 최초 인증:
+
 ```bash
 af auth        # Chrome에서 토큰 자동 추출
 af auth status # 인증 상태 확인
@@ -36,12 +37,14 @@ Credentials 저장 위치: `~/.config/af/credentials.json`
 ## 토큰 만료 대처 (중요!)
 
 ### 자동 갱신
+
 - CLI가 refresh token으로 자동 갱신 시도
 - 대부분의 경우 사용자 개입 없이 작동
 
 ### 수동 재인증이 필요한 경우
 
 **증상:**
+
 - `AuthError: No credentials found` 에러
 - `401 Unauthorized` 응답  
 - API 호출 실패
@@ -49,18 +52,21 @@ Credentials 저장 위치: `~/.config/af/credentials.json`
 **대처 순서:**
 
 1. **먼저 Chrome에서 Akiflow 로그인 확인**
+
    ```bash
    # Chrome에서 https://web.akiflow.com 접속하여 로그인 상태 확인
    # 로그아웃 되어있으면 로그인
    ```
 
 2. **토큰 재추출**
+
    ```bash
    af auth
    # "Found 1 token(s) from: chrome" 메시지 확인
    ```
 
 3. **인증 상태 확인**
+
    ```bash
    af auth status
    # "Authenticated" 출력되면 성공
@@ -215,6 +221,7 @@ af add "New feature" --project "Work" -d "friday"
 ## Natural Language Dates
 
 Supported formats:
+
 - `today`, `tomorrow`, `yesterday`
 - `monday`, `tuesday`, ... (next occurrence)
 - `next week`, `next month`

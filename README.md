@@ -3,7 +3,7 @@
 Monorepo for personal CLI tools.
 
 | Tool | Path | Language | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `jj-hooks` / `jj-hp` | [`tools/jj-hooks`](./tools/jj-hooks) | Rust | Run pre-commit / lefthook / hk hooks against [jj](https://github.com/jj-vcs/jj) bookmark pushes. |
 | `jj-gt` | [`tools/jj-gt`](./tools/jj-gt) | Rust | Bridge jj bookmark stacks and [Graphite](https://graphite.dev) PR stacks. |
 | `akiflow-cli` (`af`) | [`tools/akiflow-cli`](./tools/akiflow-cli) | TypeScript / Bun | [Akiflow](https://akiflow.com) task-management CLI (fork of [`code-yeongyu/akiflow-cli`](https://github.com/code-yeongyu/akiflow-cli)). |
@@ -29,7 +29,10 @@ cargo binstall jj-hooks   # ships `jj-hooks` + `jj-hp`
 cargo binstall jj-gt
 ```
 
-`binstall` looks for binaries on GitHub Releases first, and falls back to regular `install` if it can't find one for your architecture. 99% of the time it will just install the prebuilt binary, saving you the compile time.
+`binstall` looks for binaries on GitHub Releases first, and falls back to
+regular `install` if it can't find one for your architecture. 99% of the
+time it will just install the prebuilt binary, saving you the compile
+time.
 
 #### Standard `cargo install`
 
