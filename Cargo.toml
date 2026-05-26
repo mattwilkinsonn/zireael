@@ -1,0 +1,48 @@
+[workspace]
+resolver = "3"
+members = [
+    # Members are added in subsequent phases:
+    #   phase B → "tools/jj-hooks"
+    #   phase C → "tools/jj-gt"
+    #
+    # akiflow-cli is bun/TypeScript and is not a workspace member.
+]
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/mattwilkinsonn/zireael"
+authors = ["Matt Wilkinson <mattwilki17@gmail.com>"]
+
+# All deps shared by the workspace's Rust members go here. Each
+# tool's Cargo.toml refers to them via `dep = { workspace = true }`.
+# Single source of truth for versions — bumping a dep is one edit.
+[workspace.dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.6.1", features = ["derive", "env"] }
+clap_complete = { version = "4.6.5", features = ["unstable-dynamic"] }
+dialoguer = { version = "0.12.0", default-features = false }
+indoc = "2.0.6"
+owo-colors = { version = "4.3.0", features = ["supports-colors"] }
+regex = "1.12.3"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.145"
+tempfile = "3.27.0"
+thiserror = "2.0.18"
+toml = "1.1.2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# Internal workspace member path-dep. jj-gt depends on jj-hooks
+# via this entry, so a `cargo publish -p jj-gt` (in release.yml)
+# automatically rewrites the dep to use jj-hooks's version number
+# from crates.io — both `version` and `path` need to be present
+# in the per-package Cargo.toml for that auto-rewrite to fire,
+# which is what `dep = { workspace = true }` produces from the
+# entry below.
+jj-hooks = { version = "0.3.0", path = "tools/jj-hooks" }
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

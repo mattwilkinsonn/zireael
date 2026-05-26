@@ -1,0 +1,149 @@
+name: Rust CI base
+
+# Reusable workflow consumed by .github/workflows/jj-hooks.yml and
+# .github/workflows/jj-gt.yml. Single source of truth for the Rust
+# lint/test scaffold across all Rust members of the monorepo.
+#
+# Caller pattern:
+#
+#   ci:
+#     needs: [changes]
+#     if: needs.changes.outputs.changed == 'true'
+#     uses: ./.github/workflows/ci-base-rust.yml
+#     with:
+#       package: jj-hooks
+#       install_deps: true
+
+"on":
+  workflow_call:
+    inputs:
+      package:
+        description: "Cargo package name to lint + test (e.g. jj-hooks)"
+        required: true
+        type: string
+      install_deps:
+        description: "Whether to run `just install-deps` (needed for jj-gt's hook-runner stack)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lints:
+    name: Lints (${{ inputs.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install stable
+          rustup component add rustfmt clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "lints-${{ inputs.package }}"
+          save-if: "true"
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+
+      - name: cargo fmt --check
+        run: cargo fmt -p ${{ inputs.package }} -- --check
+
+      - name: cargo clippy
+        run: cargo clippy -p ${{ inputs.package }} --all-targets -- -D warnings
+
+  test:
+    name: Test (${{ inputs.package }}, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      # When install_deps is true the per-tool Justfile installs hk,
+      # pkl, gt, gh, lefthook, etc. into XDG_BIN_HOME. Point it at
+      # a workspace-scoped path so the cache action below catches it.
+      XDG_BIN_HOME: ${{ github.workspace }}/.tools-bin
+      XDG_DATA_HOME: ${{ github.workspace }}/.tools-data
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "test-${{ inputs.package }}-${{ matrix.os }}"
+          save-if: "true"
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,just,cargo-binstall
+
+      # Heavy deps (hk, pkl, gt, gh, lefthook, ...) only when the
+      # caller asks for them — jj-hooks's tests need pkl + hk for
+      # the hk-runner integration tests, jj-gt needs the full stack.
+      - name: Cache hook tools
+        if: inputs.install_deps && runner.os == 'Linux'
+        id: tools-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.XDG_BIN_HOME }}
+            ${{ env.XDG_DATA_HOME }}
+          key: tools-${{ runner.os }}-${{ hashFiles('tools/jj-gt/Justfile', '.github/workflows/ci-base-rust.yml') }}
+
+      - name: Install jj from prebuilt tarball
+        if: inputs.install_deps && (runner.os == 'macOS' || steps.tools-cache.outputs.cache-hit != 'true')
+        run: |
+          set -euo pipefail
+          jj_version=v0.41.0
+          case "$(uname -s)-$(uname -m)" in
+              Linux-x86_64)   triple=x86_64-unknown-linux-musl ;;
+              Linux-aarch64)  triple=aarch64-unknown-linux-musl ;;
+              Darwin-arm64)   triple=aarch64-apple-darwin ;;
+              Darwin-x86_64)  triple=x86_64-apple-darwin ;;
+              *)
+                  echo "unsupported host: $(uname -s)-$(uname -m)" >&2
+                  exit 1
+                  ;;
+          esac
+          url="https://github.com/jj-vcs/jj/releases/download/${jj_version}/jj-${jj_version}-${triple}.tar.gz"
+          dest="${XDG_BIN_HOME:-$HOME/.local/bin}"
+          mkdir -p "$dest"
+          curl -fsSL "$url" | tar -xz --strip-components=1 -C "$dest" ./jj
+          "$dest/jj" --version
+
+      - name: Install Python (for uv on Linux)
+        if: inputs.install_deps && runner.os == 'Linux' && steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install uv (Linux only — macOS uses brew)
+        if: inputs.install_deps && runner.os == 'Linux' && steps.tools-cache.outputs.cache-hit != 'true'
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install hook runners
+        if: inputs.install_deps && (runner.os == 'macOS' || steps.tools-cache.outputs.cache-hit != 'true')
+        working-directory: tools/jj-gt
+        run: just install-deps
+
+      - name: Add tool dirs to PATH
+        if: inputs.install_deps
+        run: echo "$XDG_BIN_HOME" >> "$GITHUB_PATH"
+
+      - name: cargo nextest run
+        run: cargo nextest run -p ${{ inputs.package }} --no-fail-fast

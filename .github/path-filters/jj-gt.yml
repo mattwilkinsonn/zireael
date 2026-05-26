@@ -1,0 +1,15 @@
+# Path filter for jj-gt. Note: includes `tools/jj-hooks/**` because
+# jj-gt depends on jj-hooks via the workspace path — a jj-hooks
+# change should re-test jj-gt to catch breakage that jj-hooks's own
+# CI wouldn't see.
+jj-gt:
+  - 'tools/jj-gt/**'
+  - 'tools/jj-hooks/**'
+  - 'Cargo.toml'
+  - 'Cargo.lock'
+  - 'rust-toolchain.toml'
+  - 'clippy.toml'
+  - 'hk.pkl'
+  - '.github/workflows/jj-gt.yml'
+  - '.github/workflows/ci-base-rust.yml'
+  - '.github/path-filters/jj-gt.yml'

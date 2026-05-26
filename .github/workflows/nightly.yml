@@ -1,0 +1,54 @@
+name: nightly
+
+# Daily cron that ignores path filters and runs the full matrix.
+# Catches drift caused by upstream tool auto-updates (hk, pkl, jj
+# versions, brew formulae, npm registry, etc.) — anything that
+# wouldn't be triggered by a code change in this repo.
+
+"on":
+  schedule:
+    - cron: "0 6 * * *"  # 06:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  jj-hooks:
+    uses: ./.github/workflows/ci-base-rust.yml
+    with:
+      package: jj-hooks
+      install_deps: true
+    secrets: inherit
+
+  jj-gt:
+    uses: ./.github/workflows/ci-base-rust.yml
+    with:
+      package: jj-gt
+      install_deps: true
+    secrets: inherit
+
+  akiflow-cli:
+    name: akiflow-cli nightly
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: tools/akiflow-cli
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+      - run: bun install --frozen-lockfile
+      - run: bunx biome check .
+      - run: bunx tsc --noEmit
+      - run: bun test
+
+  tap:
+    name: tap nightly
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - run: brew style tap/Formula/*.rb

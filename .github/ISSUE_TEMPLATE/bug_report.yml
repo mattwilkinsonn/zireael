@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a bug in any zireael tool (jj-hooks, jj-gt, akiflow-cli, or the Homebrew formulae).
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: tool
+    attributes:
+      label: Which tool?
+      options:
+        - jj-hooks / jj-hp
+        - jj-gt
+        - akiflow-cli (af)
+        - Homebrew formula
+        - Repo infra (CI, release, monorepo plumbing)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `<tool> --version` (or formula version for tap issues).
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Minimal steps to trigger the bug. Pasting the failing command + its output is usually enough.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected to happen
+    validations:
+      required: false
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: |
+        OS + arch (e.g. macOS arm64), shell, anything unusual about your jj/git/graphite versions.
+      render: text
+    validations:
+      required: false

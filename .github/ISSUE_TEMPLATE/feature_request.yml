@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a new feature or improvement for any zireael tool.
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: tool
+    attributes:
+      label: Which tool?
+      options:
+        - jj-hooks / jj-hp
+        - jj-gt
+        - akiflow-cli (af)
+        - Homebrew formula
+        - Repo infra (CI, release, monorepo plumbing)
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the workflow or limitation that motivated this request.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Optional. A rough sketch of what you'd like the tool to do.
+    validations:
+      required: false

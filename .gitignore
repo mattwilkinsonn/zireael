@@ -1,0 +1,28 @@
+# Rust
+/target
+/tools/*/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Bun / Node
+node_modules/
+.bun/
+dist/
+*.log
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local sandboxing
+seal.local.toml
+.envrc.local
+
+# direnv state (commit .envrc, ignore the cached approval)
+.direnv/

@@ -1,0 +1,4 @@
+akiflow-cli:
+  - 'tools/akiflow-cli/**'
+  - '.github/workflows/akiflow-cli.yml'
+  - '.github/path-filters/akiflow-cli.yml'
