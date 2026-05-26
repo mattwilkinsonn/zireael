@@ -23,26 +23,47 @@ const mockContextFile = {
 };
 
 describe("do command", () => {
+	// Track every spyOn() return value created during a test so the
+	// afterEach can mockRestore() them. Without this, `spyOn(globalThis,
+	// "fetch")` calls leak across tests — later tests pick up an existing
+	// spy with the previous test's recorded calls, which manifested as
+	// `task.test.ts > schedules task with YYYY-MM-DD date format` reading
+	// `fetchSpy.mock.calls[0]` and getting a `do` test's PATCH /v5/tasks
+	// payload instead of the taskPlanCommand one (issue surfaced during
+	// the zireael monorepo import).
+	const spies: Array<{ mockRestore: () => void }> = [];
+	const track = <T extends { mockRestore: () => void }>(spy: T): T => {
+		spies.push(spy);
+		return spy;
+	};
+
 	beforeEach(async () => {
 		mkdirSync(testCacheDir, { recursive: true });
 		writeFileSync(testContextFile, JSON.stringify(mockContextFile));
 
 		// Prevent hitting real ~/.config/af credentials.
-		spyOn(
-			await import("../../lib/auth/storage"),
-			"loadCredentials",
-		).mockResolvedValue({
-			token: "test-token",
-			clientId: "test-client-id",
-			expiryTimestamp: Date.now() + 60_000,
-		});
+		track(
+			spyOn(
+				await import("../../lib/auth/storage"),
+				"loadCredentials",
+			).mockResolvedValue({
+				token: "test-token",
+				clientId: "test-client-id",
+				expiryTimestamp: Date.now() + 60_000,
+			}),
+		);
 
-		spyOn(process, "exit").mockImplementation((code?: number) => {
-			throw new ExitError(code ?? 0);
-		});
+		track(
+			spyOn(process, "exit").mockImplementation((code?: number) => {
+				throw new ExitError(code ?? 0);
+			}),
+		);
 	});
 
 	afterEach(() => {
+		while (spies.length > 0) {
+			spies.pop()?.mockRestore();
+		}
 		try {
 			rmSync(testContextFile);
 		} catch {
@@ -51,22 +72,24 @@ describe("do command", () => {
 	});
 
 	it("completes single task by short ID", async () => {
-		const consoleSpy = spyOn(console, "log");
-		const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [
-						{
-							id: "abc123def456",
-							done: true,
-							done_at: new Date().toISOString(),
-							status: 2,
-						},
-					],
-				}),
-				{ status: 200 },
+		const consoleSpy = track(spyOn(console, "log"));
+		const fetchSpy = track(
+			spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [
+							{
+								id: "abc123def456",
+								done: true,
+								done_at: new Date().toISOString(),
+								status: 2,
+							},
+						],
+					}),
+					{ status: 200 },
+				),
 			),
 		);
 
@@ -86,28 +109,30 @@ describe("do command", () => {
 	});
 
 	it("completes multiple tasks by short IDs", async () => {
-		const consoleSpy = spyOn(console, "log");
-		const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [
-						{
-							id: "abc123def456",
-							done: true,
-							done_at: new Date().toISOString(),
-							status: 2,
-						},
-						{
-							id: "xyz789uvw012",
-							done: true,
-							done_at: new Date().toISOString(),
-							status: 2,
-						},
-					],
-				}),
-				{ status: 200 },
+		const consoleSpy = track(spyOn(console, "log"));
+		const fetchSpy = track(
+			spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [
+							{
+								id: "abc123def456",
+								done: true,
+								done_at: new Date().toISOString(),
+								status: 2,
+							},
+							{
+								id: "xyz789uvw012",
+								done: true,
+								done_at: new Date().toISOString(),
+								status: 2,
+							},
+						],
+					}),
+					{ status: 200 },
+				),
 			),
 		);
 
@@ -130,22 +155,24 @@ describe("do command", () => {
 	});
 
 	it("completes task by partial UUID", async () => {
-		const consoleSpy = spyOn(console, "log");
-		const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [
-						{
-							id: "abc123def456",
-							done: true,
-							done_at: new Date().toISOString(),
-							status: 2,
-						},
-					],
-				}),
-				{ status: 200 },
+		const consoleSpy = track(spyOn(console, "log"));
+		const fetchSpy = track(
+			spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [
+							{
+								id: "abc123def456",
+								done: true,
+								done_at: new Date().toISOString(),
+								status: 2,
+							},
+						],
+					}),
+					{ status: 200 },
+				),
 			),
 		);
 
@@ -165,7 +192,7 @@ describe("do command", () => {
 	});
 
 	it("handles invalid short ID", async () => {
-		const consoleErrorSpy = spyOn(console, "error");
+		const consoleErrorSpy = track(spyOn(console, "error"));
 		const mockContext = {
 			args: { ids: "999" },
 		};
@@ -185,7 +212,7 @@ describe("do command", () => {
 	});
 
 	it("handles ambiguous UUID", async () => {
-		const consoleErrorSpy = spyOn(console, "error");
+		const consoleErrorSpy = track(spyOn(console, "error"));
 		const contextWithDuplicates = {
 			tasks: [
 				{ shortId: 1, id: "abc123def456", title: "Task 1" },
@@ -215,7 +242,7 @@ describe("do command", () => {
 
 	it("handles missing context file", async () => {
 		rmSync(testContextFile);
-		const consoleErrorSpy = spyOn(console, "error");
+		const consoleErrorSpy = track(spyOn(console, "error"));
 
 		const mockContext = {
 			args: { ids: "1" },
@@ -236,15 +263,17 @@ describe("do command", () => {
 	});
 
 	it("handles API error", async () => {
-		const consoleErrorSpy = spyOn(console, "error");
-		const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					success: false,
-					message: "API error",
-					data: [],
-				}),
-				{ status: 200 },
+		const consoleErrorSpy = track(spyOn(console, "error"));
+		const fetchSpy = track(
+			spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(
+					JSON.stringify({
+						success: false,
+						message: "API error",
+						data: [],
+					}),
+					{ status: 200 },
+				),
 			),
 		);
 
@@ -268,9 +297,9 @@ describe("do command", () => {
 	});
 
 	it("handles network error", async () => {
-		const consoleErrorSpy = spyOn(console, "error");
-		const fetchSpy = spyOn(globalThis, "fetch").mockRejectedValue(
-			new Error("Network error"),
+		const consoleErrorSpy = track(spyOn(console, "error"));
+		const fetchSpy = track(
+			spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network error")),
 		);
 
 		const mockContext = {
@@ -293,14 +322,16 @@ describe("do command", () => {
 	});
 
 	it("sends correct payload to API", async () => {
-		const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [],
-				}),
-				{ status: 200 },
+		const fetchSpy = track(
+			spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [],
+					}),
+					{ status: 200 },
+				),
 			),
 		);
 
@@ -325,28 +356,30 @@ describe("do command", () => {
 	});
 
 	it("completes multiple tasks with mixed short IDs and UUIDs", async () => {
-		const consoleSpy = spyOn(console, "log");
-		const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					success: true,
-					message: null,
-					data: [
-						{
-							id: "abc123def456",
-							done: true,
-							done_at: new Date().toISOString(),
-							status: 2,
-						},
-						{
-							id: "pqr345stu678",
-							done: true,
-							done_at: new Date().toISOString(),
-							status: 2,
-						},
-					],
-				}),
-				{ status: 200 },
+		const consoleSpy = track(spyOn(console, "log"));
+		const fetchSpy = track(
+			spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(
+					JSON.stringify({
+						success: true,
+						message: null,
+						data: [
+							{
+								id: "abc123def456",
+								done: true,
+								done_at: new Date().toISOString(),
+								status: 2,
+							},
+							{
+								id: "pqr345stu678",
+								done: true,
+								done_at: new Date().toISOString(),
+								status: 2,
+							},
+						],
+					}),
+					{ status: 200 },
+				),
 			),
 		);
 

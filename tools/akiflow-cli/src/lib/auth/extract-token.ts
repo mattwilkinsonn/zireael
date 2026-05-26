@@ -73,27 +73,49 @@ export async function getKeychainPassword(
 		return null;
 	}
 
-	const proc = Bun.spawn(
-		["security", "find-generic-password", "-w", "-s", serviceName],
-		{
-			stdout: "pipe",
-			stderr: "pipe",
-		},
-	);
+	// `security find-generic-password` is macOS-only — the binary
+	// doesn't exist on Linux/Windows, and Bun.spawn throws ENOENT on
+	// spawn failure rather than treating it as a non-zero exit. Wrap
+	// the call so we degrade to "no keychain entry" instead of
+	// propagating an unhandled rejection up the import-token flow.
+	try {
+		const proc = Bun.spawn(
+			["security", "find-generic-password", "-w", "-s", serviceName],
+			{
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
 
-	const output = await new Response(proc.stdout).text();
-	await proc.exited;
+		const output = await new Response(proc.stdout).text();
+		await proc.exited;
 
-	if (proc.exitCode !== 0) {
-		log.warn("keychain_missing", "no keychain entry for browser safe-storage", {
-			browser: browserName,
-			service: serviceName,
-			exit_code: proc.exitCode,
-		});
+		if (proc.exitCode !== 0) {
+			log.warn(
+				"keychain_missing",
+				"no keychain entry for browser safe-storage",
+				{
+					browser: browserName,
+					service: serviceName,
+					exit_code: proc.exitCode,
+				},
+			);
+			return null;
+		}
+
+		return output.trim();
+	} catch (error) {
+		log.warn(
+			"keychain_unavailable",
+			"`security` binary not on PATH (non-macOS host?)",
+			{
+				browser: browserName,
+				service: serviceName,
+				error: error instanceof Error ? error.message : String(error),
+			},
+		);
 		return null;
 	}
-
-	return output.trim();
 }
 
 /**
