@@ -1,0 +1,412 @@
+name: release
+
+# Triggered by `git push origin v*` from the `just release` recipe
+# (or manually via `jj git push --tag v0.3.0`).
+#
+# Builds release artifacts for every monorepo tool, attaches them
+# to a single GitHub Release, bumps each tap/Formula/*.rb in-place,
+# and publishes the Rust crates to crates.io. All assets live under
+# one Release; the per-tool tarballs are named so each Homebrew
+# formula can find its own platform-specific download.
+
+"on":
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to (re-)build a release for. Must already exist."
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  # ----- Compute the version we're releasing.
+  meta:
+    name: Compute release metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - id: tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              tag="${{ inputs.tag }}"
+          else
+              tag="${GITHUB_REF_NAME}"
+          fi
+          version="${tag#v}"
+          if [[ "$tag" == *-* ]]; then
+              prerelease=true
+          else
+              prerelease=false
+          fi
+          {
+              echo "tag=${tag}"
+              echo "version=${version}"
+              echo "prerelease=${prerelease}"
+          } >> "$GITHUB_OUTPUT"
+
+  # ----- Build the Rust binaries (jj-hooks, jj-hp, jj-gt).
+  #
+  # Per-target matrix keyed on (target_name, runs_on, rust_target).
+  # macOS-latest is Apple Silicon (arm64); Linux runners cover x64
+  # and arm64 separately. The matrix builds every Rust binary in
+  # one cargo invocation per target, so we don't pay setup cost
+  # twice per platform.
+  build-rust:
+    name: Build Rust (${{ matrix.target_name }})
+    needs: [meta]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_name: darwin-arm64
+            runs_on: macos-latest
+            rust_target: aarch64-apple-darwin
+          - target_name: linux-x64
+            runs_on: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+          - target_name: linux-arm64
+            runs_on: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: |
+          rustup show active-toolchain || rustup toolchain install stable
+          rustup target add ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-${{ matrix.target_name }}"
+
+      - name: Build release binaries (jj-hooks, jj-hp, jj-gt)
+        run: |
+          cargo build --release --target ${{ matrix.rust_target }} \
+              --bin jj-hooks --bin jj-hp \
+              --bin jj-gt
+
+      # ----- Stage + tar each tool's artifacts.
+      #
+      # Each tool gets its own tarball named after the slug the
+      # Homebrew formula expects:
+      #   jj-hooks-v<X>-<slug>.tar.gz  (contains jj-hooks + jj-hp)
+      #   jj-gt-v<X>-<slug>.tar.gz     (contains jj-gt)
+      #
+      # Codesigning on macOS is ad-hoc (`codesign -s -`) so the
+      # binary doesn't get the "downloaded from internet" quarantine
+      # warning. Real Developer-ID signing needs an Apple cert pair
+      # in secrets and is out-of-scope for an MVP-stage release.
+      - name: Stage jj-hooks artifacts
+        id: stage_jj_hooks
+        run: |
+          set -euo pipefail
+          ver="${{ needs.meta.outputs.version }}"
+          stage="$RUNNER_TEMP/jj-hooks-v${ver}-${{ matrix.target_name }}"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.rust_target }}/release/jj-hooks" "$stage/"
+          cp "target/${{ matrix.rust_target }}/release/jj-hp" "$stage/"
+          cp tools/jj-hooks/README.md "$stage/"
+          cp LICENSE-MIT LICENSE-APACHE "$stage/"
+          echo "dir=$stage" >> "$GITHUB_OUTPUT"
+
+      - name: Stage jj-gt artifacts
+        id: stage_jj_gt
+        run: |
+          set -euo pipefail
+          ver="${{ needs.meta.outputs.version }}"
+          stage="$RUNNER_TEMP/jj-gt-v${ver}-${{ matrix.target_name }}"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.rust_target }}/release/jj-gt" "$stage/"
+          cp tools/jj-gt/README.md "$stage/"
+          cp LICENSE-MIT LICENSE-APACHE "$stage/"
+          echo "dir=$stage" >> "$GITHUB_OUTPUT"
+
+      - name: Codesign (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          codesign -s - "${{ steps.stage_jj_hooks.outputs.dir }}/jj-hooks"
+          codesign -s - "${{ steps.stage_jj_hooks.outputs.dir }}/jj-hp"
+          codesign -s - "${{ steps.stage_jj_gt.outputs.dir }}/jj-gt"
+
+      - name: Tar + sha256 each tool
+        id: pack
+        run: |
+          set -euo pipefail
+          ver="${{ needs.meta.outputs.version }}"
+          for tool in jj-hooks jj-gt; do
+              stage="$RUNNER_TEMP/${tool}-v${ver}-${{ matrix.target_name }}"
+              tar -C "$(dirname "$stage")" -czf "$stage.tar.gz" "$(basename "$stage")"
+              shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
+          done
+
+      - name: Upload Rust artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-${{ matrix.target_name }}
+          path: |
+            ${{ runner.temp }}/jj-hooks-v*.tar.gz
+            ${{ runner.temp }}/jj-hooks-v*.sha256
+            ${{ runner.temp }}/jj-gt-v*.tar.gz
+            ${{ runner.temp }}/jj-gt-v*.sha256
+          if-no-files-found: error
+
+  # ----- Build the bun compiled binary (`af` for akiflow-cli).
+  build-akiflow-cli:
+    name: Build akiflow-cli (${{ matrix.target_name }})
+    needs: [meta]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target_name: darwin-arm64
+            runs_on: macos-latest
+            bun_target: bun-darwin-arm64
+          - target_name: linux-x64
+            runs_on: ubuntu-latest
+            bun_target: bun-linux-x64
+          - target_name: linux-arm64
+            runs_on: ubuntu-24.04-arm
+            bun_target: bun-linux-arm64
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools/akiflow-cli
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3"
+
+      - name: bun install
+        run: bun install --frozen-lockfile
+
+      - name: Compile af binary
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          bun build src/index.ts --compile --target=${{ matrix.bun_target }} --outfile dist/af
+
+      - name: Stage + tar + sha256
+        id: stage
+        working-directory: ${{ runner.temp }}
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          stage="akiflow-cli-v${VER}-${{ matrix.target_name }}"
+          mkdir -p "$stage"
+          cp "$GITHUB_WORKSPACE/tools/akiflow-cli/dist/af" "$stage/af"
+          cp "$GITHUB_WORKSPACE/tools/akiflow-cli/README.md" "$stage/"
+          cp "$GITHUB_WORKSPACE/tools/akiflow-cli/LICENSE" "$stage/"
+          chmod +x "$stage/af"
+          tar -czf "$stage.tar.gz" "$stage"
+          shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
+          {
+              echo "tarball=$stage.tar.gz"
+              echo "checksum=$stage.tar.gz.sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Codesign (macOS)
+        if: runner.os == 'macOS'
+        working-directory: ${{ runner.temp }}
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+        run: |
+          # The compiled binary inside the tarball is already
+          # extracted under `<stage>/af`. Codesign it in place then
+          # re-tar so the published artifact carries the signature.
+          stage="akiflow-cli-v${VER}-${{ matrix.target_name }}"
+          codesign -s - "$stage/af"
+          tar -czf "$stage.tar.gz" "$stage"
+          shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
+
+      - name: Upload akiflow-cli artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: akiflow-cli-${{ matrix.target_name }}
+          path: |
+            ${{ runner.temp }}/akiflow-cli-v*.tar.gz
+            ${{ runner.temp }}/akiflow-cli-v*.sha256
+          if-no-files-found: error
+
+  # ----- Create the GitHub Release and attach every tarball.
+  publish-release:
+    name: Publish GitHub Release
+    needs: [meta, build-rust, build-akiflow-cli]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' \) \
+              -exec cp {} release/ \;
+          ls -la release
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          args=(
+            --repo "$GITHUB_REPOSITORY"
+            --title "$TAG"
+            --notes "Release $TAG. See CHANGELOG.md for details."
+            --verify-tag
+          )
+          if [ "$PRERELEASE" = "true" ]; then
+              args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${args[@]}" \
+              release/jj-hooks-v*.tar.gz \
+              release/jj-hooks-v*.sha256 \
+              release/jj-gt-v*.tar.gz \
+              release/jj-gt-v*.sha256 \
+              release/akiflow-cli-v*.tar.gz \
+              release/akiflow-cli-v*.sha256
+
+  # ----- Bump every tap/Formula/*.rb with the new version + sha256s.
+  bump-tap:
+    name: Bump Homebrew tap formulae
+    needs: [meta, build-rust, build-akiflow-cli, publish-release]
+    runs-on: ubuntu-latest
+    # Skip prereleases — tap should only track stable.
+    if: needs.meta.outputs.prerelease == 'false'
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Need a token with `contents: write` on this repo. The
+          # default GITHUB_TOKEN works because the tap lives in the
+          # same repo (unlike the standalone tap which needed a PAT).
+          token: ${{ github.token }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Extract per-platform SHA256s for every tool
+        id: shas
+        run: |
+          set -euo pipefail
+          ver="${{ needs.meta.outputs.version }}"
+          for tool in jj-hooks jj-gt akiflow-cli; do
+              for slug in darwin-arm64 linux-x64 linux-arm64; do
+                  # Find the .sha256 file; artifact-name prefix varies
+                  # (rust-* vs akiflow-cli-*) so just glob.
+                  file=$(find artifacts -name "${tool}-v${ver}-${slug}.tar.gz.sha256" | head -1)
+                  if [ -z "$file" ]; then
+                      echo "error: missing sha256 for ${tool} ${slug}" >&2
+                      exit 1
+                  fi
+                  sha=$(awk '{print $1}' "$file")
+                  echo "${tool}-${slug}=${sha}" >> "$GITHUB_OUTPUT"
+              done
+          done
+
+      - name: Rewrite every formula in-place
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+          # Pass every per-tool-per-slug sha as one env var per
+          # entry. The python script reads them into a dict and
+          # rewrites each formula.
+          JJ_HOOKS_DARWIN_ARM64: ${{ steps.shas.outputs.jj-hooks-darwin-arm64 }}
+          JJ_HOOKS_LINUX_X64: ${{ steps.shas.outputs.jj-hooks-linux-x64 }}
+          JJ_HOOKS_LINUX_ARM64: ${{ steps.shas.outputs.jj-hooks-linux-arm64 }}
+          JJ_GT_DARWIN_ARM64: ${{ steps.shas.outputs.jj-gt-darwin-arm64 }}
+          JJ_GT_LINUX_X64: ${{ steps.shas.outputs.jj-gt-linux-x64 }}
+          JJ_GT_LINUX_ARM64: ${{ steps.shas.outputs.jj-gt-linux-arm64 }}
+          AKIFLOW_CLI_DARWIN_ARM64: ${{ steps.shas.outputs.akiflow-cli-darwin-arm64 }}
+          AKIFLOW_CLI_LINUX_X64: ${{ steps.shas.outputs.akiflow-cli-linux-x64 }}
+          AKIFLOW_CLI_LINUX_ARM64: ${{ steps.shas.outputs.akiflow-cli-linux-arm64 }}
+        run: python3 .github/scripts/bump-formulae.py
+
+      - name: Commit + push
+        run: |
+          set -euo pipefail
+          if git diff --quiet tap/Formula/; then
+              echo "nothing to bump"
+              exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tap/Formula/
+          git commit -m "chore(tap): bump formulae to ${{ needs.meta.outputs.tag }}"
+          git push origin HEAD:main
+
+  # ----- Publish to crates.io.
+  #
+  # Two-step in dependency order: jj-hooks first (no internal deps),
+  # then jj-gt (depends on jj-hooks). cargo publish auto-rewrites
+  # jj-gt's path-dep on jj-hooks to use the version we just
+  # published, because the workspace entry declares both
+  # `version = "0.3.0"` AND `path = "tools/jj-hooks"`.
+  publish-crates:
+    name: Publish to crates.io
+    needs: [meta, build-rust, publish-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: needs.meta.outputs.prerelease == 'false'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install stable
+
+      - name: cargo publish jj-hooks
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p jj-hooks --locked
+
+      # Wait for crates.io to index the new jj-hooks version
+      # before we try to publish jj-gt (which depends on it).
+      # crates.io is usually indexed within seconds, but the sparse
+      # index lookup we hit can lag — give it up to 60s.
+      - name: Wait for crates.io to index jj-hooks
+        env:
+          VER: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          for _ in {1..30}; do
+              if cargo search jj-hooks --limit 1 | grep -q "^jj-hooks = \"${VER}\""; then
+                  echo "indexed"
+                  exit 0
+              fi
+              sleep 2
+          done
+          echo "warn: jj-hooks ${VER} not yet on crates.io after 60s; proceeding anyway"
+
+      - name: cargo publish jj-gt
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p jj-gt --locked
