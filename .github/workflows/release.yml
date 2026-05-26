@@ -153,7 +153,7 @@ jobs:
           done
 
       - name: Upload Rust artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rust-${{ matrix.target_name }}
           path: |
@@ -236,7 +236,7 @@ jobs:
           shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
 
       - name: Upload akiflow-cli artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: akiflow-cli-${{ matrix.target_name }}
           path: |
@@ -256,7 +256,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -311,7 +311,7 @@ jobs:
           token: ${{ github.token }}
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 

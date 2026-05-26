@@ -20,13 +20,25 @@ brew install mattwilkinsonn/zireael/jj-hooks   # or jj-gt, or akiflow-cli
 
 ### Cargo (Rust tools)
 
+#### Recommended - `cargo binstall`
+
+Install [`cargo binstall` first](https://github.com/cargo-bins/cargo-binstall)
+
+```bash
+cargo binstall jj-hooks   # ships `jj-hooks` + `jj-hp`
+cargo binstall jj-gt
+```
+
+`binstall` looks for binaries on GitHub Releases first, and falls back to regular `install` if it can't find one for your architecture. 99% of the time it will just install the prebuilt binary, saving you the compile time.
+
+#### Standard `cargo install`
+
+If you don't want to use `binstall,` you can always compile yourself with `cargo install`.
+
 ```bash
 cargo install jj-hooks   # ships `jj-hooks` + `jj-hp`
 cargo install jj-gt
 ```
-
-Or via `cargo binstall jj-hooks` / `cargo binstall jj-gt` for prebuilt
-binaries (no compile).
 
 ### Manual download
 
@@ -51,10 +63,10 @@ Per-tool recipes are delegated to each tool's own `Justfile`. See
 
 This repo replaces the previous standalone repos:
 
-- ~~`mattwilkinsonn/jj-hooks`~~ → `tools/jj-hooks`
-- ~~`mattwilkinsonn/jj-gt`~~ → `tools/jj-gt`
-- ~~`mattwilkinsonn/akiflow-cli` (fork)~~ → `tools/akiflow-cli`
-- ~~`mattwilkinsonn/homebrew-tap`~~ → `tap/Formula`
+- [`mattwilkinsonn/jj-hooks`](https://github.com/mattwilkinsonn/jj-hooks) → `tools/jj-hooks`
+- [`mattwilkinsonn/jj-gt`](https://github.com/mattwilkinsonn/jj-gt) → `tools/jj-gt`
+- [`mattwilkinsonn/akiflow-cli`](https://github.com/mattwilkinsonn/akiflow-cli) (fork) → `tools/akiflow-cli`
+- [`mattwilkinsonn/homebrew-tap`](https://github.com/mattwilkinsonn/homebrew-tap) → `tap/Formula`
 
 All four are archived on GitHub and link back here.
 
