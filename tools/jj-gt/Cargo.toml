@@ -1,0 +1,59 @@
+[package]
+name = "jj-gt"
+description = "Bridge jj bookmark stacks and Graphite (gt) PR stacks — one command per stack submit/fetch/status"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+# cargo-binstall metadata. `cargo binstall jj-gt` fetches the release
+# tarball matching the user's platform from this monorepo's GitHub
+# Releases page. Slug names (darwin-arm64, linux-x64, linux-arm64)
+# come from .github/workflows/release.yml — keep them aligned.
+[package.metadata.binstall]
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/jj-gt-v{ version }-linux-x64.tar.gz"
+bin-dir = "jj-gt-v{ version }-linux-x64/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/jj-gt-v{ version }-linux-arm64.tar.gz"
+bin-dir = "jj-gt-v{ version }-linux-arm64/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/jj-gt-v{ version }-darwin-arm64.tar.gz"
+bin-dir = "jj-gt-v{ version }-darwin-arm64/{ bin }{ binary-ext }"
+
+[[bin]]
+name = "jj-gt"
+path = "src/main.rs"
+
+[lib]
+name = "jj_gt"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+# jj-hooks lives in this same workspace at tools/jj-hooks. The
+# workspace entry declares both `version = "0.3.0"` and
+# `path = "tools/jj-hooks"`, so `cargo publish -p jj-gt` auto-
+# rewrites the path-dep to use the crates.io version at publish
+# time. No [patch.crates-io] block needed.
+jj-hooks = { workspace = true }
+owo-colors = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+indoc = { workspace = true }
+tempfile = { workspace = true }

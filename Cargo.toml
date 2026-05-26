@@ -2,9 +2,7 @@
 resolver = "3"
 members = [
     "tools/jj-hooks",
-    # Added in subsequent phases:
-    #   phase C → "tools/jj-gt"
-    #
+    "tools/jj-gt",
     # akiflow-cli is bun/TypeScript and is not a workspace member.
 ]
 
