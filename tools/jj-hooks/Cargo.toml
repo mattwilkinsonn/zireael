@@ -1,0 +1,55 @@
+[package]
+name = "jj-hooks"
+description = "Run pre-commit / lefthook / hk hooks against jj bookmark pushes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+
+# cargo-binstall metadata. `cargo binstall jj-hooks` fetches the release
+# tarball matching the user's platform from this monorepo's GitHub
+# Releases page. Slug names (darwin-arm64, linux-x64, linux-arm64) come
+# from .github/workflows/release.yml — keep them aligned.
+[package.metadata.binstall]
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/jj-hooks-v{ version }-linux-x64.tar.gz"
+bin-dir = "jj-hooks-v{ version }-linux-x64/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/jj-hooks-v{ version }-linux-arm64.tar.gz"
+bin-dir = "jj-hooks-v{ version }-linux-arm64/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.aarch64-apple-darwin]
+pkg-url = "{ repo }/releases/download/v{ version }/jj-hooks-v{ version }-darwin-arm64.tar.gz"
+bin-dir = "jj-hooks-v{ version }-darwin-arm64/{ bin }{ binary-ext }"
+
+[[bin]]
+name = "jj-hooks"
+path = "src/main.rs"
+
+[[bin]]
+name = "jj-hp"
+path = "src/bin/jj-hp.rs"
+
+[lib]
+name = "jj_hooks"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+dialoguer = { workspace = true }
+regex = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+indoc = { workspace = true }
