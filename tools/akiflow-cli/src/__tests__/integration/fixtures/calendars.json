@@ -1,0 +1,31 @@
+[
+	{
+		"id": "cal-personal-1",
+		"user_id": 42,
+		"akiflow_account_id": "account-gmail-1",
+		"akiflow_primary": true,
+		"primary": true,
+		"connector_id": "google",
+		"origin_id": "test@example.com",
+		"origin_account_id": "google-account-fake",
+		"title": "Personal",
+		"description": null,
+		"timezone": "America/New_York",
+		"color": "#3478F6",
+		"icon": null,
+		"read_only": false,
+		"hidden_at": null,
+		"url": null,
+		"sync_status": "ok",
+		"last_synced_at": "2026-05-21T08:00:00Z",
+		"clear_job_id": null,
+		"settings": {},
+		"content": {},
+		"data": {},
+		"fingerprints": {},
+		"etag": null,
+		"global_created_at": "2026-01-01T00:00:00Z",
+		"global_updated_at": "2026-05-21T08:00:00Z",
+		"deleted_at": null
+	}
+]

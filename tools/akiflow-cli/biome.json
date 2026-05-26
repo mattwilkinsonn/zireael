@@ -1,0 +1,16 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
+	"files": {
+		"includes": ["**", "!.sisyphus", "!dist", "!**/node_modules"]
+	},
+	"html": { "formatter": { "enabled": true } },
+	"formatter": { "indentStyle": "tab" },
+	"linter": { "enabled": true },
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	}
+}
