@@ -48,6 +48,7 @@ jobs:
           filters: .github/path-filters/jj-hooks.yml
 
   ci:
+    name: jj-hooks CI
     needs: [optimize_ci, changes]
     if: |
       needs.optimize_ci.outputs.skip == 'false' &&

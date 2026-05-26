@@ -46,6 +46,7 @@ jobs:
           filters: .github/path-filters/jj-gt.yml
 
   ci:
+    name: jj-gt CI
     needs: [optimize_ci, changes]
     if: |
       needs.optimize_ci.outputs.skip == 'false' &&

@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   jj-hooks:
+    name: jj-hooks (nightly)
     uses: ./.github/workflows/ci-base-rust.yml
     with:
       package: jj-hooks
@@ -22,6 +23,7 @@ jobs:
     secrets: inherit
 
   jj-gt:
+    name: jj-gt (nightly)
     uses: ./.github/workflows/ci-base-rust.yml
     with:
       package: jj-gt
@@ -29,7 +31,7 @@ jobs:
     secrets: inherit
 
   akiflow-cli:
-    name: akiflow-cli nightly
+    name: akiflow-cli (nightly)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -46,9 +48,18 @@ jobs:
       - run: bun test
 
   tap:
-    name: tap nightly
+    name: tap (nightly)
     runs-on: macos-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
       - run: brew style tap/Formula/*.rb
+
+  docs:
+    name: docs (nightly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+      - run: npm install -g markdownlint-cli2
+      - run: markdownlint-cli2 "**/*.md"
