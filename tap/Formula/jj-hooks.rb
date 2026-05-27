@@ -1,8 +1,8 @@
 class JjHooks < Formula
   desc "Run pre-commit / lefthook / hk hooks against jj bookmark pushes"
   homepage "https://github.com/mattwilkinsonn/zireael/tree/main/tools/jj-hooks"
-  license any_of: ["MIT", "Apache-2.0"]
   version "0.3.0"
+  license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do
     on_arm do

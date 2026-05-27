@@ -1,8 +1,8 @@
 class JjGt < Formula
   desc "Bridge jj bookmark stacks and Graphite (gt) PR stacks"
   homepage "https://github.com/mattwilkinsonn/zireael/tree/main/tools/jj-gt"
-  license any_of: ["MIT", "Apache-2.0"]
   version "0.3.0"
+  license any_of: ["MIT", "Apache-2.0"]
 
   on_macos do
     on_arm do

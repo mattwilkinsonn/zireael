@@ -1,8 +1,8 @@
 class AkiflowCli < Formula
-  desc "Akiflow CLI — task management from the command line (fork of code-yeongyu/akiflow-cli)"
+  desc "Command-line task management for Akiflow (fork of code-yeongyu/akiflow-cli)"
   homepage "https://github.com/mattwilkinsonn/zireael/tree/main/tools/akiflow-cli"
-  license "MIT"
   version "0.3.0"
+  license "MIT"
 
   on_macos do
     on_arm do
