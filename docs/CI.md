@@ -13,6 +13,7 @@ when, on what runner, gated by which filter.
 | `akiflow-cli` | `akiflow-cli.yml` | akiflow-cli CI | PR | `akiflow-cli.yml` | GitHub ubuntu |
 | `tap` | `tap.yml` | tap CI | PR | `tap.yml` | GitHub macos (needs `brew style`) |
 | `docs` | `docs.yml` | docs CI | PR | `docs.yml` | GitHub ubuntu |
+| `post-merge` | `post-merge.yml` | Rust lints + akiflow lints + docs + tap (cheap subset) | push: main | none | GitHub ubuntu / macos |
 | `nightly` | `nightly.yml` | (full set, no filter) | cron + dispatch | none | GitHub ubuntu / macos |
 | `release` | `release.yml` | matrix builds + publish + tap bump + crates publish | push: tags `v*` | none | GitHub (per-target) |
 | _(reusable)_ | `ci-base-rust.yml` | Lints + Test matrix | `workflow_call:` from `jj-hooks.yml` + `jj-gt.yml` + `nightly.yml` | n/a | callee inherits |
@@ -156,12 +157,41 @@ Ignores path filters and runs every tool's full check set:
 
 ### `push: main`
 
-No PR workflows fire on `push: main`. Direct pushes to main
-bypass CI by design — the assumption is changes land via PRs.
-If you're pushing to main directly (e.g. the release recipe's
-version bump commit), the nightly backstop catches anything
-broken within 24h, or you can `workflow_dispatch` the nightly
-manually.
+Post-merge sanity checks via `post-merge.yml` — the cheap subset
+of the PR-time gate, no path filter, runs unconditionally on
+every push to main. Catches "main is broken now" within ~1 minute
+without re-running the expensive bits already covered by the PR.
+
+What runs:
+
+- **Rust lints (post-merge)** — `cargo fmt --check` +
+  `cargo clippy --workspace --all-targets` (~1m warm cache).
+- **akiflow-cli lints (post-merge)** — `bun install` + `bunx
+  biome check` + `bunx tsc --noEmit` (~30s).
+- **docs (post-merge)** — `markdownlint-cli2 "**/*.md"` (instant).
+- **tap (post-merge)** — `brew style tap/Formula/*.rb` (~5s).
+
+What does NOT run on push: main (relies on the PR check set +
+nightly backstop):
+
+- `cargo nextest run` across both Rust crates × two OSes.
+- `bun test` for akiflow-cli (~290 tests, 5min p95).
+
+**Dedup against PRs:** GitHub doesn't natively dedup
+"this commit was just merged from a green PR" — a squash-merge
+creates a new commit on main with a new SHA, so the PR's checks
+don't transfer. You'd need custom workflow logic that queries
+the API for "find the closed PR for this SHA, check its CI
+results" — ~50 LoC, not worth the complexity for zireael's
+scale. The pragmatic answer: the cheap subset on push:main
+catches the obvious breakages (a fmt regression slipped in via
+admin bypass, a markdown lint regression in a doc commit) at
+trivial cost.
+
+Other push:main triggers (not CI):
+
+- `release.yml` — `push: tags v*` triggers the release matrix,
+  tap-bump, and crates publish.
 
 ### `push: tags v*`
 
