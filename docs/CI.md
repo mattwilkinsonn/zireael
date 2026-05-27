@@ -196,9 +196,22 @@ at `.github/rulesets/main-protection.json`. Apply with
 | `tap CI` | tap.yml | Inline single-job |
 | `docs CI` | docs.yml | Inline single-job |
 
-Doc-only PRs see most of these reported as `skipped` (path filter
-didn't match) and merge fine — the gate passes when every check
-reports a conclusion, regardless of whether it actually ran.
+In addition to status checks, the ruleset enforces:
+
+- **Squash-merge only.** `rebase` and `merge` (merge commit) are
+  disabled. PRs land as a single squashed commit on `main`,
+  keeping history linear by construction.
+- **Code-owner review required** — see `.github/CODEOWNERS` for
+  the assignment table. Paired with `required_approving_review_count: 0`
+  so a single-author repo isn't locked out today; the file is in
+  place for when collaborators arrive and the approval count
+  bumps to 1.
+- Linear history, no force-push, no branch deletion, conversation
+  resolution required.
+
+Doc-only PRs see most status checks reported as `skipped` (path
+filter didn't match) and merge fine — the gate passes when every
+check reports a conclusion, regardless of whether it actually ran.
 
 GitHub's ruleset keys required-status-checks on the **job display
 name** (the value after `name:` in the job, or the rendered name

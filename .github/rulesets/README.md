@@ -29,8 +29,35 @@ gh api repos/mattwilkinsonn/zireael/rulesets/<id> -X DELETE
   - Linear history, no force-push, no delete, conversation
     resolution required.
   - PR required (zero approvals, so single-author is fine).
+  - **Squash-merge only** — `rebase` and `merge` (merge commit)
+    are disabled. Keeps `main`'s history linear by construction.
+  - **Code-owner review required** (paired with zero-approval
+    count: see below for the single-author-friendly logic).
   - All per-tool CI checks pass (or skip — `skipped` counts).
   - Repo Admin bypass (`actor_id: 5`).
+
+### Single-author code-owner gating
+
+The ruleset sets `require_code_owner_review: true` AND
+`required_approving_review_count: 0`. That combination looks
+contradictory but is actually the recommended pattern for
+single-author / small repos:
+
+- `required_approving_review_count: 0` means no approvals are
+  enforced. A self-author PR can land without anyone approving
+  it.
+- `require_code_owner_review: true` is a no-op when the approval
+  count is zero — GitHub doesn't enforce a "code owner must
+  approve" clause without at least one required approval.
+- BUT the CODEOWNERS file still drives auto-assignment of
+  reviewers when a PR opens (so future collaborators get the
+  right reviewer wired up).
+
+When the second human shows up, bump `required_approving_review_count`
+to `1` and the code-owner gate activates without further config.
+
+Until then, no review is enforced — the gate is the CI checks
+(via `required_status_checks`).
 
 ## Coexistence with classic branch protection
 

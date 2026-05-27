@@ -1,0 +1,14 @@
+# Code owners for zireael.
+#
+# GitHub uses this file to assign reviewers automatically and to
+# gate `require_code_owner_review: true` in the main-protection
+# ruleset (.github/rulesets/main-protection.json).
+#
+# Order matters: later patterns override earlier ones. The fallback
+# is `*` so every file has an owner by default.
+#
+# Per-tool overrides are listed below the fallback so they take
+# precedence. Add new tools / new owners as needed.
+
+# Default owner — every file in the repo unless overridden.
+*	@mattwilkinsonn
