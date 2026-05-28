@@ -562,11 +562,12 @@ release VERSION:
     echo
 
     echo "==> Pushing tag $version (triggers release.yml)..."
-    # `jj git push --tag` is the idiomatic spelling; the
-    # standalone jj-gt repo used a `jj-push-tags` shell wrapper
-    # but that's a jj-hp/dotfiles thing — straight `git push`
-    # works inside the colocated repo.
-    git push origin "$version"
+    # jj has no native `jj git push --tag`, so we shell out to jj-hp's
+    # push-tags subcommand which wraps `jj git export` (a no-op when
+    # refs are in sync) + `git push refs/tags/<tag>` per tag.
+    # Requires `jj-hp` on PATH (installed via `just install-debug-jj-hooks`
+    # locally, or via Homebrew for non-dev hosts).
+    jj-hp push-tags "$version"
     echo
 
     echo "✅ Done. Watch the release workflow:"

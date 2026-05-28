@@ -11,6 +11,7 @@ pub mod hooks;
 pub mod init;
 pub mod jj;
 pub mod push;
+pub mod push_tags;
 pub mod runner;
 pub mod worktree;
 
@@ -171,6 +172,26 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjHooksError> {
                 &revset,
                 run_opts,
             )
+        }
+
+        Command::PushTags {
+            tags,
+            all,
+            force,
+            dry_run,
+            remote,
+        } => {
+            push_tags::run(
+                &jj,
+                push_tags::PushTagsOpts {
+                    remote: &remote,
+                    tags,
+                    all,
+                    force,
+                    dry_run,
+                },
+            )?;
+            Ok(ExitCode::SUCCESS)
         }
 
         Command::Init => {

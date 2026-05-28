@@ -70,6 +70,30 @@ pub enum Command {
         no_retry_after_fixup: bool,
     },
 
+    /// Push jj tags to a git remote. jj has no native `jj git push --tag`,
+    /// so this exports refs to the colocated git repo and shells out to
+    /// `git push refs/tags/<tag>` for each requested tag.
+    PushTags {
+        /// Tag name(s) to push. Mutually exclusive with `--all`.
+        tags: Vec<String>,
+
+        /// Push every local tag.
+        #[arg(long, conflicts_with = "tags")]
+        all: bool,
+
+        /// Force-push the tag refs (overwrites the remote). Use sparingly.
+        #[arg(short = 'f', long)]
+        force: bool,
+
+        /// Print the commands without running them.
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+
+        /// Git remote to push to.
+        #[arg(long, default_value = "origin")]
+        remote: String,
+    },
+
     /// Interactive setup: install `jj push` alias and configure defaults.
     Init,
 
