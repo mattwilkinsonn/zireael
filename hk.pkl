@@ -1,4 +1,5 @@
 amends "package://github.com/jdx/hk/releases/download/v1.45.0/hk@1.45.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.45.0/hk@1.45.0#/Builtins.pkl"
 
 // One shared pre-push config for the monorepo, with per-tool steps
 // gated by `glob` so editing one tool only runs that tool's checks.
@@ -56,6 +57,116 @@ local tap_steps = new Mapping<String, Step> {
     }
 }
 
+// nix-config linters. Inherited from the old dotfiles repo's hk.pkl;
+// scoped to nix-config/**/*.{nix,sh,toml,md} so they don't run on
+// nix-unrelated edits elsewhere in the monorepo.
+local nix_steps = new Mapping<String, Step> {
+    ["nixfmt"] = (Builtins.nix_fmt) {
+        glob = List("nix-config/**/*.nix")
+    }
+    ["deadnix"] = (Builtins.deadnix) {
+        glob = List("nix-config/**/*.nix")
+    }
+    ["statix"] {
+        // statix only takes a single TARGET (file or directory). Running
+        // on the whole nix-config/ tree is cheap (<1s on a warm fs cache)
+        // and matches the pre-zireael behaviour. `-c nix-config` points
+        // statix at the statix.toml inside the subdir (hk runs with cwd
+        // at the repo root, so the default `.` would miss the config).
+        glob = List("nix-config/**/*.nix")
+        check = "statix check -c nix-config nix-config"
+    }
+    // nil (Nix LSP) doubles as a syntax+evaluation linter when run in
+    // check mode. Catches things deadnix/statix don't (parse errors,
+    // undefined names) before the slow flake-eval step picks them up.
+    ["nil"] {
+        glob = List("nix-config/**/*.nix")
+        check = "nil diagnostics {{ files }}"
+    }
+}
+
+// Shell linters. Scoped to nix-config/ (bootstrap scripts, mac-setup,
+// dotfiles/*.sh). Other tools' shell content lives inside tool subdirs
+// and is owned by those tools' lint chains.
+local shell_steps = new Mapping<String, Step> {
+    ["shellcheck"] = (Builtins.shellcheck) {
+        glob = List(
+            "nix-config/**/*.sh",
+        )
+        // --external-sources so shellcheck follows `source` directives
+        // across files (e.g. rpi-bootstrap.sh sources
+        // shared/scripts/bootstrap-common.sh). Without this, every
+        // cross-file source triggers SC1091.
+        check = "shellcheck --external-sources {{ files }}"
+    }
+    ["shfmt"] {
+        glob = List(
+            "nix-config/**/*.sh",
+        )
+        // -d = diff-only (read-only check); -i 0 = tabs (matches the
+        // existing scripts); -s = simplify. -ci (indent case arms) is
+        // OFF — the existing scripts intentionally use shfmt's default
+        // un-indented case style.
+        check = "shfmt -d -i 0 -s {{ files }}"
+    }
+}
+
+local toml_steps = new Mapping<String, Step> {
+    ["taplo"] {
+        glob = List("nix-config/**/*.toml")
+        // --check = error if any file would be reformatted. No
+        // formatter run, just the diff check. RUST_LOG=error
+        // silences taplo's INFO-level "found N files" tracing line
+        // that hk would otherwise surface as stderr noise on every
+        // pre-push.
+        //
+        // Scoped to nix-config/ only for now — extending to workspace
+        // TOMLs (Cargo.toml, clippy.toml, tools/*/Cargo.toml,
+        // tools/akiflow-cli/bunfig.toml) would also need a separate
+        // remote workflow path-filter since this glob feeds the
+        // nix-config.yml job. Defer until there's a TOML-only
+        // workflow.
+        check = "RUST_LOG=error taplo fmt --check {{ files }}"
+        fix = "RUST_LOG=error taplo fmt {{ files }}"
+    }
+}
+
+// Tier 2: flake eval. Slow (~30s-2min cold, <5s warm) but catches
+// the class of bug that linters can't: "this module/package doesn't
+// exist", missing import, typo'd attr, etc.
+//
+// One step per host so a single broken config surfaces as one
+// failed line in `jj-hp push` / CI rather than a `for-loop` failure
+// that hides which host died. hk runs them in parallel, so the
+// wall-clock cost is bounded by the slowest host.
+//
+// No file glob — we want every host evaluated on every push regardless
+// of which files changed (a change to shared/home.nix can break Pi
+// configs even if no Pi file was touched).
+local flake_eval_steps = new Mapping<String, Step> {
+    ["flake-eval-rpi4"] {
+        check = "cd nix-config && nix eval --raw '.#nixosConfigurations.rpi4.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
+    }
+    ["flake-eval-rpi5"] {
+        check = "cd nix-config && nix eval --raw '.#nixosConfigurations.rpi5.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
+    }
+    ["flake-eval-mattfw"] {
+        check = "cd nix-config && nix eval --raw '.#nixosConfigurations.mattfw.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
+    }
+    ["flake-eval-mattserver"] {
+        check = "cd nix-config && nix eval --raw '.#nixosConfigurations.mattserver.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
+    }
+    ["flake-eval-mattpc-wsl"] {
+        check = "cd nix-config && nix eval --raw '.#nixosConfigurations.mattpc-wsl.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
+    }
+    ["flake-eval-darwin"] {
+        check = "cd nix-config && nix eval --raw '.#darwinConfigurations.Matts-MacBook-Pro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
+    }
+    ["flake-eval-mattmacpro"] {
+        check = "cd nix-config && nix eval --raw '.#darwinConfigurations.mattmacpro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
+    }
+}
+
 local doc_steps = new Mapping<String, Step> {
     ["markdownlint"] {
         glob = "**/*.md"
@@ -74,7 +185,51 @@ hooks {
             ...rust_steps
             ...bun_steps
             ...tap_steps
+            ...nix_steps
+            ...shell_steps
+            ...toml_steps
+            ...flake_eval_steps
+            ...doc_steps
+        }
+    }
+    // pre-commit, fix, check: linters in fix mode, skip the slow
+    // flake-eval steps so the inner edit loop stays snappy.
+    ["pre-commit"] {
+        fix = true
+        stash = "git"
+        steps {
+            ...rust_steps
+            ...bun_steps
+            ...tap_steps
+            ...nix_steps
+            ...shell_steps
+            ...toml_steps
+            ...doc_steps
+        }
+    }
+    ["fix"] {
+        fix = true
+        steps {
+            ...rust_steps
+            ...bun_steps
+            ...tap_steps
+            ...nix_steps
+            ...shell_steps
+            ...toml_steps
+            ...doc_steps
+        }
+    }
+    ["check"] {
+        steps {
+            ...rust_steps
+            ...bun_steps
+            ...tap_steps
+            ...nix_steps
+            ...shell_steps
+            ...toml_steps
+            ...flake_eval_steps
             ...doc_steps
         }
     }
 }
+

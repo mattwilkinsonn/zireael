@@ -1,0 +1,103 @@
+name: Nix CI base
+
+# Reusable workflow consumed by .github/workflows/nix-config.yml,
+# nightly.yml, and post-merge.yml. Lints only — flake-eval lives in
+# nix-config.yml so it can gate per-host on dorny/paths-filter
+# outputs.
+#
+# Calls each lint tool directly (no `hk check` indirection). hk.pkl
+# stays the source of truth for pre-push hooks; CI mirrors the same
+# commands inline so we don't drag hk + pkl into the CI environment.
+
+"on":
+  workflow_call:
+
+permissions:
+  id-token: write  # DeterminateSystems/determinate-nix-action needs OIDC
+  contents: read
+
+jobs:
+  # All 4 nix linters in one job: nixfmt, deadnix, statix, nil. They
+  # share the same Determinate Nix install, so collapsing them into a
+  # single ubuntu runner spawn instead of 4 saves ~3 min per PR.
+  nix-lints:
+    name: Nix lints (nixfmt + deadnix + statix + nil)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - name: Install nix linters
+        run: |
+          nix profile install \
+            --accept-flake-config \
+            nixpkgs#nixfmt \
+            nixpkgs#deadnix \
+            nixpkgs#statix \
+            nixpkgs#nil
+      - name: nixfmt --check
+        run: |
+          find nix-config -type f -name '*.nix' -print0 \
+            | xargs -0 nixfmt --check
+      - name: deadnix
+        run: deadnix --fail nix-config
+      - name: statix
+        run: statix check -c nix-config nix-config
+      - name: nil diagnostics
+        # nil takes file paths, not directories — feed it the
+        # find-output.
+        run: |
+          find nix-config -type f -name '*.nix' -print0 \
+            | xargs -0 nil diagnostics
+
+  shellcheck:
+    name: shellcheck (nix-config)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: shellcheck
+      - name: shellcheck nix-config/**/*.sh
+        # --external-sources so shellcheck follows `source` directives
+        # across files (e.g. rpi-bootstrap.sh sources
+        # shared/scripts/bootstrap-common.sh). Without this, every
+        # cross-file source triggers SC1091.
+        run: |
+          find nix-config -type f -name '*.sh' -print0 \
+            | xargs -0 shellcheck --external-sources
+
+  shfmt:
+    name: shfmt (nix-config)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: shfmt
+      - name: shfmt -d (check-only) nix-config/**/*.sh
+        # -d = diff-only (read-only check); -i 0 = tabs (matches the
+        # existing scripts); -s = simplify. -ci (indent case arms) is
+        # OFF — the existing scripts intentionally use shfmt's default
+        # un-indented case style.
+        run: |
+          find nix-config -type f -name '*.sh' -print0 \
+            | xargs -0 shfmt -d -i 0 -s
+
+  taplo:
+    name: taplo (nix-config)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: taplo
+      - name: taplo fmt --check nix-config/**/*.toml
+        # RUST_LOG=error silences taplo's INFO-level "found N files"
+        # tracing noise.
+        run: |
+          find nix-config -type f -name '*.toml' -print0 \
+            | RUST_LOG=error xargs -0 taplo fmt --check

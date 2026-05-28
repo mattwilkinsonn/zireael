@@ -1,0 +1,20 @@
+# Path filter for the nix-config linter chain (top-level gate).
+# Consumed by:
+# - `.github/workflows/nix-config.yml`'s `lints` job (remote CI, via
+#   dorny/paths-filter) — gates whether the linter sub-workflow runs
+#   at all on a PR.
+# - `just ci` locally (via the root Justfile's `_filter-touched` helper)
+#
+# Per-host gating for flake-eval lives in nix-config-hosts.yml; this
+# file is the broader "anything nix-related touched" check.
+#
+# Liberal on purpose. False positives (running linters/eval when
+# strictly not needed) are cheap; false negatives ship regressions.
+nix-config:
+  - 'nix-config/**'
+  - 'hk.pkl'
+  - '.github/workflows/nix-config.yml'
+  - '.github/workflows/ci-base-nix.yml'
+  - '.github/path-filters/nix-config.yml'
+  - '.github/path-filters/nix-config-hosts.yml'
+

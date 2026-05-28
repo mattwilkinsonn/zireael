@@ -1,0 +1,25 @@
+[[actions]]
+lua = """
+  jj_async("util", "exec", "--", "jj-hp", "push")
+  revisions.refresh()
+"""
+name = "jj-hp-push"
+
+[[actions]]
+lua = """
+  jj_async("util", "exec", "--", "jj-hp", "push", "-r", context.commit_id())
+  revisions.refresh()
+"""
+name = "jj-hp-push-selected"
+
+[[bindings]]
+action = "jj-hp-push"
+desc = "jj-hp push"
+scope = "revisions"
+seq = ["x", "p"]
+
+[[bindings]]
+action = "jj-hp-push-selected"
+desc = "jj-hp push selected bookmark(s)"
+scope = "revisions"
+seq = ["x", "P"]

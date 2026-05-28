@@ -1,0 +1,46 @@
+#:schema https://jj-vcs.github.io/jj/latest/config-schema.json
+
+[user]
+name = "Matt Wilkinson"
+email = "mattwilki17@gmail.com"
+
+# Auto-track main bookmark on fetch. Without this, `jj git fetch`
+# imports remote refs as untracked, local `main` doesn't auto-advance,
+# and you have to run `jj bookmark track main --remote=origin` once per
+# repo. Setting it globally so every jj repo gets the same behavior.
+[remotes.origin]
+auto-track-bookmarks = "main"
+
+[[--scope]]
+--when.repositories = ["~/repos/sealedsecurity/"]
+[--scope.user]
+name = "Matt Wilkinson"
+email = "matt@sealedsecurity.com"
+
+# `jj fix` pipes each file's content to the formatter's stdin and
+# replaces the file with the formatter's stdout. `cargo fmt` (the
+# binary) ignores stdin and writes nothing to stdout — using it
+# here silently truncates every .rs file in the commit to zero
+# bytes. Use `rustfmt --emit=stdout` instead: rustfmt reads from
+# stdin, emits formatted output to stdout, and exit-codes properly.
+#
+# 2026-05-28: lost a full stack to this. Op-restore back to
+# pre-`jj fix` recovered the work; this config change prevents
+# repeat.
+[fix.tools]
+rustfmt = { command = [
+  "rustfmt",
+  "+nightly",
+  "--edition=2024",
+  "--emit=stdout",
+], patterns = [
+  "glob:**/*.rs",
+] }
+
+[aliases]
+push = ["util", "exec", "--", "jj-hp", "push"]
+
+[jj-hooks]
+
+[visualjj]
+show-immutable = true

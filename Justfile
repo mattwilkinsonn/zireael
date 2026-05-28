@@ -147,6 +147,72 @@ _install-deps-akiflow-cli:
     fi
     cd tools/akiflow-cli && bun install --frozen-lockfile
 
+# --- Install debug builds -----------------------------------------------------
+#
+# Each `install-debug-<tool>` recipe builds the tool in debug mode and
+# drops the binary into `~/.cargo/bin` (or `$CARGO_HOME/bin`). Recipes
+# are ETXTBSY-safe (unlink before cp, since Linux can't overwrite a
+# running executable). Macs get codesigned automatically so the next
+# run doesn't trigger a Gatekeeper prompt.
+#
+# Use this when you want to dogfood a local change without bumping
+# the version or cutting a release. The `install` (release-build)
+# variant ships via release.yml + Homebrew; install-debug is purely
+# for the inner loop.
+
+[doc('Install all debug builds (jj-hooks, jj-gt, akiflow-cli) to ~/.cargo/bin.')]
+install-debug: install-debug-jj-hooks install-debug-jj-gt install-debug-akiflow-cli
+
+[doc('Debug-build + install jj-hooks and jj-hp to ~/.cargo/bin.')]
+install-debug-jj-hooks:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -p jj-hooks --bin jj-hooks --bin jj-hp
+    dest="${CARGO_HOME:-$HOME/.cargo}/bin"
+    mkdir -p "$dest"
+    # On Linux, writing over an in-use executable fails with ETXTBSY
+    # (text file busy). Unlink first so a running process keeps its
+    # inode while we drop a fresh one at the path. macOS lets you
+    # overwrite an active binary, so the unlink is a no-op there.
+    for bin in jj-hooks jj-hp; do
+        rm -f "$dest/$bin"
+        cp "target/debug/$bin" "$dest/$bin"
+        if [[ "$(uname)" == "Darwin" ]]; then
+            codesign -s - "$dest/$bin" 2>/dev/null && echo "Codesigned $bin" || true
+        fi
+    done
+    echo "Installed debug builds (jj-hooks + jj-hp) to $dest"
+
+[doc('Debug-build + install jj-gt to ~/.cargo/bin.')]
+install-debug-jj-gt:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -p jj-gt --bin jj-gt
+    dest="${CARGO_HOME:-$HOME/.cargo}/bin"
+    mkdir -p "$dest"
+    rm -f "$dest/jj-gt"
+    cp "target/debug/jj-gt" "$dest/jj-gt"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        codesign -s - "$dest/jj-gt" 2>/dev/null && echo "Codesigned jj-gt" || true
+    fi
+    echo "Installed debug build (jj-gt) to $dest"
+
+# akiflow-cli compiles to a single `af` binary via `bun build --compile`.
+# Same ETXTBSY guard applies; no codesign needed (bun's compiled
+# binaries don't trip Gatekeeper).
+[doc('Debug-build + install akiflow-cli (`af`) to ~/.cargo/bin.')]
+install-debug-akiflow-cli:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd tools/akiflow-cli
+    bun install --frozen-lockfile
+    bun build src/index.ts --compile --outfile af
+    dest="${CARGO_HOME:-$HOME/.cargo}/bin"
+    mkdir -p "$dest"
+    rm -f "$dest/af"
+    cp "af" "$dest/af"
+    echo "Installed debug build (af) to $dest"
+
 # --- Local CI mirror ----------------------------------------------------------
 #
 # Mirrors seal's `just ci` pattern: each `ci-<tool>` recipe runs the
@@ -192,6 +258,19 @@ ci:
         just ci-docs
         ran_any=1
     fi
+    if just _filter-touched nix-config; then
+        echo "→ nix-config paths touched; running its CI."
+        just ci-nix-config
+        ran_any=1
+        # Per-host flake-eval gated on the per-host filters. Skipped
+        # by default (lints catch 90%); pass `EVAL=1 just ci` for the
+        # full host-by-host eval. With EVAL=1, only hosts the diff
+        # actually affects get evaluated — mirrors what
+        # nix-config.yml's per-host gating does on PRs.
+        if [ "${EVAL:-0}" = "1" ]; then
+            HOSTS_FILTERED=1 just ci-nix-config-eval
+        fi
+    fi
     if [ "$ran_any" -eq 0 ]; then
         echo "→ No tool paths touched by the diff. Nothing to do."
         echo "  (Run \`just ci-all\` to force the full suite.)"
@@ -201,7 +280,7 @@ ci:
 
 # Run every tool's CI unconditionally — ignores the path filter.
 [doc('Unconditional CI: run every tool, ignoring path filter. Equivalent to a full remote run.')]
-ci-all: ci-jj-hooks ci-jj-gt ci-akiflow-cli ci-tap ci-docs
+ci-all: ci-jj-hooks ci-jj-gt ci-akiflow-cli ci-tap ci-docs ci-nix-config
 
 # Per-tool CI recipes. The granular `fmt-pkg`/`clippy-pkg`/`nextest-*`
 # recipes below are the single source of truth for each check command:
@@ -261,6 +340,86 @@ ci-tap:
 [doc('Markdown lint: enforces the rules in .markdownlint-cli2.jsonc.')]
 ci-docs:
     markdownlint-cli2 "**/*.md"
+
+# nix-config CI: nix lints + shell lints + toml lint + 6 flake-eval
+# steps. Mirrors .github/workflows/nix-config.yml; commands match
+# exactly what the per-job workflow runs (so local + remote feedback
+# loops stay aligned).
+#
+# Skips the slow flake-eval steps by default (the linters catch 90%
+# of issues in <5s). Pass `EVAL=1 just ci-nix-config` (or use
+# `just ci-nix-config-eval`) for the full host-by-host eval.
+#
+# Tool deps (assumed on PATH): nixfmt, deadnix, statix, nil, shellcheck,
+# shfmt, taplo. Local dev hosts get these via the nix-managed dev
+# environment; CI installs them per-job.
+[doc('nix-config CI: lints only. Set EVAL=1 to also run flake-eval. Mirrors .github/workflows/nix-config.yml.')]
+ci-nix-config:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "→ nixfmt --check"
+    find nix-config -type f -name '*.nix' -print0 | xargs -0 nixfmt --check
+    echo "→ deadnix"
+    deadnix --fail nix-config
+    echo "→ statix check"
+    statix check -c nix-config nix-config
+    echo "→ nil diagnostics"
+    find nix-config -type f -name '*.nix' -print0 | xargs -0 nil diagnostics
+    echo "→ shellcheck (--external-sources)"
+    find nix-config -type f -name '*.sh' -print0 | xargs -0 shellcheck --external-sources
+    echo "→ shfmt -d -i 0 -s"
+    find nix-config -type f -name '*.sh' -print0 | xargs -0 shfmt -d -i 0 -s
+    echo "→ taplo fmt --check"
+    find nix-config -type f -name '*.toml' -print0 | RUST_LOG=error xargs -0 taplo fmt --check
+    if [ "${EVAL:-0}" = "1" ]; then
+        just ci-nix-config-eval
+    fi
+
+[doc('nix-config flake-eval: nix eval each of the 6 host configs. Slow (~30s-2min per host cold). Honors per-host path filters when HOSTS_FILTERED=1.')]
+ci-nix-config-eval:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd nix-config
+    # When HOSTS_FILTERED=1 (set by the `ci` dispatcher), skip hosts
+    # whose per-host path filter doesn't match the diff. When unset
+    # (default for explicit `just ci-nix-config-eval` calls), eval
+    # everything — that's the "I'm cutting a release / pre-PR
+    # full-matrix sanity check" workflow.
+    should_eval() {
+        if [ "${HOSTS_FILTERED:-0}" != "1" ]; then
+            return 0
+        fi
+        # The filter file lives at the repo root, not at nix-config/.
+        (cd .. && just _filter-touched nix-config-hosts "$1") >/dev/null
+    }
+    for host in rpi4 rpi5 mattfw mattserver mattpc-wsl; do
+        if should_eval "$host"; then
+            echo "→ nix eval nixosConfigurations.$host"
+            nix eval --raw ".#nixosConfigurations.$host.config.system.build.toplevel.outPath" \
+                --no-warn-dirty --accept-flake-config >/dev/null
+        else
+            echo "→ skipping $host (no path-filter match)"
+        fi
+    done
+    # Darwin only evaluates on macOS hosts; skip gracefully on Linux.
+    if [ "$(uname -s)" = "Darwin" ]; then
+        if should_eval darwin-mbp; then
+            echo "→ nix eval darwinConfigurations.Matts-MacBook-Pro"
+            nix eval --raw '.#darwinConfigurations.Matts-MacBook-Pro.config.system.build.toplevel.outPath' \
+                --no-warn-dirty --accept-flake-config >/dev/null
+        else
+            echo "→ skipping darwinConfigurations.Matts-MacBook-Pro (no path-filter match)"
+        fi
+        if should_eval mattmacpro; then
+            echo "→ nix eval darwinConfigurations.mattmacpro"
+            nix eval --raw '.#darwinConfigurations.mattmacpro.config.system.build.toplevel.outPath' \
+                --no-warn-dirty --accept-flake-config >/dev/null
+        else
+            echo "→ skipping darwinConfigurations.mattmacpro (no path-filter match)"
+        fi
+    else
+        echo "→ skipping darwinConfigurations (not on macOS)"
+    fi
 
 # --- Release ---------------------------------------------------------------
 #
@@ -423,18 +582,35 @@ release VERSION:
 # `[no-exit-message]` here suppresses the "Recipe _filter-touched
 # failed" line that would otherwise print on the expected exit-1
 # "no matches" path — this is a predicate, not an error.
+#
+# Two argument shapes:
+#   _filter-touched <name>          → reads .github/path-filters/<name>.yml,
+#                                     matches against the top-level <name>:
+#                                     key.
+#   _filter-touched <file> <name>   → reads .github/path-filters/<file>.yml,
+#                                     matches against the <name>: key inside
+#                                     it. Used for the per-host nix-config
+#                                     filters (one file with multiple
+#                                     named filters).
 [no-exit-message]
-_filter-touched filter:
+_filter-touched filter sub='':
     #!/usr/bin/env bash
     set -euo pipefail
     target_filter="{{filter}}"
-    filter_file=".github/path-filters/${target_filter}.yml"
+    sub_filter="{{sub}}"
+    if [ -z "$sub_filter" ]; then
+        filter_file=".github/path-filters/${target_filter}.yml"
+        match_key="$target_filter"
+    else
+        filter_file=".github/path-filters/${target_filter}.yml"
+        match_key="$sub_filter"
+    fi
     if [ ! -f "$filter_file" ]; then
         echo "error: no path-filter file for \`$target_filter\` at $filter_file" >&2
         exit 2
     fi
     # Extract the named filter's section. Stops at the next top-level key.
-    patterns=$(awk -v target="$target_filter" '
+    patterns=$(awk -v target="$match_key" '
         /^[A-Za-z_][A-Za-z0-9_-]*:/ {
             current = $0
             sub(/:.*/, "", current)

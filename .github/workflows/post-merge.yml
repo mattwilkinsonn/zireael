@@ -31,6 +31,7 @@ name: post-merge
 
 permissions:
   contents: read
+  id-token: write  # Determinate Nix in nix-config-lints needs OIDC
 
 env:
   CARGO_TERM_COLOR: always
@@ -92,3 +93,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - run: brew style Formula/*.rb
+
+  # nix-config lints only — flake-eval is heavy (each Determinate Nix
+  # install is ~3 min × 6 hosts = ~18 min runner-minutes) and the
+  # nightly already runs the full eval matrix. Post-merge gets the
+  # cheap subset (lints) so a broken-on-main config surfaces within
+  # ~5 min; the nightly catches eval regressions within 24h.
+  nix-config-lints:
+    name: nix-config lints (post-merge)
+    uses: ./.github/workflows/ci-base-nix.yml
+    secrets: inherit

@@ -1,0 +1,213 @@
+name: nix-config
+
+"on":
+  pull_request:
+
+# Per-tool concurrency: a fixup push to a PR cancels in-flight runs
+# for the same PR but doesn't disturb other PRs' nix-config runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write  # propagated to ci-base-nix.yml for Determinate Nix OIDC
+
+jobs:
+  optimize_ci:
+    name: Optimize CI
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      actions: write  # for graphite-ci-action's cancelWorkflowRun call
+    timeout-minutes: 2
+    outputs:
+      skip: ${{ steps.check_skip.outputs.skip }}
+    steps:
+      - id: check_skip
+        uses: withgraphite/graphite-ci-action@26bc0dcdeaba101794931d67a464ecbb21a76a8b # v0.0.9
+        with:
+          graphite_token: ${{ secrets.GRAPHITE_TOKEN }}
+
+  # ─── Detect ────────────────────────────────────────────────────────
+  # Top-level nix-config filter — gates the linter chain.
+
+  changes:
+    name: Detect nix-config Changes
+    needs: [optimize_ci]
+    if: needs.optimize_ci.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 3
+    outputs:
+      changed: ${{ steps.filter.outputs.nix-config }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: .github/path-filters/nix-config.yml
+
+  # ─── Per-host filters ──────────────────────────────────────────────
+  # One filter per flake target so we can skip eval for hosts not
+  # affected by the diff. Each output (rpi4, rpi5, …) is wired to its
+  # matching flake-eval job below.
+
+  host-changes:
+    name: Detect per-host Changes
+    needs: [optimize_ci]
+    if: needs.optimize_ci.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    timeout-minutes: 3
+    outputs:
+      rpi4: ${{ steps.filter.outputs.rpi4 }}
+      rpi5: ${{ steps.filter.outputs.rpi5 }}
+      mattserver: ${{ steps.filter.outputs.mattserver }}
+      mattfw: ${{ steps.filter.outputs.mattfw }}
+      mattpc-wsl: ${{ steps.filter.outputs.mattpc-wsl }}
+      darwin-mbp: ${{ steps.filter.outputs.darwin-mbp }}
+      mattmacpro: ${{ steps.filter.outputs.mattmacpro }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: .github/path-filters/nix-config-hosts.yml
+
+  # ─── Linters ───────────────────────────────────────────────────────
+  # Top-level filter gates the linter chain (nix-fmt + shellcheck etc.).
+  # Always runs when any nix-config path changed; not per-host.
+
+  lints:
+    name: nix-config CI
+    needs: [optimize_ci, changes]
+    if: |
+      needs.optimize_ci.outputs.skip == 'false' &&
+      needs.changes.outputs.changed == 'true'
+    uses: ./.github/workflows/ci-base-nix.yml
+    secrets: inherit
+
+  # ─── Flake eval (per-host) ─────────────────────────────────────────
+  # Each job gates on its own filter output. NixOS hosts run on
+  # ubuntu-latest; darwin needs macOS (nix-darwin attrs aren't
+  # available cross-platform).
+  #
+  # The Determinate Nix install dominates the runtime here (~3 min
+  # vs the eval itself which is seconds-to-low-minutes once warm),
+  # so skipping a host saves real CI minutes.
+
+  flake-eval-rpi4:
+    name: flake eval (rpi4)
+    needs: [optimize_ci, host-changes]
+    if: |
+      needs.optimize_ci.outputs.skip == 'false' &&
+      needs.host-changes.outputs.rpi4 == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - name: nix eval rpi4
+        working-directory: nix-config
+        run: nix eval --raw '.#nixosConfigurations.rpi4.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+
+  flake-eval-rpi5:
+    name: flake eval (rpi5)
+    needs: [optimize_ci, host-changes]
+    if: |
+      needs.optimize_ci.outputs.skip == 'false' &&
+      needs.host-changes.outputs.rpi5 == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - name: nix eval rpi5
+        working-directory: nix-config
+        run: nix eval --raw '.#nixosConfigurations.rpi5.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+
+  flake-eval-mattserver:
+    name: flake eval (mattserver)
+    needs: [optimize_ci, host-changes]
+    if: |
+      needs.optimize_ci.outputs.skip == 'false' &&
+      needs.host-changes.outputs.mattserver == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - name: nix eval mattserver
+        working-directory: nix-config
+        run: nix eval --raw '.#nixosConfigurations.mattserver.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+
+  flake-eval-mattfw:
+    name: flake eval (mattfw)
+    needs: [optimize_ci, host-changes]
+    if: |
+      needs.optimize_ci.outputs.skip == 'false' &&
+      needs.host-changes.outputs.mattfw == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - name: nix eval mattfw
+        working-directory: nix-config
+        run: nix eval --raw '.#nixosConfigurations.mattfw.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+
+  flake-eval-mattpc-wsl:
+    name: flake eval (mattpc-wsl)
+    needs: [optimize_ci, host-changes]
+    if: |
+      needs.optimize_ci.outputs.skip == 'false' &&
+      needs.host-changes.outputs['mattpc-wsl'] == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - name: nix eval mattpc-wsl
+        working-directory: nix-config
+        run: nix eval --raw '.#nixosConfigurations.mattpc-wsl.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+
+  flake-eval-darwin:
+    name: flake eval (Matts-MacBook-Pro)
+    needs: [optimize_ci, host-changes]
+    if: |
+      needs.optimize_ci.outputs.skip == 'false' &&
+      needs.host-changes.outputs['darwin-mbp'] == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - name: nix eval Matts-MacBook-Pro
+        working-directory: nix-config
+        run: nix eval --raw '.#darwinConfigurations.Matts-MacBook-Pro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+
+  flake-eval-mattmacpro:
+    name: flake eval (mattmacpro)
+    needs: [optimize_ci, host-changes]
+    if: |
+      needs.optimize_ci.outputs.skip == 'false' &&
+      needs.host-changes.outputs.mattmacpro == 'true'
+    # x86_64 darwin host. GitHub's macos-latest is aarch64-darwin; the
+    # x86_64 nix-darwin attrs evaluate fine cross-arch (nix eval doesn't
+    # build), so macos-latest is the cheapest path. If we ever need a
+    # native x86_64 eval (e.g. for derivations that actually build), this
+    # becomes macos-13 or a self-hosted x86_64 runner.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - name: nix eval mattmacpro
+        working-directory: nix-config
+        run: nix eval --raw '.#darwinConfigurations.mattmacpro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
