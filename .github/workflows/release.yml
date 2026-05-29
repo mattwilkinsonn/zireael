@@ -364,6 +364,33 @@ jobs:
           git commit -m "chore(tap): bump formulae to ${{ needs.meta.outputs.tag }}"
           git push origin HEAD:main
 
+  # ----- Validate the freshly published tap installs end-to-end.
+  validate-tap:
+    name: Validate tap (${{ matrix.os }})
+    needs: [meta, bump-tap]
+    if: needs.meta.outputs.prerelease == 'false'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@master
+      - name: Tap, install, and test every formula
+        run: |
+          set -euo pipefail
+          brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
+          for formula in jj-hooks jj-gt akiflow-cli; do
+            echo "::group::${formula}"
+            brew install "mattwilkinsonn/zireael/${formula}"
+            brew test "mattwilkinsonn/zireael/${formula}"
+            echo "::endgroup::"
+          done
+
   # ----- Publish to crates.io.
   #
   # Two-step in dependency order: jj-hooks first (no internal deps),
