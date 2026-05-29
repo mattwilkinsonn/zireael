@@ -22,12 +22,33 @@ clippy:
 test:
     cargo nextest run --workspace --no-fail-fast
 
-# `install-deps` orchestrates per-tool setup. Subsequent monorepo
-# additions plug in their own setup recipe here.
-install-deps:
-    @just _install-deps-common
-    @just _install-deps-jj-gt
-    @just _install-deps-akiflow-cli
+# `install-deps [tool]` sets up dev dependencies for one tool — or
+# `all` (the default). Just has no enum type for recipe parameters
+# (they're plain strings), so the recipe validates `tool` and prints
+# the valid set on a miss.
+#
+#   just install-deps            # everything
+#   just install-deps jj-hooks   # just that tool's stack (+ common)
+install-deps tool="all":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{ tool }}" in
+        all)
+            just _install-deps-common
+            just _install-deps-jj-hooks
+            just _install-deps-jj-gt
+            just _install-deps-akiflow-cli
+            ;;
+        common)      just _install-deps-common ;;
+        jj-hooks)    just _install-deps-common && just _install-deps-jj-hooks ;;
+        jj-gt)       just _install-deps-common && just _install-deps-jj-gt ;;
+        akiflow-cli) just _install-deps-akiflow-cli ;;
+        *)
+            echo "error: unknown tool '{{ tool }}'" >&2
+            echo "valid: all | common | jj-hooks | jj-gt | akiflow-cli" >&2
+            exit 1
+            ;;
+    esac
 
 # Common cross-tool deps (rust toolchain, cargo-nextest, cargo-edit).
 _install-deps-common:
@@ -43,11 +64,78 @@ _install-deps-common:
     fi
     cargo binstall --no-confirm cargo-edit cargo-nextest
 
-# jj-gt's setup is the heaviest — it shells out to hk, pkl, gt, gh,
-# pre-commit, lefthook, etc. The recipe lives in tools/jj-gt/Justfile;
-# we delegate.
+# jj-hooks's integration tests drive real hook frameworks, so its
+# tests need pre-commit, prek, lefthook, and hk on PATH (hk in turn
+# needs pkl to read hk.pkl), plus markdownlint-cli2 + actionlint for
+# the doc/workflow hooks. macOS uses Homebrew; Linux uses uv for the
+# Python backends, npm for markdownlint-cli2, pinned release tarballs
+# for lefthook/actionlint/pkl, and cargo-binstall for hk. (`jj` itself
+# is assumed present — it's the VCS this whole repo targets.)
+_install-deps-jj-hooks:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "$(uname -s)" in
+        Darwin)
+            brew install pre-commit prek lefthook hk pkl markdownlint-cli2 actionlint
+            ;;
+        Linux)
+            # Honour XDG_BIN_HOME when set (CI points it at one cacheable
+            # dir); default to ~/.local/bin for local installs.
+            bin_dir="${XDG_BIN_HOME:-$HOME/.local/bin}"
+            mkdir -p "$bin_dir"
+            export PATH="$bin_dir:$PATH"
+
+            uv tool install pre-commit
+            uv tool install prek
+
+            arch="$(uname -m)"
+            case "$arch" in
+                x86_64)  lefthook_arch=x86_64; actionlint_arch=amd64; pkl_arch=amd64 ;;
+                aarch64) lefthook_arch=arm64;  actionlint_arch=arm64; pkl_arch=aarch64 ;;
+                *) echo "unsupported Linux arch: $arch" >&2; exit 1 ;;
+            esac
+
+            lefthook_version=2.1.6
+            curl -fsSL "https://github.com/evilmartians/lefthook/releases/download/v${lefthook_version}/lefthook_${lefthook_version}_Linux_${lefthook_arch}" -o "$bin_dir/lefthook"
+            chmod +x "$bin_dir/lefthook"
+
+            actionlint_version=1.7.12
+            curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${actionlint_version}/actionlint_${actionlint_version}_linux_${actionlint_arch}.tar.gz" | tar -xz -C "$bin_dir" actionlint
+
+            # hk shells out to pkl to read hk.pkl; without pkl on PATH it
+            # rejects every config as "no config".
+            pkl_version=0.31.1
+            curl -fsSL "https://github.com/apple/pkl/releases/download/${pkl_version}/pkl-linux-${pkl_arch}" -o "$bin_dir/pkl"
+            chmod +x "$bin_dir/pkl"
+
+            if command -v npm >/dev/null 2>&1; then
+                npm config set prefix "$(dirname "$bin_dir")"
+                npm install -g markdownlint-cli2
+            else
+                echo "warn: npm not on PATH; install Node.js to get markdownlint-cli2" >&2
+            fi
+
+            cargo binstall -y --install-path "$bin_dir" hk
+            ;;
+        *) echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
+    esac
+
+# jj-gt bridges jj bookmark stacks and Graphite, so its tests shell out
+# to `gt` (the Graphite CLI), installed from npm. `jj`, `gh`, and `git`
+# are assumed present (CI installs jj from a tarball; gh + git are
+# preinstalled on runners and standard in a local dev setup).
 _install-deps-jj-gt:
-    cd tools/jj-gt && just install-deps
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v gt >/dev/null 2>&1; then
+        echo "gt already installed ($(gt --version 2>/dev/null | head -1))"
+        exit 0
+    fi
+    if ! command -v npm >/dev/null 2>&1; then
+        echo "error: npm required to install the Graphite CLI (gt); install Node.js first." >&2
+        exit 1
+    fi
+    npm install -g @withgraphite/graphite-cli
 
 # akiflow-cli only needs bun.
 _install-deps-akiflow-cli:
@@ -115,21 +203,34 @@ ci:
 [doc('Unconditional CI: run every tool, ignoring path filter. Equivalent to a full remote run.')]
 ci-all: ci-jj-hooks ci-jj-gt ci-akiflow-cli ci-tap ci-docs
 
-# Per-tool CI recipes. Each mirrors what the corresponding
-# .github/workflows/<tool>.yml runs in CI. When the remote recipe
-# changes, update both sides at once.
+# Per-tool CI recipes. The granular `fmt-pkg`/`clippy-pkg`/`nextest-*`
+# recipes below are the single source of truth for each check command:
+# the GitHub workflows call them directly (lints job → fmt + clippy,
+# test job → nextest) and the `ci-<tool>` aggregates run the same set
+# locally. hk's pre-push mirrors these commands inline — it can't call
+# `just` from inside a git hook without risking recursion.
 
-[doc('jj-hooks CI: fmt + clippy + nextest. Mirrors .github/workflows/jj-hooks.yml.')]
-ci-jj-hooks:
-    cargo fmt -p jj-hooks -- --check
-    cargo clippy -p jj-hooks --all-targets -- -D warnings
+# Per-package check building blocks — the GitHub jobs and `ci-<tool>`
+# both call these, so each check is defined exactly once.
+
+fmt-pkg PKG:
+    cargo fmt -p {{ PKG }} -- --check
+
+clippy-pkg PKG:
+    cargo clippy -p {{ PKG }} --all-targets -- -D warnings
+
+nextest-jj-hooks:
     cargo nextest run -p jj-hooks --no-fail-fast
 
-[doc('jj-gt CI: fmt + clippy + nextest (excludes live tests; run `just ci-jj-gt-live` for those).')]
-ci-jj-gt:
-    cargo fmt -p jj-gt -- --check
-    cargo clippy -p jj-gt --all-targets -- -D warnings
+# Excludes the live (network) tests; run `just ci-jj-gt-live` for those.
+nextest-jj-gt:
     cargo nextest run -p jj-gt --no-fail-fast --no-tests=warn -E 'not (test(gh_live) | test(gt_submit_live))'
+
+[doc('jj-hooks CI: fmt + clippy + nextest. Mirrors .github/workflows/jj-hooks.yml.')]
+ci-jj-hooks: (fmt-pkg "jj-hooks") (clippy-pkg "jj-hooks") nextest-jj-hooks
+
+[doc('jj-gt CI: fmt + clippy + nextest (excludes live tests; run `just ci-jj-gt-live` for those).')]
+ci-jj-gt: (fmt-pkg "jj-gt") (clippy-pkg "jj-gt") nextest-jj-gt
 
 [doc('jj-gt live tests: gh_live + gt_submit_live. Requires JJ_GT_LIVE_* env vars.')]
 ci-jj-gt-live:

@@ -22,7 +22,7 @@ name: Rust CI base
         required: true
         type: string
       install_deps:
-        description: "Whether to run `just install-deps` (needed for jj-gt's hook-runner stack)"
+        description: "Install the package's integration-test tools (jj-hooks: hook-runner stack; jj-gt: Graphite CLI)"
         required: false
         default: false
         type: boolean
@@ -55,11 +55,13 @@ jobs:
         with:
           tool: just
 
-      - name: cargo fmt --check
-        run: cargo fmt -p ${{ inputs.package }} -- --check
+      # Checks are defined once as justfile recipes and invoked directly
+      # (mirrors seal: CI runs `just <recipe>`; hk mirrors them inline).
+      - name: Format check
+        run: just fmt-pkg ${{ inputs.package }}
 
-      - name: cargo clippy
-        run: cargo clippy -p ${{ inputs.package }} --all-targets -- -D warnings
+      - name: Clippy
+        run: just clippy-pkg ${{ inputs.package }}
 
   test:
     name: Test (${{ inputs.package }}, ${{ matrix.os }})
@@ -72,11 +74,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
-      # When install_deps is true the per-tool Justfile installs hk,
-      # pkl, gt, gh, lefthook, etc. into XDG_BIN_HOME. Point it at
-      # a workspace-scoped path so the cache action below catches it.
-      XDG_BIN_HOME: ${{ github.workspace }}/.tools-bin
-      XDG_DATA_HOME: ${{ github.workspace }}/.tools-data
+      # install_deps steps drop per-tool binaries into XDG_BIN_HOME, a
+      # workspace-scoped dir the cache step persists. It ends in `/bin`
+      # so `npm config set prefix "$(dirname "$XDG_BIN_HOME")"` lands npm
+      # globals (markdownlint-cli2, gt) in XDG_BIN_HOME too.
+      XDG_BIN_HOME: ${{ github.workspace }}/.tools/bin
+      XDG_DATA_HOME: ${{ github.workspace }}/.tools/data
     steps:
       - uses: actions/checkout@v6
 
@@ -92,10 +95,11 @@ jobs:
         with:
           tool: cargo-nextest,just,cargo-binstall
 
-      # Heavy deps (hk, pkl, gt, gh, lefthook, ...) only when the
-      # caller asks for them — jj-hooks's tests need pkl + hk for
-      # the hk-runner integration tests, jj-gt needs the full stack.
-      - name: Cache hook tools
+      # Per-tool test binaries, installed below only when the caller
+      # asks: jj-hooks needs the hook-runner stack (pre-commit, prek,
+      # lefthook, hk, pkl, markdownlint-cli2, actionlint); jj-gt needs
+      # the Graphite CLI (gt). Cached per package since the sets differ.
+      - name: Cache test tools
         if: inputs.install_deps && runner.os == 'Linux'
         id: tools-cache
         uses: actions/cache@v5
@@ -103,7 +107,7 @@ jobs:
           path: |
             ${{ env.XDG_BIN_HOME }}
             ${{ env.XDG_DATA_HOME }}
-          key: tools-${{ runner.os }}-${{ hashFiles('tools/jj-gt/Justfile', '.github/workflows/ci-base-rust.yml') }}
+          key: tools-${{ inputs.package }}-${{ runner.os }}-${{ hashFiles('.github/workflows/ci-base-rust.yml') }}
 
       - name: Install jj from prebuilt tarball
         if: inputs.install_deps && (runner.os == 'macOS' || steps.tools-cache.outputs.cache-hit != 'true')
@@ -136,14 +140,51 @@ jobs:
         if: inputs.install_deps && runner.os == 'Linux' && steps.tools-cache.outputs.cache-hit != 'true'
         uses: astral-sh/setup-uv@v6
 
-      - name: Install hook runners
-        if: inputs.install_deps && (runner.os == 'macOS' || steps.tools-cache.outputs.cache-hit != 'true')
-        working-directory: tools/jj-gt
-        run: just install-deps
+      # jj-hooks's integration tests drive real hook frameworks, so they
+      # need the hook-runner stack on PATH. Pinned release tarballs / uv /
+      # npm / binstall, all into the cached XDG_BIN_HOME. Keep versions in
+      # sync with the Justfile `_install-deps-jj-hooks` recipe (its
+      # local-dev twin).
+      - name: Install jj-hooks hook stack
+        if: inputs.install_deps && inputs.package == 'jj-hooks' && (runner.os == 'macOS' || steps.tools-cache.outputs.cache-hit != 'true')
+        run: |
+          set -euo pipefail
+          case "$(uname -s)" in
+            Darwin)
+              brew install pre-commit prek lefthook hk pkl markdownlint-cli2 actionlint
+              ;;
+            Linux)
+              mkdir -p "$XDG_BIN_HOME"
+              uv tool install pre-commit
+              uv tool install prek
+              case "$(uname -m)" in
+                x86_64)  lh=x86_64; al=amd64; pk=amd64 ;;
+                aarch64) lh=arm64;  al=arm64; pk=aarch64 ;;
+                *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
+              esac
+              curl -fsSL "https://github.com/evilmartians/lefthook/releases/download/v2.1.6/lefthook_2.1.6_Linux_${lh}" -o "$XDG_BIN_HOME/lefthook"
+              chmod +x "$XDG_BIN_HOME/lefthook"
+              curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_${al}.tar.gz" | tar -xz -C "$XDG_BIN_HOME" actionlint
+              curl -fsSL "https://github.com/apple/pkl/releases/download/0.31.1/pkl-linux-${pk}" -o "$XDG_BIN_HOME/pkl"
+              chmod +x "$XDG_BIN_HOME/pkl"
+              npm config set prefix "$(dirname "$XDG_BIN_HOME")"
+              npm install -g markdownlint-cli2
+              cargo binstall -y --install-path "$XDG_BIN_HOME" hk
+              ;;
+          esac
+
+      # jj-gt's tests shell out to the Graphite CLI (gt), from npm.
+      - name: Install Graphite CLI (gt)
+        if: inputs.install_deps && inputs.package == 'jj-gt' && (runner.os == 'macOS' || steps.tools-cache.outputs.cache-hit != 'true')
+        run: |
+          set -euo pipefail
+          mkdir -p "$XDG_BIN_HOME"
+          npm config set prefix "$(dirname "$XDG_BIN_HOME")"
+          npm install -g @withgraphite/graphite-cli
 
       - name: Add tool dirs to PATH
         if: inputs.install_deps
         run: echo "$XDG_BIN_HOME" >> "$GITHUB_PATH"
 
-      - name: cargo nextest run
-        run: cargo nextest run -p ${{ inputs.package }} --no-fail-fast
+      - name: Tests
+        run: just nextest-${{ inputs.package }}
