@@ -4,7 +4,7 @@ name: release
 # (or manually via `jj git push --tag v0.3.0`).
 #
 # Builds release artifacts for every monorepo tool, attaches them
-# to a single GitHub Release, bumps each tap/Formula/*.rb in-place,
+# to a single GitHub Release, bumps each Formula/*.rb in-place,
 # and publishes the Rust crates to crates.io. All assets live under
 # one Release; the per-tool tarballs are named so each Homebrew
 # formula can find its own platform-specific download.
@@ -292,7 +292,7 @@ jobs:
               release/akiflow-cli-v*.tar.gz \
               release/akiflow-cli-v*.sha256
 
-  # ----- Bump every tap/Formula/*.rb with the new version + sha256s.
+  # ----- Bump every Formula/*.rb with the new version + sha256s.
   bump-tap:
     name: Bump Homebrew tap formulae
     needs: [meta, build-rust, build-akiflow-cli, publish-release]
@@ -354,13 +354,13 @@ jobs:
       - name: Commit + push
         run: |
           set -euo pipefail
-          if git diff --quiet tap/Formula/; then
+          if git diff --quiet Formula/; then
               echo "nothing to bump"
               exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tap/Formula/
+          git add Formula/
           git commit -m "chore(tap): bump formulae to ${{ needs.meta.outputs.tag }}"
           git push origin HEAD:main
 

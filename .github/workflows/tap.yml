@@ -56,4 +56,4 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: brew style
-        run: brew style tap/Formula/*.rb
+        run: brew style Formula/*.rb

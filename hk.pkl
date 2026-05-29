@@ -51,8 +51,8 @@ local bun_steps = new Mapping<String, Step> {
 
 local tap_steps = new Mapping<String, Step> {
     ["brew-style"] {
-        glob = "tap/Formula/*.rb"
-        check = "brew style tap/Formula/*.rb"
+        glob = "Formula/*.rb"
+        check = "brew style Formula/*.rb"
     }
 }
 
@@ -70,6 +70,11 @@ local doc_steps = new Mapping<String, Step> {
 hooks {
     ["pre-push"] {
         fix = false
-        steps = rust_steps + bun_steps + tap_steps + doc_steps
+        steps {
+            ...rust_steps
+            ...bun_steps
+            ...tap_steps
+            ...doc_steps
+        }
     }
 }

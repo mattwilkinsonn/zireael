@@ -155,7 +155,7 @@ ci-tap:
         echo "warn: brew not on PATH; skipping tap lint." >&2
         exit 0
     fi
-    brew style tap/Formula/*.rb
+    brew style Formula/*.rb
 
 [doc('Markdown lint: enforces the rules in .markdownlint-cli2.jsonc.')]
 ci-docs:
@@ -167,7 +167,7 @@ ci-docs:
 #
 #   1. Validate the version string + working-copy state.
 #   2. Bump the workspace Cargo.toml + tools/akiflow-cli/package.json
-#      + tap/Formula/*.rb to the new version. `cargo set-version
+#      + Formula/*.rb to the new version. `cargo set-version
 #      --workspace` handles all Rust members + the internal jj-hooks
 #      path-dep version field in one shot; the akiflow-cli + tap
 #      bumps are inline `sed` calls.
@@ -246,10 +246,10 @@ release VERSION:
         tools/akiflow-cli/package.json
     echo
 
-    echo "==> Bumping tap/Formula/*.rb version lines to $bare..."
+    echo "==> Bumping Formula/*.rb version lines to $bare..."
     # Same anchor pattern as the python bump in release.yml:
     # `  version "X.Y.Z"` at the start of a Ruby formula's class body.
-    sed -i -E "s/^(\s*version\s+)\"[^\"]+\"/\1\"$bare\"/" tap/Formula/*.rb
+    sed -i -E "s/^(\s*version\s+)\"[^\"]+\"/\1\"$bare\"/" Formula/*.rb
     echo
 
     echo "==> Updating Cargo.lock..."
@@ -271,7 +271,7 @@ release VERSION:
         echo "error: tools/akiflow-cli/package.json version didn't bump" >&2
         exit 1
     }
-    for formula in tap/Formula/*.rb; do
+    for formula in Formula/*.rb; do
         if ! grep -q "version \"$bare\"" "$formula"; then
             echo "error: $formula version line didn't bump to $bare" >&2
             exit 1

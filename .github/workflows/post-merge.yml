@@ -13,7 +13,7 @@ name: post-merge
 #   - biome + tsc on akiflow-cli (skips `bun test` — that's the
 #     slow part)
 #   - markdownlint on every .md
-#   - brew style on tap/Formula/*.rb (~5s on macos)
+#   - brew style on Formula/*.rb (~5s on macos)
 #
 # What does NOT run here (relies on the PR's check set + nightly):
 #
@@ -91,4 +91,4 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
-      - run: brew style tap/Formula/*.rb
+      - run: brew style Formula/*.rb

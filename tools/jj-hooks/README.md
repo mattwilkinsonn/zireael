@@ -57,7 +57,8 @@ This pulls a prebuilt binary from the GitHub Releases page — no compile step.
 ### Via Homebrew tap
 
 ```bash
-brew install mattwilkinsonn/tap/jj-hooks
+brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
+brew install mattwilkinsonn/zireael/jj-hooks
 ```
 
 ### From source

@@ -1,4 +1,4 @@
 tap:
-  - 'tap/**'
+  - 'Formula/**'
   - '.github/workflows/tap.yml'
   - '.github/path-filters/tap.yml'
