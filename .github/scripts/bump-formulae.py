@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bump every tap/Formula/*.rb to the current release.
+"""Bump every Formula/*.rb to the current release.
 
 Called from .github/workflows/release.yml's `bump-tap` job after
 all platform builds have produced their SHA256 checksums.
@@ -48,7 +48,7 @@ def main() -> int:
         print("error: VER env var not set", file=sys.stderr)
         return 1
 
-    formula_dir = Path("tap/Formula")
+    formula_dir = Path("Formula")
     any_changes = False
 
     for tool, env_prefix in TOOLS.items():

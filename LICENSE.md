@@ -17,6 +17,6 @@ which is **MIT-licensed only**. The fork retains the upstream MIT license at
 [`tools/akiflow-cli/LICENSE`](./tools/akiflow-cli/LICENSE) — Apache-2.0 does
 not apply to that subdirectory.
 
-`tap/Formula/*.rb` are Homebrew formula stubs and carry no additional
+`Formula/*.rb` are Homebrew formula stubs and carry no additional
 copyright — they describe how to install the binaries built by this repo
 under the dual-license terms above.

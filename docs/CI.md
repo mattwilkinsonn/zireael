@@ -169,7 +169,7 @@ What runs:
 - **akiflow-cli lints (post-merge)** — `bun install` + `bunx
   biome check` + `bunx tsc --noEmit` (~30s).
 - **docs (post-merge)** — `markdownlint-cli2 "**/*.md"` (instant).
-- **tap (post-merge)** — `brew style tap/Formula/*.rb` (~5s).
+- **tap (post-merge)** — `brew style Formula/*.rb` (~5s).
 
 What does NOT run on push: main (relies on the PR check set +
 nightly backstop):
@@ -275,7 +275,7 @@ Per-tool recipes:
 | `ci-jj-gt` | same shape; live tests excluded (`-E 'not test(gh_live)...'`) |
 | `ci-jj-gt-live` | live integration tests; needs `JJ_GT_LIVE_*` env |
 | `ci-akiflow-cli` | bun install + biome + tsc + bun test (5min cap) |
-| `ci-tap` | `brew style tap/Formula/*.rb` (degrades to warn on Linux) |
+| `ci-tap` | `brew style Formula/*.rb` (degrades to warn on Linux) |
 | `ci-docs` | `markdownlint-cli2 "**/*.md"` |
 
 Drift between local and remote is structurally minimised by:

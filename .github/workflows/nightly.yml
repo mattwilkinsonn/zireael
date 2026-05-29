@@ -4,6 +4,10 @@ name: nightly
 # Catches drift caused by upstream tool auto-updates (hk, pkl, jj
 # versions, brew formulae, npm registry, etc.) — anything that
 # wouldn't be triggered by a code change in this repo.
+#
+# Skipped when `main` hasn't advanced since the last nightly (no point
+# re-running the same commit). The `report` job posts the aggregate
+# result back to the HEAD commit so it appears in the commit's checks.
 
 "on":
   schedule:
@@ -14,8 +18,43 @@ permissions:
   contents: read
 
 jobs:
+  # Gate: only run the suite if main moved since the last nightly.
+  changes:
+    name: detect new commits
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "manual dispatch — running."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last=$(gh api \
+            "repos/$REPO/actions/workflows/nightly.yml/runs?event=schedule&status=completed&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // ""')
+          if [ "$last" = "$SHA" ]; then
+            echo "main unchanged since last nightly ($SHA) — skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "main advanced ($last -> $SHA) — running."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   jj-hooks:
     name: jj-hooks (nightly)
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     uses: ./.github/workflows/ci-base-rust.yml
     with:
       package: jj-hooks
@@ -24,6 +63,8 @@ jobs:
 
   jj-gt:
     name: jj-gt (nightly)
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     uses: ./.github/workflows/ci-base-rust.yml
     with:
       package: jj-gt
@@ -32,6 +73,8 @@ jobs:
 
   akiflow-cli:
     name: akiflow-cli (nightly)
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -49,17 +92,72 @@ jobs:
 
   tap:
     name: tap (nightly)
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: macos-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
-      - run: brew style tap/Formula/*.rb
+      - run: brew style Formula/*.rb
+
+  validate-tap:
+    name: validate tap install (nightly, ${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@master
+      - name: Tap, install, and test every formula
+        run: |
+          set -euo pipefail
+          brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
+          for formula in jj-hooks jj-gt akiflow-cli; do
+            echo "::group::${formula}"
+            brew install "mattwilkinsonn/zireael/${formula}"
+            brew test "mattwilkinsonn/zireael/${formula}"
+            echo "::endgroup::"
+          done
 
   docs:
     name: docs (nightly)
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v6
       - run: npm install -g markdownlint-cli2
       - run: markdownlint-cli2 "**/*.md"
+
+  # Post the aggregate nightly result to the HEAD commit so it shows in
+  # the commit's checks dropdown (scheduled runs don't auto-attach).
+  report:
+    name: report status
+    needs: [changes, jj-hooks, jj-gt, akiflow-cli, tap, validate-tap, docs]
+    if: always() && needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Post nightly status to HEAD commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          STATE: ${{ (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')) && 'failure' || 'success' }}
+        run: |
+          set -euo pipefail
+          gh api -X POST "repos/$REPO/statuses/$SHA" \
+            -f state="$STATE" \
+            -f context="nightly" \
+            -f description="nightly suite: $STATE" \
+            -f target_url="$RUN_URL"
