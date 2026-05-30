@@ -40,7 +40,7 @@ For programmatic access, extract the token from browser session using CDP (Chrom
 ## Required Headers
 
 | Header | Required | Description |
-|--------|----------|-------------|
+| -------- | ---------- | ------------- |
 | `Authorization` | Yes | `Bearer <JWT_TOKEN>` |
 | `Akiflow-Client-Id` | Yes | Client UUID (stored in IndexedDB `akiflow_system.general.clientId`) |
 | `Akiflow-Version` | Yes | App version (e.g., `2.66.3`) |
@@ -75,7 +75,7 @@ GET /v5/tasks?limit=2500&sync_token=<base64_token>
 **Query Parameters:**
 
 | Parameter | Type | Description |
-|-----------|------|-------------|
+| ----------- | ------ | ------------- |
 | `limit` | int | Max number of tasks to return (max: 2500) |
 | `sync_token` | string | Base64 encoded token for incremental sync |
 
@@ -112,7 +112,7 @@ Content-Type: application/json
 **Required Fields for CREATE:**
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `id` | UUID | Client-generated UUID |
 | `title` | string | Task title |
 | `global_created_at` | ISO8601 | Creation timestamp |
@@ -121,7 +121,7 @@ Content-Type: application/json
 **Optional Fields:**
 
 | Field | Type | Description |
-|-------|------|-------------|
+| ------- | ------ | ------------- |
 | `description` | string | Task description |
 | `date` | date | Scheduled date (YYYY-MM-DD) |
 | `datetime` | ISO8601 | Scheduled datetime |
@@ -576,7 +576,7 @@ curl -X GET "https://api.akiflow.com/v5/tasks?limit=100" \
 ## Other Endpoints (Discovered)
 
 | Endpoint | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `/v5/accounts` | Connected accounts (Google, Notion, Slack, etc.) |
 | `/v5/contacts` | Contact list |
 | `/v3/notion/sync-now` | Trigger Notion sync |

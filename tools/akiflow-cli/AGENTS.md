@@ -44,7 +44,7 @@ akiflow-cli/
 ## WHERE TO LOOK
 
 | Task | Location | Notes |
-|------|----------|-------|
+| ------ | ---------- | ------- |
 | Add new command | `src/commands/` | Use `defineCommand()` from citty |
 | Add subcommand | `src/commands/{parent}/index.ts` | See task/index.ts pattern |
 | Modify API calls | `src/lib/api/client.ts` | Add methods to AkiflowClient |
@@ -64,7 +64,7 @@ akiflow-cli/
 ### Core Classes
 
 | Symbol | Location | Role |
-|--------|----------|------|
+| -------- | ---------- | ------ |
 | `AkiflowClient` | lib/api/client.ts | HTTP client with lazy credential loading |
 | `AuthError` | lib/api/types.ts | 401 errors |
 | `NetworkError` | lib/api/types.ts | Connection/parse errors |
@@ -72,7 +72,7 @@ akiflow-cli/
 ### Key Interfaces
 
 | Type | Location | Fields |
-|------|----------|--------|
+| ------ | ---------- | -------- |
 | `Task` | lib/api/types.ts | 45+ fields (id, title, date, done, listId...) |
 | `CreateTaskPayload` | lib/api/types.ts | id, title, global_created_at, global_updated_at, date?, duration? |
 | `UpdateTaskPayload` | lib/api/types.ts | id, global_updated_at, done?, status?, deleted_at? |

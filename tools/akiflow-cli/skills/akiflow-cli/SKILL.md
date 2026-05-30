@@ -11,7 +11,7 @@ Manage [Akiflow](https://akiflow.com) tasks directly from the command line.
 ## Why use this?
 
 | Feature | Web App | Akiflow CLI |
-|---------|---------|-------------|
+| --------- | --------- | ------------- |
 | Speed | Browser-based | **Instant from terminal** |
 | OAuth setup | N/A | **Not needed** |
 | API keys | N/A | **Not needed** |
@@ -80,7 +80,7 @@ Credentials 저장 위치: `~/.config/af/credentials.json`
 ### 에러별 대처
 
 | 에러 | 원인 | 해결 |
-|------|------|------|
+| ------ | ------ | ------ |
 | `No credentials found` | 토큰 없음 | `af auth` 실행 |
 | `Token expired` | 만료됨 | Chrome에서 Akiflow 접속 후 `af auth` |
 | `401 Unauthorized` | 토큰 무효 | 위와 동일 |
