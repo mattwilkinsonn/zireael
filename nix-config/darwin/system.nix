@@ -90,15 +90,24 @@
     onActivation = {
       autoUpdate = true;
       upgrade = true;
-      # Temporary: was `cleanup = "zap"`, but Homebrew/brew@f38cd4b
-      # ("Convert bundle subcommands") moved `--zap` to the
-      # `cleanup` subcommand and made the `install` subcommand
-      # reject it. nix-darwin's current activation script still
-      # emits `brew bundle ... --cleanup --zap` against `install`,
-      # which fails the whole rebuild. nix-darwin#1774 has the fix
-      # (split into two invocations); switch back to "zap" once
-      # that merges.
-      cleanup = "uninstall";
+      # Temporary: was `cleanup = "zap"`. Homebrew/brew@f38cd4b
+      # ("Convert bundle subcommands") moved `--cleanup` into a
+      # separate `cleanup` subcommand and made the `install`
+      # subcommand reject `--cleanup` / `--zap` outright. nix-darwin's
+      # current `brewBundleCmd` emits `brew bundle ... --cleanup`
+      # (for `"uninstall"`) or `--cleanup --zap` (for `"zap"`)
+      # against the install subcommand, which means BOTH modes fail
+      # on current brew. Only `"none"` works.
+      #
+      # Trade-off while we wait for nix-darwin#1774:
+      #   - "none" skips the cleanup pass entirely.
+      #   - Brews/casks removed from this Brewfile won't get
+      #     auto-uninstalled. Run `brew bundle cleanup --force --zap
+      #     --file=<brewfile>` manually if drift matters.
+      #
+      # Switch back to "zap" once nix-darwin#1774 lands on master and
+      # a flake.lock bump pulls the fix.
+      cleanup = "none";
     };
     brews = [
       "rtk"
