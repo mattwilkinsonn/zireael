@@ -129,6 +129,56 @@ pub fn lefthook_command(stage: Stage, files: &[PathBuf]) -> Vec<String> {
     argv
 }
 
+/// Build the argv for a runner invocation in `--all-files` mode. The
+/// runner's own "ignore the diff, lint every tracked file" flag replaces
+/// the `--from-ref`/`--to-ref` selection [`hook_command`] would normally
+/// pass.
+///
+/// Per-runner mapping (verified against each tool):
+///   pre-commit / prek: `--all-files`
+///   hk:                `--glob '*'` (hk's `-a/--all` does NOT override
+///                      its from/to-ref defaults on stage hooks, despite
+///                      what `hk run --help` implies; `--glob '*'` is the
+///                      only flag that actually replaces the file
+///                      selection. Verified with hk 1.45.0.)
+///
+/// Lefthook is symmetric to [`hook_command`] — it needs its own builder
+/// (`lefthook_command_all_files`) because the all-files form replaces
+/// the per-file selection rather than the ref bounds.
+pub fn hook_command_all_files(runner: Runner, stage: Stage) -> Vec<String> {
+    match runner {
+        Runner::PreCommit | Runner::Prek => vec![
+            runner.bin().into(),
+            "run".into(),
+            "--hook-stage".into(),
+            stage.as_str().into(),
+            "--all-files".into(),
+        ],
+        Runner::Hk => vec![
+            runner.bin().into(),
+            "run".into(),
+            stage.as_str().into(),
+            "--glob".into(),
+            "*".into(),
+        ],
+        Runner::Lefthook => {
+            panic!("lefthook is built via lefthook_command_all_files, not hook_command_all_files")
+        }
+    }
+}
+
+/// Build the argv for a lefthook invocation in all-files mode.
+/// Lefthook's `--all-files` flag replaces the per-`--file` selection
+/// [`lefthook_command`] would otherwise build.
+pub fn lefthook_command_all_files(stage: Stage) -> Vec<String> {
+    vec![
+        "lefthook".into(),
+        "run".into(),
+        stage.as_str().into(),
+        "--all-files".into(),
+    ]
+}
+
 /// Swap `Runner::PreCommit` for `Runner::Prek` when prek is on the user's
 /// PATH. prek is a drop-in pre-commit replacement that's much faster, so
 /// users who happen to have both installed should get the faster one

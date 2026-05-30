@@ -75,7 +75,15 @@ pub fn run_checks(
             Some(r) => tracing::info!("{update}: running {} hooks", r.bin()),
             None => tracing::info!("{update}: autodetecting runner inside target worktree"),
         }
-        let outcome = run_for_update(jj, &primary_git_dir, cli_runner, stage, &update, run_opts)?;
+        let outcome = run_for_update(
+            jj,
+            &primary_git_dir,
+            workspace_root,
+            cli_runner,
+            stage,
+            &update,
+            run_opts,
+        )?;
         per_bookmark.push((update, outcome));
     }
 

@@ -13,6 +13,7 @@ pub mod jj;
 pub mod push;
 pub mod push_tags;
 pub mod runner;
+pub mod setup;
 pub mod worktree;
 
 use std::process::ExitCode;
@@ -87,6 +88,9 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjHooksError> {
 
             let run_opts = crate::hooks::RunOpts {
                 retry_after_fixup: !no_retry_after_fixup,
+                // push always uses the diff range — the bookmark's ref
+                // bounds are the whole point.
+                all_files: false,
             };
 
             let report = run_checks(
@@ -153,6 +157,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjHooksError> {
             stage,
             revset,
             no_retry_after_fixup,
+            all_files,
         } => {
             let workspace_root = jj.workspace_root()?;
             // Same per-worktree autodetect contract as the push path: the
@@ -162,6 +167,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjHooksError> {
 
             let run_opts = crate::hooks::RunOpts {
                 retry_after_fixup: !no_retry_after_fixup,
+                all_files,
             };
 
             run_for_revset(
@@ -409,6 +415,14 @@ pub fn run_for_revset_outcome(
     };
 
     let primary_git_dir = jj::primary_git_dir(workspace_root)?;
-    let outcome = hooks::run_for_update(jj, &primary_git_dir, cli_runner, stage, &update, opts)?;
+    let outcome = hooks::run_for_update(
+        jj,
+        &primary_git_dir,
+        workspace_root,
+        cli_runner,
+        stage,
+        &update,
+        opts,
+    )?;
     Ok(Some(outcome))
 }

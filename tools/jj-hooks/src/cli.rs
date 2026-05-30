@@ -68,6 +68,18 @@ pub enum Command {
         /// Disable the post-fixup retry. See `push --no-retry-after-fixup`.
         #[arg(long)]
         no_retry_after_fixup: bool,
+
+        /// Run hooks against every tracked file, ignoring the revset's
+        /// diff range. Each runner's own equivalent flag is used:
+        /// `--all-files` for pre-commit/prek/lefthook, `--glob '*'` for
+        /// hk (its own `-a/--all` doesn't actually override stage-hook
+        /// ref bounds in v1.45.0). Useful when you want to lint
+        /// everything once (e.g. after a refactor that touched a lot)
+        /// without crafting a revset that happens to cover every gated
+        /// step. The setup pipeline still runs; the runner just sees no
+        /// `--from-ref`/`--to-ref`.
+        #[arg(long)]
+        all_files: bool,
     },
 
     /// Push jj tags to a git remote. jj has no native `jj git push --tag`,

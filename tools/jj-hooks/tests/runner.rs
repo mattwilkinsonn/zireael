@@ -1,4 +1,7 @@
-use jj_hooks::runner::{Runner, Stage, hook_command, lefthook_command, prefer_prek_when_available};
+use jj_hooks::runner::{
+    Runner, Stage, hook_command, hook_command_all_files, lefthook_command,
+    lefthook_command_all_files, prefer_prek_when_available,
+};
 use tempfile::TempDir;
 
 #[test]
@@ -104,6 +107,69 @@ fn lefthook_pre_commit_no_files() {
     // Empty file list still produces a valid command — lefthook handles "nothing to do" itself.
     let cmd = lefthook_command(Stage::PreCommit, &[]);
     assert_eq!(cmd, vec!["lefthook", "run", "pre-commit"]);
+}
+
+// --- --all-files command builders -------------------------------------------
+//
+// `--all-files` swaps each runner's ref/file selection for the
+// runner's own "ignore the diff, run on the whole tree" mode.
+// One unit test per runner pins the exact argv we send.
+
+#[test]
+fn hook_command_all_files_pre_commit() {
+    let cmd = hook_command_all_files(Runner::PreCommit, Stage::PrePush);
+    assert_eq!(
+        cmd,
+        vec![
+            "pre-commit",
+            "run",
+            "--hook-stage",
+            "pre-push",
+            "--all-files",
+        ],
+    );
+    assert!(
+        !cmd.iter().any(|a| a == "--from-ref" || a == "--to-ref"),
+        "--all-files mode must not pass --from-ref/--to-ref",
+    );
+}
+
+#[test]
+fn hook_command_all_files_prek() {
+    let cmd = hook_command_all_files(Runner::Prek, Stage::PrePush);
+    assert_eq!(cmd[0], "prek");
+    assert!(cmd.iter().any(|a| a == "--all-files"));
+    assert!(!cmd.iter().any(|a| a == "--from-ref" || a == "--to-ref"));
+}
+
+#[test]
+fn hook_command_all_files_hk() {
+    // hk's `-a/--all` doesn't actually override ref bounds on stage
+    // hooks (despite what `hk run --help` says) — `--glob '*'` is
+    // the one flag that replaces the file selection. Verified with
+    // hk 1.45.0 in /tmp; see runner.rs docstring for details.
+    let cmd = hook_command_all_files(Runner::Hk, Stage::PrePush);
+    assert_eq!(cmd, vec!["hk", "run", "pre-push", "--glob", "*"]);
+    assert!(!cmd.iter().any(|a| a == "--from-ref" || a == "--to-ref"));
+}
+
+#[test]
+#[should_panic(expected = "lefthook")]
+fn hook_command_all_files_lefthook_panics() {
+    // Symmetric to hook_command — lefthook needs its own builder
+    // because the all-files form replaces the per-file selection
+    // rather than the ref bounds.
+    let _ = hook_command_all_files(Runner::Lefthook, Stage::PrePush);
+}
+
+#[test]
+fn lefthook_command_all_files_emits_all_files_flag() {
+    let cmd = lefthook_command_all_files(Stage::PrePush);
+    assert_eq!(cmd, vec!["lefthook", "run", "pre-push", "--all-files"]);
+    assert!(
+        !cmd.iter().any(|a| a == "--file"),
+        "--all-files must not also emit --file selections",
+    );
 }
 
 #[test]
