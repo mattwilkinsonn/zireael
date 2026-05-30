@@ -92,11 +92,19 @@ if [ ! -d "$HOME/.git" ]; then
 fi
 
 # Auto-detect dev mode if not forced. Dev boxes have a team OP token
-# file (set by the bootstrap), servers don't.
+# in a stable location set by the per-host bootstrap:
+#   - Linux: ~/.config/op/team-service-account-token (file)
+#   - macOS: Keychain entry "OP_TEAM_SERVICE_ACCOUNT_TOKEN"
+# Servers + CI runners don't have a team token; we use its presence as
+# the "is this a dev box?" signal.
 if [ "$DEV" = "auto" ]; then
 	if [ -f "$HOME/.config/op/team-service-account-token" ]; then
 		DEV=yes
-		echo "Auto-detected dev host (found team OP token)."
+		echo "Auto-detected dev host (found team OP token file)."
+	elif [ "$(uname -s)" = "Darwin" ] &&
+		security find-generic-password -a "$USER" -s "OP_TEAM_SERVICE_ACCOUNT_TOKEN" -w >/dev/null 2>&1; then
+		DEV=yes
+		echo "Auto-detected dev host (found team OP token in Keychain)."
 	else
 		DEV=no
 		echo "Auto-detected server host (no team OP token)."
@@ -183,7 +191,12 @@ fi
 
 # ---- Step 4: rebuild ----
 step "Rebuilding system against $NIX_CONFIG_DIR"
+# `hostname` on macOS returns "Matts-MacBook-Pro.local" (the mDNS form);
+# the flake attribute is "Matts-MacBook-Pro" with no suffix. Strip the
+# trailing .local so the rebuild target resolves. Linux's hostname is
+# already the bare form, so the strip is a no-op there.
 HOSTNAME="${HOSTNAME_OVERRIDE:-$(hostname)}"
+HOSTNAME="${HOSTNAME%.local}"
 case "$(uname -s)" in
 Darwin)
 	FLAKE_TARGET="${FLAKE_TARGET:-$HOSTNAME}"
