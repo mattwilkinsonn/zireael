@@ -90,7 +90,15 @@
     onActivation = {
       autoUpdate = true;
       upgrade = true;
-      cleanup = "zap"; # Remove formulae/casks not listed here
+      # Temporary: was `cleanup = "zap"`, but Homebrew/brew@f38cd4b
+      # ("Convert bundle subcommands") moved `--zap` to the
+      # `cleanup` subcommand and made the `install` subcommand
+      # reject it. nix-darwin's current activation script still
+      # emits `brew bundle ... --cleanup --zap` against `install`,
+      # which fails the whole rebuild. nix-darwin#1774 has the fix
+      # (split into two invocations); switch back to "zap" once
+      # that merges.
+      cleanup = "uninstall";
     };
     brews = [
       "rtk"
