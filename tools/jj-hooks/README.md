@@ -147,6 +147,7 @@ Global flags:
 | Flag | Default | Effect |
 | ---- | ------- | ------ |
 | `--stage <pre-commit\|pre-push>` | `pre-commit` | Which hook stage to run |
+| `--all-files` | off | Run every hook against every tracked file, ignoring the revset's diff range. Maps to each runner's own all-files mode (see [Setup steps](#setup-steps)). |
 | positional `REVSET` | `@` | Revset to check |
 
 ## Runner autodetection
@@ -195,6 +196,102 @@ re-run `jj-hp push` to actually push the fixed version.
 The push is always aborted when a fixup commit is created. Run `jj-hp push`
 again after squashing/advancing.
 
+## Setup steps
+
+`git worktree add --detach` checks out the tracked tree only — gitignored
+content like `node_modules/`, `.venv/`, `target/` is absent. Hooks that
+depend on those resources (e.g. `tsc`, `pytest`, `cargo nextest`) fail
+inside the ephemeral worktree with `command not found` or `module not found`.
+
+Configure `jj-hooks.setup` to declare commands jj-hp runs inside the
+worktree *before* the hook runner fires.
+
+### Quick start
+
+The fastest way to add a setup step is `jj config set --repo`, which writes
+the value into the repo's config without you having to find or open the
+file:
+
+```bash
+# Single step: `bun install` before every hook run.
+jj config set --repo 'jj-hooks.setup' \
+  '[{ name = "install deps", run = ["bun", "install", "--frozen-lockfile"] }]'
+
+# Verify what landed:
+jj config get jj-hooks.setup
+
+# Remove it later:
+jj config unset --repo jj-hooks.setup
+```
+
+Multi-step setup is the same call — `jj config set` takes the whole value
+as one TOML expression. Wrap multiple inline tables in `[ … ]`:
+
+```bash
+jj config set --repo 'jj-hooks.setup' \
+  '[
+    { name = "install deps", run = ["bun", "install", "--frozen-lockfile"] },
+    { name = "codegen", run = ["bun", "run", "prepare"] },
+  ]'
+```
+
+For long / multi-step configs the file form is easier to read. `jj config
+path --repo` prints the repo config's path (creating it if missing); edit
+that file directly:
+
+```bash
+$EDITOR "$(jj config path --repo)"
+```
+
+```toml
+# .jj/repo/config.toml
+[[jj-hooks.setup]]
+name = "install deps"
+run = ["bun", "install", "--frozen-lockfile"]
+
+[[jj-hooks.setup]]
+name = "codegen"
+run = ["bun", "run", "prepare"]
+```
+
+User-level (apply to every repo): swap `--repo` for `--user` on every
+command, or edit `~/.config/jj/config.toml`. Repo-level overrides user-level
+when both define the same key.
+
+### Step shape
+
+Each entry:
+
+| Field | Type | Required | Notes |
+| ----- | ---- | -------- | ----- |
+| `name` | string | no | Label used in failure messages. Falls back to `run[0]`. |
+| `run` | array of strings | yes | argv list — exec'd directly, no shell. |
+
+`run` is an argv list (not a shell string) so quoting rules can't bite. For
+chained commands write `["bash", "-c", "foo && bar"]` explicitly.
+
+Steps run in declared order. A non-zero exit aborts the pipeline before the
+hook runner is invoked — there's no point grading a broken worktree.
+
+### `JJ_HOOKS_WORKSPACE`
+
+Both setup steps and hook subprocesses see `JJ_HOOKS_WORKSPACE` in their
+environment, pointing at the workspace `jj-hp` was invoked from (primary or
+secondary). Use it to reach back into the invocation workspace's resources:
+
+```toml
+# Hardlink-copy node_modules from the invocation workspace instead of
+# running a full install. Cheap on Linux (hardlinks are O(file count) metadata
+# ops); falls through to `cp -a` on macOS where -al isn't supported by default.
+[[jj-hooks.setup]]
+name = "share node_modules"
+run = ["bash", "-c", "cp -al \"$JJ_HOOKS_WORKSPACE/node_modules\" . 2>/dev/null || cp -a \"$JJ_HOOKS_WORKSPACE/node_modules\" ."]
+```
+
+The retry-after-fixup pass (issue jj-hooks#11) re-creates the worktree, so
+setup steps run again on the retry — important when the hook's first run
+mutates state that the setup needs to restore.
+
 ## Workspaces
 
 `jj-hooks` resolves the primary git directory via
@@ -210,6 +307,7 @@ All config keys live under `jj-hooks.*` in jj's user/repo config:
 | Key | Type | Default | Notes |
 | --- | ---- | ------- | ----- |
 | `jj-hooks.advance-bookmarks` | bool | false | Default for `--advance-bookmarks` |
+| `jj-hooks.setup` | array of tables | empty | Pre-hook setup steps; see [Setup steps](#setup-steps) |
 
 `--runner` and `--stage` are command-line / env only — they belong with the
 invocation, not the config.

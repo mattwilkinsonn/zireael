@@ -79,10 +79,16 @@ pub fn run_pre_push(
     let primary_git_dir = jj::primary_git_dir(workspace_root).map_err(JjGtError::Hooks)?;
     let run_opts = RunOpts {
         retry_after_fixup: true,
+        // jj-gt always validates the specific stack range it's about
+        // to submit. all-files would lint the whole tree, which is
+        // beyond the bookmark's scope and would surface unrelated
+        // failures the user can't act on from `jj-gt submit`.
+        all_files: false,
     };
     let outcome = jj_hooks::hooks::run_for_update(
         jj,
         &primary_git_dir,
+        workspace_root,
         opts.runner_override,
         Stage::PrePush,
         &update,

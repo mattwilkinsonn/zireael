@@ -328,6 +328,7 @@ dependencies = [
  "dialoguer",
  "indoc",
  "regex",
+ "serde",
  "tempfile",
  "thiserror",
  "toml",

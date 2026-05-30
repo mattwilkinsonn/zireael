@@ -20,7 +20,11 @@ use std::process::Command;
 use crate::bookmark_updates::BookmarkUpdate;
 use crate::error::{JjHooksError, Result};
 use crate::jj::JjCli;
-use crate::runner::{Runner, Stage, hook_command, lefthook_command};
+use crate::runner::{
+    Runner, Stage, hook_command, hook_command_all_files, lefthook_command,
+    lefthook_command_all_files,
+};
+use crate::setup::{self, SetupStep};
 use crate::worktree::Worktree;
 
 #[derive(Debug, Clone)]
@@ -56,6 +60,13 @@ pub struct RunOpts {
     /// fighting for `.git/index.lock` while one step legitimately
     /// auto-fixes files).
     pub retry_after_fixup: bool,
+    /// Run hooks against every tracked file in the worktree rather
+    /// than the diff range. Each runner gets its own all-files flag
+    /// (see [`crate::runner::hook_command_all_files`]). Currently
+    /// surfaced via `jj-hp run --all-files`; `push` always uses the
+    /// diff range since the bookmark's ref bounds are the whole
+    /// point.
+    pub all_files: bool,
 }
 
 /// Run hooks for one bookmark update. Returns the outcome (success +
@@ -69,6 +80,7 @@ pub struct RunOpts {
 pub fn run_for_update(
     jj: &JjCli,
     primary_git_dir: &Path,
+    workspace_root: &Path,
     cli_runner: Option<Runner>,
     stage: Stage,
     update: &BookmarkUpdate,
@@ -85,15 +97,19 @@ pub fn run_for_update(
     };
 
     let from_refs = resolve_from_refs(jj, update)?;
+    let setup_steps = setup::load_steps(jj)?;
 
     let initial = run_once(
         jj,
         primary_git_dir,
+        workspace_root,
         cli_runner,
         stage,
         update,
         new_commit,
         &from_refs,
+        &setup_steps,
+        opts.all_files,
     )?;
 
     // Initial run was clean OR caller opted out of retry OR there's nothing
@@ -115,11 +131,14 @@ pub fn run_for_update(
     let retry = run_once(
         jj,
         primary_git_dir,
+        workspace_root,
         cli_runner,
         stage,
         update,
         fixup,
         &from_refs,
+        &setup_steps,
+        opts.all_files,
     )?;
 
     // The retry should be clean (no failure, no new fixup) for the
@@ -166,16 +185,28 @@ struct OnceOutcome {
 ///
 /// Callers (currently just [`run_for_update`]) decide whether to retry
 /// based on the returned `success` / `fixup_commit`.
+#[allow(clippy::too_many_arguments)]
 fn run_once(
     jj: &JjCli,
     primary_git_dir: &Path,
+    workspace_root: &Path,
     cli_runner: Option<Runner>,
     stage: Stage,
     update: &BookmarkUpdate,
     target_commit: &str,
     from_refs: &[String],
+    setup_steps: &[SetupStep],
+    all_files: bool,
 ) -> Result<OnceOutcome> {
     let wt = Worktree::create(primary_git_dir, target_commit)?;
+
+    // User-declared setup commands (e.g. `bun install`) run inside
+    // the worktree before the runner so hooks have install-time
+    // resources (`node_modules`, `.venv`, etc.) available. A
+    // non-zero exit aborts before the runner is invoked — the
+    // worktree is unhealthy and there's no point asking the
+    // runner to grade it.
+    setup::run_steps(setup_steps, wt.path(), workspace_root)?;
 
     // Resolve the runner from the target commit's tree, not the primary
     // workspace. `--runner` overrides; otherwise autodetect against the
@@ -198,24 +229,50 @@ fn run_once(
         }
     };
 
+    // all_files: ignore the diff range and run each runner's
+    // "lint every tracked file" command exactly once. from_refs
+    // is meaningless here — the runner sees no --from-ref/--to-ref.
+    //
+    // Default path: iterate from_refs (one per ancestor on the
+    // remote) so multi-ancestor pushes still get the full set of
+    // diff bases. Each iteration accumulates modifications in the
+    // shared worktree, mirroring how the standard pre-push pipeline
+    // builds up its fixup.
     let mut success = true;
-    for from_ref in from_refs {
+    if all_files {
         let argv = match runner {
-            Runner::Lefthook => {
-                let files = changed_files(wt.path(), from_ref, target_commit)?;
-                lefthook_command(stage, &files)
-            }
-            _ => hook_command(runner, stage, from_ref, target_commit),
+            Runner::Lefthook => lefthook_command_all_files(stage),
+            _ => hook_command_all_files(runner, stage),
         };
-
-        tracing::info!("running: {:?}", argv);
+        tracing::info!("running (--all-files): {:?}", argv);
         let status = Command::new(&argv[0])
             .args(&argv[1..])
             .current_dir(wt.path())
+            .env("JJ_HOOKS_WORKSPACE", workspace_root)
             .status()?;
-
         if !status.success() {
             success = false;
+        }
+    } else {
+        for from_ref in from_refs {
+            let argv = match runner {
+                Runner::Lefthook => {
+                    let files = changed_files(wt.path(), from_ref, target_commit)?;
+                    lefthook_command(stage, &files)
+                }
+                _ => hook_command(runner, stage, from_ref, target_commit),
+            };
+
+            tracing::info!("running: {:?}", argv);
+            let status = Command::new(&argv[0])
+                .args(&argv[1..])
+                .current_dir(wt.path())
+                .env("JJ_HOOKS_WORKSPACE", workspace_root)
+                .status()?;
+
+            if !status.success() {
+                success = false;
+            }
         }
     }
 

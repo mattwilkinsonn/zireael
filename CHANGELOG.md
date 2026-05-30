@@ -6,6 +6,28 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
 
 ## [Unreleased]
 
+### Added — jj-hooks
+
+- `jj-hooks.setup` config: declare a list of commands that run inside the
+  ephemeral worktree before the hook runner fires. Use this when hooks
+  depend on install-time resources (`node_modules`, `.venv`, etc.) that
+  aren't in the committed tree — the worktree starts without them, so a
+  setup step like `bun install --frozen-lockfile` is what puts them in
+  place. Each step is an array-of-tables entry with an optional `name`
+  and a required `run` argv. Issue jj-hooks#9.
+- `JJ_HOOKS_WORKSPACE` env var: set by jj-hp for every setup step and
+  hook subprocess, pointing at the workspace `jj-hp` was invoked from.
+  Setup steps that prefer copying / hardlinking install resources over
+  a full reinstall can `cp -al "$JJ_HOOKS_WORKSPACE/node_modules" .`.
+- `jj-hp run --all-files`: ignore the revset's diff range and run every
+  hook against every tracked file in the worktree. Useful for "lint
+  everything once" after a wide refactor without crafting a revset that
+  happens to cover every glob-gated step. Per-runner mapping:
+  `pre-commit`/`prek`/`lefthook` use `--all-files`; `hk` uses
+  `--glob '*'` (its documented `-a/--all` flag doesn't actually override
+  stage-hook ref bounds in v1.45.0). `jj-hp push` always uses the diff
+  range — the bookmark's ref bounds are its identity.
+
 ## [0.3.0] — 2026-05-26
 
 Initial monorepo release. Consolidates four previously-standalone repos:
