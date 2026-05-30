@@ -217,12 +217,9 @@ at `.github/rulesets/main-protection.json`. Apply with
 
 | Required check | Workflow | Notes |
 | --- | --- | --- |
-| `Lints (jj-hooks)` | jj-hooks CI / ci-base-rust | Always runs when jj-hooks fires |
-| `Test (jj-hooks, ubuntu-latest)` | jj-hooks CI / ci-base-rust | Always |
-| `Test (jj-hooks, macos-latest)` | jj-hooks CI / ci-base-rust | Always |
-| `Lints (jj-gt)` | jj-gt CI / ci-base-rust | Always when jj-gt fires |
-| `Test (jj-gt, ubuntu-latest)` | jj-gt CI / ci-base-rust | Always |
-| `Test (jj-gt, macos-latest)` | jj-gt CI / ci-base-rust | Always |
+| `jj-hooks CI` | jj-hooks.yml | Rollup gate over `jj-hooks (matrix) / *` |
+| `jj-gt CI` | jj-gt.yml | Rollup gate over `jj-gt (matrix) / *` |
+| `nix-config CI` | nix-config.yml | Rollup gate over lints + every per-host `flake eval (*)` |
 | `akiflow-cli CI` | akiflow-cli.yml | Inline single-job |
 | `tap CI` | tap.yml | Inline single-job |
 | `docs CI` | docs.yml | Inline single-job |
@@ -256,6 +253,40 @@ two-step rollout:
 Reverse order locks the queue: the new check is required but no
 PR has reported on it yet, so nothing merges until the workflow
 lands separately.
+
+### Rollup gates for reusable workflows
+
+When a workflow's main job delegates to a reusable
+(`uses: ./.github/workflows/foo.yml`), GitHub publishes the
+_reusable's children_ as check contexts — prefixed with the
+caller-job's display name — but does NOT publish the caller-job
+itself as a standalone context.
+
+That breaks the required-check gate two different ways:
+
+- **Path-filter match (work fires):** the published checks are
+  `<workflow> CI / <child job>` (e.g. `jj-gt CI / Lints (jj-gt)`),
+  with a workflow-name prefix. Requiring `jj-gt CI` matches nothing.
+- **Path-filter mismatch (work skipped):** the caller-job's `if:`
+  is false, so the reusable never dispatches and its children
+  never report. A required check listing those child names would
+  block doc-only PRs forever.
+
+The fix is a **rollup gate**: a small job in each affected workflow
+named exactly what the ruleset references (`jj-hooks CI`,
+`jj-gt CI`, `nix-config CI`), with `if: always()` so it ALWAYS
+fires, that walks `needs.<job>.result` and treats `success` /
+`skipped` as pass and `failure` / `cancelled` as fail.
+
+The dispatch job (the one that actually `uses:` the reusable) gets
+renamed and given a `name: <tool> (matrix)` so its children
+appear as `<tool> (matrix) / <child>` on the PR page — readable as
+nested checks, but not the ones branch protection gates on.
+
+See `jj-hooks.yml`, `jj-gt.yml`, and `nix-config.yml` for the
+exact shape. Inline single-job workflows (`akiflow-cli.yml`,
+`tap.yml`, `docs.yml`) don't need this pattern — they publish their
+own job's name as the check context directly.
 
 ## Local `just ci`
 
@@ -324,7 +355,10 @@ you see every target's failure mode in one run.
   for the canonical layout. The new tool needs:
   1. Path filter at `.github/path-filters/<tool>.yml`
   2. Workflow at `.github/workflows/<tool>.yml` (consume
-     `ci-base-rust.yml` if Rust, inline otherwise)
+     `ci-base-rust.yml` if Rust, inline otherwise). If you use a
+     reusable workflow, also add the rollup gate pattern (see
+     "Rollup gates for reusable workflows" above) so branch
+     protection has a stable check context to gate on.
   3. Path entry in `.github/workflows/release.yml`'s matrix +
      the bump-formulae.py script
   4. `hk.pkl` step gated on the new file glob

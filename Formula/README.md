@@ -10,7 +10,7 @@ brew install mattwilkinsonn/zireael/jj-hooks   # or jj-gt, or akiflow-cli
 ## Available formulae
 
 | Formula | Binaries | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `jj-hooks` | `jj-hooks`, `jj-hp` | Runs pre-commit / lefthook / hk hooks against jj bookmark pushes. |
 | `jj-gt` | `jj-gt` | Bridges jj bookmark stacks and Graphite (gt) PR stacks. |
 | `akiflow-cli` | `af` | Akiflow task-management CLI (fork of `code-yeongyu/akiflow-cli`). |

@@ -47,8 +47,14 @@ jobs:
         with:
           filters: .github/path-filters/jj-hooks.yml
 
-  ci:
-    name: jj-hooks CI
+  # The dispatch job invokes the reusable workflow. Its display name
+  # (`jj-hooks (matrix)`) becomes the prefix for the reusable's children
+  # in PR checks: `jj-hooks (matrix) / Lints (jj-hooks)`, etc.
+  #
+  # Branch protection does NOT gate on this job directly — see the
+  # `ci` rollup below for the stable check context.
+  ci-dispatch:
+    name: jj-hooks (matrix)
     needs: [optimize_ci, changes]
     if: |
       needs.optimize_ci.outputs.skip == 'false' &&
@@ -58,3 +64,40 @@ jobs:
       package: jj-hooks
       install_deps: true
     secrets: inherit
+
+  # Rollup gate. ALWAYS fires, regardless of whether the dispatch job
+  # ran or was skipped by the path filter. This is the single stable
+  # check context the branch-protection ruleset gates on
+  # (`jj-hooks CI`).
+  #
+  # Why this exists: a job that delegates via `uses:` doesn't publish
+  # its own check context — only the reusable's children do, prefixed
+  # with the dispatch job's display name. When the dispatch is
+  # skipped (path filter mismatch), the reusable never fires, so
+  # those children never report — making them unusable as required
+  # checks. This rollup synthesizes a single context that fires in
+  # both cases.
+  #
+  # Treat `success` and `skipped` upstream as pass (`skipped` means
+  # the path filter or graphite skip legitimately suppressed the work,
+  # not a failure); `failure` and `cancelled` upstream are fail.
+  ci:
+    name: jj-hooks CI
+    needs: [optimize_ci, changes, ci-dispatch]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Rollup ci-dispatch result
+        run: |
+          set -euo pipefail
+          result='${{ needs.ci-dispatch.result }}'
+          case "$result" in
+            success|skipped)
+              echo "ci-dispatch reported $result — pass"
+              ;;
+            *)
+              echo "ci-dispatch reported $result — fail" >&2
+              exit 1
+              ;;
+          esac
