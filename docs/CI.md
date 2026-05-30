@@ -175,7 +175,8 @@ What does NOT run on push: main (relies on the PR check set +
 nightly backstop):
 
 - `cargo nextest run` across both Rust crates × two OSes.
-- `bun test` for akiflow-cli (~290 tests, 5min p95).
+- `bun test` for akiflow-cli (~290 tests; ~2-3s warm cache, 5min
+  timeout for cold-cache CI runners on slow days).
 
 **Dedup against PRs:** GitHub doesn't natively dedup
 "this commit was just merged from a green PR" — a squash-merge
@@ -274,7 +275,7 @@ Per-tool recipes:
 | `ci-jj-hooks` | `cargo fmt -p jj-hooks --check` + clippy + nextest |
 | `ci-jj-gt` | same shape; live tests excluded (`-E 'not test(gh_live)...'`) |
 | `ci-jj-gt-live` | live integration tests; needs `JJ_GT_LIVE_*` env |
-| `ci-akiflow-cli` | bun install + biome + tsc + bun test (5min cap) |
+| `ci-akiflow-cli` | bun install + biome + tsc + bun test (5min timeout, ~2-3s warm cache) |
 | `ci-tap` | `brew style Formula/*.rb` (degrades to warn on Linux) |
 | `ci-docs` | `markdownlint-cli2 "**/*.md"` |
 
