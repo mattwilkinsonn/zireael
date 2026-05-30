@@ -7,7 +7,7 @@ and on-demand gaming station.
 
 - AMD Ryzen 3600 6-Core
 - B450 Tomahawk (UEFI)
-- 32 GB DDR4
+- 64 GB DDR4
 - PowerColor RX 5700 XT 8 GB (RDNA 1 / Navi 10)
 - HP EX920 1 TB M.2 NVMe → btrfs root
 - Seagate FireCuda 2 TB SATA SSHD → ZFS backup pool

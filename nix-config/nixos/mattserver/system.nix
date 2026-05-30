@@ -4,7 +4,7 @@
   ...
 }:
 
-# mattserver — Old gaming PC (AMD Ryzen 3600 + RX 5700 XT, 32 GB DDR4).
+# mattserver — Old gaming PC (AMD Ryzen 3600 + RX 5700 XT, 64 GB DDR4).
 # Roles:
 #   1. ZFS backup receive target (btrfs root on 1TB NVMe; ZFS pool on 2TB SATA SSHD)
 #   2. Self-hosted GitHub Actions runners (sealedsecurity org)
@@ -27,16 +27,18 @@ let
   # and its subdirs. SEA-640.
   sealedRunnerUser = "sealed-runner";
 
-  # Three sealed runner instances. Lints + tests run concurrently on
-  # one push; the third slot absorbs an additional push arriving before
-  # the first finishes. Each gets 4 CARGO_BUILD_JOBS → 3 × 4 = 12
-  # threads, matching the Ryzen 3600's logical core count.
+  # Four sealed runner instances. Lints + tests run concurrently on one
+  # push; the extra slots absorb additional pushes arriving before the
+  # first finishes. Each gets 4 CARGO_BUILD_JOBS → 4 × 4 = 16 parallel
+  # rustc clients. That oversubscribes the Ryzen 3600's 12 logical
+  # cores by ~33%, which is fine in practice because rustc is link-
+  # and IO-bound enough that strict 1:1 mapping leaves cores idle.
   #
-  # Was 4 instances pre-SEA-672; dropped to 3 to ease memory pressure
-  # (4 × 3 × ~2.5 GB peak rustc = ~30 GB on a 32 GB box → sccache OOM
-  # kills + ENOENT-on-rustc races). Three slots × 4 jobs gives the
-  # same parallel-rustc count (12) but with one fewer runner unit
-  # holding test binaries + nextest harnesses resident.
+  # Pre-SEA-672 was 4 instances; dropped to 3 to ease memory pressure
+  # on the 32 GB config (4 × 4 × ~2.5 GB peak rustc = ~40 GB on a 32
+  # GB box → sccache OOM kills). 64 GB upgrade restores the 4th slot
+  # with comfortable headroom (see the per-runner MemoryMax math
+  # below).
   #
   # State dirs are per-instance under /var/lib/github-runners/<name>/ so
   # cargo/rustup don't race across instances. The runner services run as
@@ -73,7 +75,7 @@ let
     # Move the runner's working directory off the systemd default
     # `RuntimeDirectory` (a tmpfs under /run) onto the NVMe-backed
     # state dir. Rust builds easily run a multi-GB target/ which
-    # blows the tmpfs cap (typically 50% of RAM = ~16 GB shared
+    # blows the tmpfs cap (typically 50% of RAM = ~32 GB shared
     # across all 4 instances). The state dir lives on btrfs root
     # with TB of headroom. SEA-640.
     workDir = "/var/lib/github-runners/${name}/work";
@@ -180,7 +182,7 @@ let
       # index-lockfile that cargo uses serializes registry *index*
       # updates, NOT source unpacks — so a shared registry is only
       # safe when at most one cargo runs at a time, which doesn't
-      # hold on a 3-runner box. Per-instance CARGO_HOME costs
+      # hold on a 4-runner box. Per-instance CARGO_HOME costs
       # ~1-2 GB extra per runner for the warm registry; trivial
       # given the TB-class NVMe.
       CARGO_HOME = "/var/lib/github-runners/${name}/.cargo";
@@ -188,8 +190,10 @@ let
       # and will corrupt toolchain state if two instances install
       # simultaneously.
       RUSTUP_HOME = "/var/lib/github-runners/${name}/.rustup";
-      # 4 build jobs per instance × 3 instances = 12 threads, matching the
-      # Ryzen 3600's logical core count.
+      # 4 build jobs per instance × 4 instances = 16 parallel rustc
+      # clients. Oversubscribes the Ryzen 3600's 12 logical cores by
+      # ~33%, which is fine in practice because rustc's link + IO
+      # latency leaves cores idle under strict 1:1 mapping.
       CARGO_BUILD_JOBS = "4";
 
       # pkg-config search path. On NixOS, `pkg-config` outside a Nix dev
@@ -214,7 +218,7 @@ let
       # restarts.
       RUSTC_WRAPPER = "sccache";
       SCCACHE_DIR = "/var/lib/github-runners/shared/.sccache";
-      SCCACHE_CACHE_SIZE = "30G";
+      SCCACHE_CACHE_SIZE = "500G";
       # Point the sccache client at the dedicated server unit. Default
       # is 4226 anyway, but pin it explicitly so a future port change
       # only needs one edit.
@@ -232,28 +236,28 @@ let
     serviceOverrides = {
       ReadWritePaths = [ "/var/lib/github-runners" ];
 
-      # SEA-672: per-runner memory ceiling. With 3 sibling runners each
+      # SEA-672: per-runner memory ceiling. With 4 sibling runners each
       # running 4 parallel rustc processes (~2-3 GB peak each on
       # monomorphization-heavy crates) plus a shared sccache server
-      # (now 8 GB cap), the box's 32 GB ceiling is comfortably
-      # exceeded under worst-case load.
+      # (now 12 GB cap), the box's 64 GB ceiling has comfortable
+      # headroom even under worst-case load.
       #
       # Box-wide math under load:
-      #   3 runners × 7 GB MemoryMax = 21 GB
-      #   sccache server MemoryMax    =  8 GB
-      #   kernel + page cache headroom ≈ 3 GB
+      #   4 runners × 12 GB MemoryMax = 48 GB
+      #   sccache server MemoryMax    = 12 GB
+      #   kernel + page cache headroom ≈  4 GB
       #   ────────────────────────────────────
-      #   Total                       = 32 GB physical
+      #   Total                       = 64 GB physical
       #
       # `MemoryHigh` is a soft cap — the kernel tries to keep the
-      # unit under 6 GB by throttling allocations and aggressively
+      # unit under 10 GB by throttling allocations and aggressively
       # reclaiming page cache. `MemoryMax` is the hard ceiling —
       # exceeding it gets the unit's processes OOM-killed instead
       # of dragging the whole host into swap thrash (and taking
       # the sccache server down with it, which is the specific
       # failure mode we're closing here).
-      MemoryHigh = "6G";
-      MemoryMax = "7G";
+      MemoryHigh = "10G";
+      MemoryMax = "12G";
 
       # Sandbox unwrap: seal's daemon spawns its own bwrap-based
       # sandbox for every `command_run`. The github-runner module's
@@ -544,6 +548,7 @@ in
     sealed = mkSealedRunner "sealed";
     sealed-2 = mkSealedRunner "sealed-2";
     sealed-3 = mkSealedRunner "sealed-3";
+    sealed-4 = mkSealedRunner "sealed-4";
   };
 
   # ============================================================
@@ -573,16 +578,18 @@ in
   # "rest of the CI run fails".
   #
   # Memory accounting: the server's hot working set scales with
-  # SCCACHE_CACHE_SIZE (30 GiB on-disk, ~hundreds of MB resident
-  # for the LRU index) plus inflight compile bytes. 4 GiB hard
-  # cap keeps a runaway from squeezing the runner pools.
+  # SCCACHE_CACHE_SIZE (500 GiB on-disk, ~1-2 GB resident for the
+  # LRU index at that scale) plus inflight compile bytes. 12 GiB
+  # hard cap keeps a runaway from squeezing the runner pools while
+  # leaving the server room to handle 4 × 4 = 16 concurrent rustc
+  # clients post-64 GB upgrade.
   systemd.services.sccache-server = {
     description = "Shared sccache server for self-hosted GitHub runners";
     wantedBy = [ "multi-user.target" ];
     after = [ "network.target" ];
     environment = {
       SCCACHE_DIR = "/var/lib/github-runners/shared/.sccache";
-      SCCACHE_CACHE_SIZE = "30G";
+      SCCACHE_CACHE_SIZE = "500G";
       SCCACHE_SERVER_PORT = "4226";
       # Server-side log level. `warn` keeps the journal quiet on
       # the happy path; failures still surface.
@@ -609,12 +616,15 @@ in
       # of staging state, and with 3 runners × 4 jobs each (12
       # parallel rustc clients) + the LRU index + cache lookup
       # state, the 4G ceiling was hitting MemoryMax mid-PR.
-      # 8G ceiling fits box-wide math: 3×7G runners + 8G sccache
-      # + 3G kernel/page-cache ≈ 32G physical. A genuinely-leaked
-      # compile result still can't squeeze the runner pools
-      # because the hard ceiling kicks in at 8G.
-      MemoryHigh = "6G";
-      MemoryMax = "8G";
+      #
+      # 64 GB upgrade + restored 4th runner: bumped 8G → 12G to
+      # cover 4 × 4 = 16 concurrent rustc clients. Box-wide math
+      # in serviceOverrides comment above: 4×12G runners + 12G
+      # sccache + ~4G kernel/page-cache ≈ 64 GB physical. A
+      # genuinely-leaked compile result still can't squeeze the
+      # runner pools because the hard ceiling kicks in at 12G.
+      MemoryHigh = "10G";
+      MemoryMax = "12G";
       # The server reads + writes SCCACHE_DIR (cache state),
       # the requester runners' workspaces (rustc emits compiled
       # artifacts directly to the client's output paths through
@@ -659,11 +669,17 @@ in
   # Runner cache cleanup
   # ============================================================
 
-  # Weekly prune of Rust target/ directories not modified in 14+ days.
+  # Weekly prune of Rust target/ directories not modified in 30+ days.
   # These are the primary disk hog — a single workspace target/ can reach
   # 10–20 GB for large Rust projects. .cargo/ registry and rustup toolchains
   # are intentionally excluded: they're shared across projects and are much
   # smaller relative to the benefit of keeping them warm.
+  #
+  # 30-day window (was 14) post-64 GB / 1 TB NVMe context: the box is a
+  # CI host first, with most of the disk dedicated to runner state.
+  # Keeping warm target/ dirs for 4+ weeks catches infrequent-push
+  # branches (release prep, security backports, slow feature stacks)
+  # that would otherwise cold-rebuild from scratch on every visit.
   #
   # noatime is set on the btrfs mount so -atime would never update;
   # -mtime (directory entry mtime) is reliable here because cargo updates
@@ -676,7 +692,7 @@ in
         find /var/lib/github-runners -maxdepth 6 \
           -name "target" -type d \
           -not -path "*/.cargo/*" \
-          -mtime +14 \
+          -mtime +30 \
           -print0 | xargs -0 -r rm -rf
       '';
     };
