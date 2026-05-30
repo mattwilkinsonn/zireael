@@ -35,12 +35,9 @@
         "strict_required_status_checks_policy": false,
         "do_not_enforce_on_create": false,
         "required_status_checks": [
-          { "context": "Lints (jj-hooks)" },
-          { "context": "Test (jj-hooks, ubuntu-latest)" },
-          { "context": "Test (jj-hooks, macos-latest)" },
-          { "context": "Lints (jj-gt)" },
-          { "context": "Test (jj-gt, ubuntu-latest)" },
-          { "context": "Test (jj-gt, macos-latest)" },
+          { "context": "jj-hooks CI" },
+          { "context": "jj-gt CI" },
+          { "context": "nix-config CI" },
           { "context": "akiflow-cli CI" },
           { "context": "tap CI" },
           { "context": "docs CI" }

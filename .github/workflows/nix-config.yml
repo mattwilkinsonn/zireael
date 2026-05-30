@@ -83,9 +83,12 @@ jobs:
   # ─── Linters ───────────────────────────────────────────────────────
   # Top-level filter gates the linter chain (nix-fmt + shellcheck etc.).
   # Always runs when any nix-config path changed; not per-host.
+  #
+  # See jj-hooks.yml for the rationale on the dispatch + rollup split.
+  # The `ci` rollup below is what branch protection gates on.
 
-  lints:
-    name: nix-config CI
+  lints-dispatch:
+    name: nix-config (matrix)
     needs: [optimize_ci, changes]
     if: |
       needs.optimize_ci.outputs.skip == 'false' &&
@@ -211,3 +214,60 @@ jobs:
       - name: nix eval mattmacpro
         working-directory: nix-config
         run: nix eval --raw '.#darwinConfigurations.mattmacpro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+
+  # ─── Rollup gate ────────────────────────────────────────────────────
+  # Single stable check context for branch protection (`nix-config CI`).
+  # Rolls up the linter chain AND every per-host flake-eval — a failure
+  # in any one of them fails the gate, but a skip (path filter or
+  # graphite skip) passes. Matches the per-job required-check semantics
+  # that used to live in the ruleset for each individual job, just
+  # collapsed to one stable name.
+  #
+  # See jj-hooks.yml for the rationale on why a reusable-call needs a
+  # dedicated rollup to be ruleset-friendly.
+
+  ci:
+    name: nix-config CI
+    needs:
+      - optimize_ci
+      - changes
+      - lints-dispatch
+      - flake-eval-rpi4
+      - flake-eval-rpi5
+      - flake-eval-mattserver
+      - flake-eval-mattfw
+      - flake-eval-mattpc-wsl
+      - flake-eval-darwin
+      - flake-eval-mattmacpro
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Rollup upstream jobs
+        run: |
+          set -euo pipefail
+          # Each upstream job reports one of: success, failure, cancelled, skipped.
+          # success/skipped → contribute pass; failure/cancelled → fail the gate.
+          declare -A results=(
+            [lints-dispatch]='${{ needs.lints-dispatch.result }}'
+            [flake-eval-rpi4]='${{ needs.flake-eval-rpi4.result }}'
+            [flake-eval-rpi5]='${{ needs.flake-eval-rpi5.result }}'
+            [flake-eval-mattserver]='${{ needs.flake-eval-mattserver.result }}'
+            [flake-eval-mattfw]='${{ needs.flake-eval-mattfw.result }}'
+            [flake-eval-mattpc-wsl]='${{ needs.flake-eval-mattpc-wsl.result }}'
+            [flake-eval-darwin]='${{ needs.flake-eval-darwin.result }}'
+            [flake-eval-mattmacpro]='${{ needs.flake-eval-mattmacpro.result }}'
+          )
+          failed=0
+          for job in "${!results[@]}"; do
+            result="${results[$job]}"
+            case "$result" in
+              success|skipped) echo "✓ $job: $result" ;;
+              *) echo "✗ $job: $result" >&2; failed=1 ;;
+            esac
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "one or more upstream jobs failed — see above" >&2
+            exit 1
+          fi
+          echo "all upstream jobs passed or were skipped"
