@@ -309,6 +309,7 @@
                 ./shared/dev.nix
                 ./shared/linux-build-deps.nix
                 ./shared/load-secrets.nix
+                ./shared/privatefiles-symlinks.nix
                 inputs.nix-openclaw.homeManagerModules.openclaw
                 ./nixos/mattfw/home.nix
               ];
@@ -420,6 +421,7 @@
                 ./shared/dev.nix
                 ./shared/linux-build-deps.nix
                 ./shared/load-secrets.nix
+                ./shared/privatefiles-symlinks.nix
                 ./nixos/mattpc-wsl/home.nix
               ];
             };
