@@ -191,12 +191,28 @@ fi
 
 # ---- Step 4: rebuild ----
 step "Rebuilding system against $NIX_CONFIG_DIR"
-# `hostname` on macOS returns "Matts-MacBook-Pro.local" (the mDNS form);
-# the flake attribute is "Matts-MacBook-Pro" with no suffix. Strip the
-# trailing .local so the rebuild target resolves. Linux's hostname is
-# already the bare form, so the strip is a no-op there.
-HOSTNAME="${HOSTNAME_OVERRIDE:-$(hostname)}"
-HOSTNAME="${HOSTNAME%.local}"
+# Picking the right hostname is fiddly on macOS:
+#   - `hostname` returns the mDNS form (`Matts-MacBook-Pro.local`)
+#     when nothing else is running, OR the Tailscale-MagicDNS form
+#     (`matts-macbook-pro.tail08a5c5.ts.net`, lowercased) when
+#     Tailscale is up. Neither matches the flake attribute name
+#     (`Matts-MacBook-Pro`).
+#   - `scutil --get LocalHostName` returns the bare form macOS picked
+#     at install time (`Matts-MacBook-Pro`), with no suffix and the
+#     original case. That's what darwinConfigurations.<name> uses.
+#
+# Linux's `hostname` is already the bare form (assuming sane host
+# config), so we keep that path simple.
+if [ -n "${HOSTNAME_OVERRIDE:-}" ]; then
+	HOSTNAME="$HOSTNAME_OVERRIDE"
+elif [ "$(uname -s)" = "Darwin" ] && command -v scutil >/dev/null 2>&1; then
+	HOSTNAME="$(scutil --get LocalHostName)"
+else
+	HOSTNAME="$(hostname)"
+	# Belt-and-braces fallback for the simple-mDNS case if scutil
+	# isn't available for some reason.
+	HOSTNAME="${HOSTNAME%.local}"
+fi
 case "$(uname -s)" in
 Darwin)
 	FLAKE_TARGET="${FLAKE_TARGET:-$HOSTNAME}"
