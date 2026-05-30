@@ -243,6 +243,21 @@ let
       # Default is 4226; pin it explicitly so a future port change
       # only needs one edit.
       SCCACHE_SERVER_PORT = "4226";
+
+      # Per-instance bun + uv install caches. Bun is used by docs/site
+      # + linear-auto-done bundles; uv isn't called by today's seal CI
+      # but is staged so a future Python tool gets a warm cache for
+      # free. Pre-warm cost is one bun-install per instance (~3-5s on
+      # cold cache, then the runner-local path is reused across that
+      # instance's subsequent jobs). Per-instance (not /shared) for
+      # the same reason CARGO_HOME is per-instance — concurrent writes
+      # to a pool-wide install dir were the SEA-672 failure shape, and
+      # the cross-instance warm-up payoff is small enough that the
+      # extra GB of disk per runner is the right tradeoff. Both tools
+      # `mkdir -p` their cache dir on first use, so no activation-
+      # script entry needed.
+      BUN_INSTALL_CACHE_DIR = "/var/lib/github-runners/${name}/.bun-install";
+      UV_CACHE_DIR = "/var/lib/github-runners/${name}/.uv-cache";
     };
   };
 in
