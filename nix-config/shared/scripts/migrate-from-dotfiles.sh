@@ -11,10 +11,13 @@
 #      If they don't, this host has already been migrated — exit
 #      successfully with a no-op message.
 #   2. Clone (or refresh) zireael into ~/repos/zireael/.
-#   3. On dev boxes (--dev or auto-detected by checking for
-#      .config/op/team-service-account-token), clone privatefiles
-#      into ~/repos/privatefiles/ and author the symlinks back into
-#      $HOME (~/.claude/CLAUDE.md, ~/.seal/SEAL.md, etc.).
+#   3. On dev boxes (--dev or auto-detected by hostname against
+#      DEV_HOSTNAMES below), clone privatefiles into
+#      ~/repos/privatefiles/. The symlinks back into $HOME
+#      (~/.claude/CLAUDE.md, ~/.seal/SEAL.md, etc.) are authored
+#      declaratively by home-manager — see
+#      shared/privatefiles-symlinks.nix — and laid down by step 4's
+#      nix-rebuild, not by this script.
 #   4. Rebuild the system against the new flake path. Picks the right
 #      build command (darwin-rebuild / nixos-rebuild) by uname.
 #   5. After a successful rebuild, retire the dotfiles repo:
@@ -81,6 +84,35 @@ run() {
 	fi
 }
 
+# Hosts that have a sealedsecurity team OP token + the
+# `~/repos/privatefiles/` clone. The team token alone isn't a usable
+# signal — `mattserver` also has it for env-injecting container
+# secrets — so we match on hostname directly.
+#
+# Keep in sync with the import set in nix-config/flake.nix that pulls
+# in shared/privatefiles-symlinks.nix.
+DEV_HOSTNAMES=(
+	"Matts-MacBook-Pro"
+	"mattfw"
+	"mattpc-wsl"
+)
+
+# Resolve the bare hostname early — both the dev auto-detect AND the
+# rebuild step need it, and macOS's `hostname` returns mDNS / Tailscale
+# forms that don't match the flake attribute (`Matts-MacBook-Pro`).
+# Order:
+#   1. HOSTNAME_OVERRIDE (env, escape hatch for testing)
+#   2. macOS: `scutil --get LocalHostName` (bare form, original case)
+#   3. Linux/fallback: `hostname` with `.local` stripped
+if [ -n "${HOSTNAME_OVERRIDE:-}" ]; then
+	HOSTNAME="$HOSTNAME_OVERRIDE"
+elif [ "$(uname -s)" = "Darwin" ] && command -v scutil >/dev/null 2>&1; then
+	HOSTNAME="$(scutil --get LocalHostName)"
+else
+	HOSTNAME="$(hostname)"
+	HOSTNAME="${HOSTNAME%.local}"
+fi
+
 # ---- Step 1: sanity check ----
 step "Checking current dotfiles layout"
 if [ ! -d "$HOME/.git" ] && [ -d "$ZIREAEL_DIR/.git" ]; then
@@ -91,23 +123,20 @@ if [ ! -d "$HOME/.git" ]; then
 	err "Expected ~/.git (the dotfiles repo) to exist. Cannot determine current layout."
 fi
 
-# Auto-detect dev mode if not forced. Dev boxes have a team OP token
-# in a stable location set by the per-host bootstrap:
-#   - Linux: ~/.config/op/team-service-account-token (file)
-#   - macOS: Keychain entry "OP_TEAM_SERVICE_ACCOUNT_TOKEN"
-# Servers + CI runners don't have a team token; we use its presence as
-# the "is this a dev box?" signal.
+# Auto-detect dev mode if not forced. Match against DEV_HOSTNAMES;
+# everything else is a server host (no privatefiles clone).
 if [ "$DEV" = "auto" ]; then
-	if [ -f "$HOME/.config/op/team-service-account-token" ]; then
-		DEV=yes
-		echo "Auto-detected dev host (found team OP token file)."
-	elif [ "$(uname -s)" = "Darwin" ] &&
-		security find-generic-password -a "$USER" -s "OP_TEAM_SERVICE_ACCOUNT_TOKEN" -w >/dev/null 2>&1; then
-		DEV=yes
-		echo "Auto-detected dev host (found team OP token in Keychain)."
+	DEV=no
+	for h in "${DEV_HOSTNAMES[@]}"; do
+		if [ "$HOSTNAME" = "$h" ]; then
+			DEV=yes
+			break
+		fi
+	done
+	if [ "$DEV" = "yes" ]; then
+		echo "Auto-detected dev host (hostname: $HOSTNAME)."
 	else
-		DEV=no
-		echo "Auto-detected server host (no team OP token)."
+		echo "Auto-detected server host (hostname: $HOSTNAME, not in DEV_HOSTNAMES)."
 	fi
 fi
 
@@ -145,74 +174,18 @@ if [ "$DEV" = "yes" ]; then
 		run jj -R "$PRIVATEFILES_DIR" bookmark track main --remote=origin
 	fi
 
-	# shellcheck disable=SC2016  # literal $HOME in user-facing message
-	step 'Authoring privatefiles symlinks back into $HOME'
-	# Each symlink maps "where the app expects to find it" to
-	# "canonical location in privatefiles/". Skipped silently if the
-	# destination already exists (link or regular file — we don't
-	# clobber).
-	link_if_absent() {
-		local target="$1" linkpath="$2"
-		if [ -L "$linkpath" ]; then
-			local current
-			current="$(readlink "$linkpath")"
-			if [ "$current" = "$target" ]; then
-				echo "  $linkpath already correctly linked"
-				return
-			fi
-			echo "  $linkpath linked to $current — backing up + relinking"
-			run mv "$linkpath" "$linkpath.pre-zireael-migration"
-		elif [ -e "$linkpath" ]; then
-			echo "  $linkpath is a regular file — backing up + replacing with symlink"
-			run mv "$linkpath" "$linkpath.pre-zireael-migration"
-		fi
-		run mkdir -p "$(dirname "$linkpath")"
-		run ln -s "$target" "$linkpath"
-	}
-
-	link_if_absent "$PRIVATEFILES_DIR/home/.claude/CLAUDE.md" "$HOME/.claude/CLAUDE.md"
-	link_if_absent "$PRIVATEFILES_DIR/home/.claude/RTK.md" "$HOME/.claude/RTK.md"
-	link_if_absent "$PRIVATEFILES_DIR/home/.seal/SEAL.md" "$HOME/.seal/SEAL.md"
-
-	# sealedsecurity workspace meta (Linux + WSL dev only — Mac dev
-	# may also keep it). Skip if ~/repos/sealedsecurity/ isn't on
-	# this host.
-	if [ -d "$HOME/repos/sealedsecurity" ]; then
-		link_if_absent "$PRIVATEFILES_DIR/repos/sealedsecurity/SEAL.md" "$HOME/repos/sealedsecurity/SEAL.md"
-		link_if_absent "$PRIVATEFILES_DIR/repos/sealedsecurity/sealedsecurity.code-workspace" "$HOME/repos/sealedsecurity/sealedsecurity.code-workspace"
-	fi
-
-	# repos.code-workspace at ~/repos/
-	[ -f "$PRIVATEFILES_DIR/repos/repos.code-workspace" ] &&
-		link_if_absent "$PRIVATEFILES_DIR/repos/repos.code-workspace" "$HOME/repos/repos.code-workspace"
+	# Note: symlinks from $HOME → privatefiles (~/.claude/CLAUDE.md,
+	# ~/.seal/SEAL.md, ~/repos/sealedsecurity/*, ~/repos/repos.code-workspace)
+	# are NOT authored here. home-manager creates them declaratively
+	# on activation — see nix-config/shared/privatefiles-symlinks.nix.
+	# Step 4's nix-rebuild lays them down; if you ever lose one, run
+	# `nix-switch` to re-converge rather than re-running this script.
 else
 	echo "Skipping privatefiles (server host)."
 fi
 
 # ---- Step 4: rebuild ----
 step "Rebuilding system against $NIX_CONFIG_DIR"
-# Picking the right hostname is fiddly on macOS:
-#   - `hostname` returns the mDNS form (`Matts-MacBook-Pro.local`)
-#     when nothing else is running, OR the Tailscale-MagicDNS form
-#     (`matts-macbook-pro.tail08a5c5.ts.net`, lowercased) when
-#     Tailscale is up. Neither matches the flake attribute name
-#     (`Matts-MacBook-Pro`).
-#   - `scutil --get LocalHostName` returns the bare form macOS picked
-#     at install time (`Matts-MacBook-Pro`), with no suffix and the
-#     original case. That's what darwinConfigurations.<name> uses.
-#
-# Linux's `hostname` is already the bare form (assuming sane host
-# config), so we keep that path simple.
-if [ -n "${HOSTNAME_OVERRIDE:-}" ]; then
-	HOSTNAME="$HOSTNAME_OVERRIDE"
-elif [ "$(uname -s)" = "Darwin" ] && command -v scutil >/dev/null 2>&1; then
-	HOSTNAME="$(scutil --get LocalHostName)"
-else
-	HOSTNAME="$(hostname)"
-	# Belt-and-braces fallback for the simple-mDNS case if scutil
-	# isn't available for some reason.
-	HOSTNAME="${HOSTNAME%.local}"
-fi
 case "$(uname -s)" in
 Darwin)
 	FLAKE_TARGET="${FLAKE_TARGET:-$HOSTNAME}"

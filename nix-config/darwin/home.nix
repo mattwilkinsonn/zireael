@@ -8,6 +8,7 @@
     ../shared/home.nix
     ../shared/dev.nix
     ../shared/load-secrets.nix
+    ../shared/privatefiles-symlinks.nix
   ];
 
   home.username = lib.mkForce "mattwilkinson";
