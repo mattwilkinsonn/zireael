@@ -158,6 +158,213 @@ impl TestRepo {
         cmd.output().unwrap()
     }
 
+    /// Run jj-hp under a sanitized PATH that includes only the binaries
+    /// in `allow` (resolved against the parent process's PATH and
+    /// symlinked into a tempdir). Used to test the "runner binary not
+    /// on PATH" error path: write a hook config the autodetector
+    /// recognises, then invoke with a PATH that's missing the runner
+    /// binary and assert the error message is the new structured one
+    /// instead of the raw `os error 2` from `posix_spawn`.
+    ///
+    /// `git`, `jj`, and `sh` should usually be in `allow` so jj-hp can
+    /// still create the worktree and shell out for its own bookkeeping.
+    pub fn jj_hooks_with_path_allowlist(&self, args: &[&str], allow: &[&str]) -> Output {
+        self.jj_hooks_with_path_allowlist_and_extras(args, allow, &[])
+    }
+
+    /// Same as [`Self::jj_hooks_with_path_allowlist`] but also splice
+    /// caller-provided executables into the sandbox bin dir.
+    ///
+    /// `extra_bins` is a slice of `(name, body)` pairs: each pair gets
+    /// written as `sandbox-bin/<name>` with `body` as the script
+    /// contents (shebang included; the harness chmod +x's it). Use
+    /// this to plant fake runner binaries on the sandbox PATH that
+    /// the resolver layers can find — e.g. a fake `prek` whose only
+    /// job is to write a marker file so the test can assert which
+    /// path the resolver picked.
+    pub fn jj_hooks_with_path_allowlist_and_extras(
+        &self,
+        args: &[&str],
+        allow: &[&str],
+        extra_bins: &[(&str, &str)],
+    ) -> Output {
+        let bin_dir = self.tmp.path().join("sandbox-bin");
+        // Recreating on every call keeps the test independent of order.
+        let _ = std::fs::remove_dir_all(&bin_dir);
+        std::fs::create_dir(&bin_dir).unwrap();
+        let parent_path = std::env::var_os("PATH").expect("parent PATH must be set");
+        for name in allow {
+            let mut found = None;
+            for dir in std::env::split_paths(&parent_path) {
+                let candidate = dir.join(name);
+                if candidate.is_file() {
+                    found = Some(candidate);
+                    break;
+                }
+            }
+            let src = found.unwrap_or_else(|| panic!("`{name}` not found on parent PATH"));
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&src, bin_dir.join(name)).unwrap();
+            #[cfg(not(unix))]
+            std::fs::copy(&src, bin_dir.join(name)).unwrap();
+        }
+        for (name, body) in extra_bins {
+            let path = bin_dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(&path).unwrap().permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&path, perms).unwrap();
+            }
+        }
+
+        let bin = env!("CARGO_BIN_EXE_jj-hooks");
+        Command::new(bin)
+            .args(args)
+            .current_dir(&self.primary)
+            .env_clear()
+            .env("PATH", &bin_dir)
+            .env("PRE_COMMIT_HOME", &self.pre_commit_home)
+            .env("JJ_HOOKS_LOG", "info")
+            .env("HOME", self.tmp.path())
+            .output()
+            .unwrap()
+    }
+
+    /// Resolved sandbox-bin path. Tests that plant a fake binary via
+    /// `jj_hooks_with_path_allowlist_and_extras` need this to point a
+    /// shim or config value at the planted binary.
+    pub fn sandbox_bin_dir(&self) -> std::path::PathBuf {
+        self.tmp.path().join("sandbox-bin")
+    }
+
+    /// Look up `bin` on the parent process's PATH. Used by real-binary
+    /// resolver tests to find the actual `prek` / `pre-commit` / `uv`
+    /// executable to stage in the simulated venv path. Returns `None`
+    /// when the binary isn't available — the caller should early-return
+    /// (skip the test) in that case rather than fail, since the test
+    /// is only meaningful when the binary is installed.
+    pub fn find_on_parent_path(name: &str) -> Option<std::path::PathBuf> {
+        let path = std::env::var_os("PATH")?;
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    /// Copy (or symlink) a binary from the parent PATH into a tempdir
+    /// outside any sandboxed PATH. Used to stage `prek` / `pre-commit`
+    /// in a simulated `.venv/bin/` for the layer 1 / 2 resolver tests
+    /// — the real binary stays fully invokable, but isn't reachable
+    /// through the sandbox's PATH allowlist.
+    ///
+    /// We copy by default (some wrapper scripts behave oddly when
+    /// invoked through symlinks); pass `symlink_only=true` to symlink
+    /// instead (useful when the binary's argv0 self-resolution
+    /// matters).
+    pub fn stage_external_binary(
+        &self,
+        name: &str,
+        venv_dir: &std::path::Path,
+        symlink_only: bool,
+    ) -> Option<std::path::PathBuf> {
+        let src = Self::find_on_parent_path(name)?;
+        std::fs::create_dir_all(venv_dir).unwrap();
+        let dest = venv_dir.join(name);
+        #[cfg(unix)]
+        {
+            if symlink_only {
+                std::os::unix::fs::symlink(&src, &dest).unwrap();
+            } else {
+                // Hard-copy rather than symlink: some Nix-wrapper
+                // binaries detect their argv0 path and refuse to run
+                // through a symlink that isn't under the expected
+                // store path. A plain copy of a shell-script wrapper
+                // is fine; for ELF binaries it just wastes a few KB.
+                std::fs::copy(&src, &dest).unwrap();
+            }
+        }
+        #[cfg(not(unix))]
+        std::fs::copy(&src, &dest).unwrap();
+        Some(dest)
+    }
+
+    /// Write a fake runner binary inside the primary's `.git/hooks/<stage>`
+    /// shim file using `prek install`'s exact format. The shim's `PREK=`
+    /// line points at `bin_path` — the resolver's layer 2 should pick
+    /// this up. Used to test the "prek lives in venv, no PATH" repro
+    /// from issue #17 without actually creating a venv.
+    pub fn write_prek_shim(&self, stage: &str, bin_path: &std::path::Path) {
+        let git_dir = self.primary.join(".git");
+        let hooks_dir = git_dir.join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        let shim_path = hooks_dir.join(stage);
+        let body = format!(
+            r#"#!/bin/sh
+HERE="$(cd "$(dirname "$0")" && pwd)"
+PREK="{}"
+if [ ! -x "$PREK" ]; then
+    PREK="prek"
+fi
+exec "$PREK" hook-impl --hook-dir "$HERE" --script-version 4 --hook-type={} -- "$@"
+"#,
+            bin_path.display(),
+            stage,
+        );
+        std::fs::write(&shim_path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&shim_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&shim_path, perms).unwrap();
+        }
+    }
+
+    /// Write a fake runner binary inside the primary's `.git/hooks/<stage>`
+    /// shim file using `pre-commit install`'s exact format. The shim's
+    /// `INSTALL_PYTHON=` line points at `python_path` (which the resolver
+    /// then invokes as `python -mpre_commit`).
+    pub fn write_pre_commit_shim(&self, stage: &str, python_path: &std::path::Path) {
+        let git_dir = self.primary.join(".git");
+        let hooks_dir = git_dir.join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        let shim_path = hooks_dir.join(stage);
+        let body = format!(
+            r#"#!/usr/bin/env bash
+# start templated
+INSTALL_PYTHON={}
+ARGS=(hook-impl --config=.pre-commit-config.yaml --hook-type={})
+# end templated
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ARGS+=(--hook-dir "$HERE" -- "$@")
+if [ -x "$INSTALL_PYTHON" ]; then
+    exec "$INSTALL_PYTHON" -mpre_commit "${{ARGS[@]}}"
+elif command -v pre-commit > /dev/null; then
+    exec pre-commit "${{ARGS[@]}}"
+else
+    echo '`pre-commit` not found.' 1>&2
+    exit 1
+fi
+"#,
+            python_path.display(),
+            stage,
+        );
+        std::fs::write(&shim_path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&shim_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&shim_path, perms).unwrap();
+        }
+    }
+
     /// Read all refs matching a glob from the primary git dir.
     pub fn refs_matching(&self, glob: &str) -> Vec<String> {
         let out = Command::new("git")

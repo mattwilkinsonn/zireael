@@ -175,6 +175,23 @@ struct OnceOutcome {
     fixup_commit: Option<String>,
 }
 
+/// Replace element 0 of `command_argv` (the bare runner binary name
+/// produced by `hook_command{,_all_files}` / `lefthook_command{,_all_files}`)
+/// with the resolved argv prefix from [`crate::runner::resolve_runner_argv`].
+///
+/// For the common case the prefix is a single element (an absolute path
+/// or just the bare name found on $PATH), so this is a near-no-op. For
+/// the `uv run --` wrapper case the prefix is multiple elements; we
+/// drop the placeholder name and splice in the wrapper.
+fn splice_runner_prefix(prefix: &[String], command_argv: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(prefix.len() + command_argv.len().saturating_sub(1));
+    out.extend(prefix.iter().cloned());
+    if command_argv.len() > 1 {
+        out.extend(command_argv[1..].iter().cloned());
+    }
+    out
+}
+
 /// One pass through the hook pipeline against a specific target commit.
 ///
 /// Builds a fresh worktree at `target_commit`, runs the hook backend
@@ -216,7 +233,9 @@ fn run_once(
         Some(r) => r,
         None => {
             let Some(r) = Runner::autodetect(wt.path())? else {
-                tracing::info!("{update}: no hook-runner config in target commit; skipping hooks");
+                eprintln!(
+                    "jj-hooks: {update}: no hook-runner config in target commit; skipping hooks"
+                );
                 return Ok(OnceOutcome {
                     success: true,
                     fixup_commit: None,
@@ -225,9 +244,39 @@ fn run_once(
             // prek is a faster drop-in for pre-commit; prefer it when
             // present. The override path already skips this so an explicit
             // `--runner pre-commit` keeps the slower binary.
-            crate::runner::prefer_prek_when_available(r, crate::runner::prek_on_path())
+            //
+            // "Present" here means resolvable through any of the layers
+            // in [`resolve_runner_argv`], not just $PATH — a prek
+            // installed only inside a venv (the issue #17 scenario) is
+            // still preferable to the pre-commit on $PATH if the user
+            // bothered to `prek install` the shim or set the config.
+            let prek_present = crate::runner::resolve_runner_argv(
+                Runner::Prek,
+                jj,
+                workspace_root,
+                primary_git_dir,
+                stage,
+            )
+            .is_ok();
+            crate::runner::prefer_prek_when_available(r, prek_present)
         }
     };
+
+    // Pre-check that the runner binary is on PATH. Without this, the
+    // `Command::status()` call below surfaces a libc-level
+    // `posix_spawn: No such file or directory (os error 2)` with no
+    // indication of *which* binary couldn't be found. The common case
+    // for prek users is that prek is installed only inside a Python
+    // venv — jj-hooks runs in a clean ephemeral worktree and doesn't
+    // inherit the venv's PATH, so the user sees the cryptic error
+    // and has no idea it was prek that was missing.
+    //
+    // Resolution order is (1) explicit config, (2) the path baked into
+    // the `.git/hooks/<stage>` shim by `prek install` / `pre-commit
+    // install`, (3) `uv run` when uv.lock + uv are both present,
+    // (4) plain $PATH. See `resolve_runner_argv` for details.
+    let runner_argv =
+        crate::runner::resolve_runner_argv(runner, jj, workspace_root, primary_git_dir, stage)?;
 
     // all_files: ignore the diff range and run each runner's
     // "lint every tracked file" command exactly once. from_refs
@@ -244,6 +293,7 @@ fn run_once(
             Runner::Lefthook => lefthook_command_all_files(stage),
             _ => hook_command_all_files(runner, stage),
         };
+        let argv = splice_runner_prefix(&runner_argv, &argv);
         tracing::info!("running (--all-files): {:?}", argv);
         let status = Command::new(&argv[0])
             .args(&argv[1..])
@@ -262,6 +312,7 @@ fn run_once(
                 }
                 _ => hook_command(runner, stage, from_ref, target_commit),
             };
+            let argv = splice_runner_prefix(&runner_argv, &argv);
 
             tracing::info!("running: {:?}", argv);
             let status = Command::new(&argv[0])
