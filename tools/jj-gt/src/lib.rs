@@ -339,6 +339,50 @@ fn submit_cmd(
         }
     }
 
+    // 4.6. Push rebased bookmarks via jj before gt submit. Closes #5.
+    //
+    // When the user does a `jj rebase` of their own stack — even
+    // just `jj rebase -d main@origin` to pick up new trunk —
+    // every bookmark's SHA shifts but the remote-tracking ref still
+    // points at the pre-rebase commit. `gt submit` aborts with
+    // "Branch X has been updated remotely" because gt's tracking
+    // metadata compares local SHA vs remote SHA and concludes the
+    // remote moved.
+    //
+    // Fix: `jj git push --bookmark <name>` per stack bookmark
+    // before handing off to gt. jj's push is force-with-lease by
+    // default (pushes when local has diverged from last-fetched
+    // remote, ONLY if remote still matches last-fetched) — exactly
+    // the semantic we want. A genuine collaborator push since our
+    // last fetch surfaces as a normal jj refusal; we don't bypass.
+    //
+    // Per-bookmark failures are non-fatal here: gt's submit will
+    // surface a clearer error for the specific bookmark if needed,
+    // and we don't want a flaky network on one bookmark to abort
+    // a whole stack. Logged via tracing::warn for `-v` users.
+    if !submit.dry_run {
+        let push_step = ui::Step::start(
+            &format!("Syncing rebased bookmarks to {}", bookmarks.remote),
+            verbosity,
+        );
+        let mut pushed = 0usize;
+        let mut push_errors: Vec<String> = Vec::new();
+        for sb in &stacked_sorted {
+            match jj::git_push_bookmark(jj, &bookmarks.remote, &sb.name) {
+                Ok(()) => pushed += 1,
+                Err(e) => push_errors.push(format!("{}: {e}", sb.name)),
+            }
+        }
+        match (pushed, push_errors.is_empty()) {
+            (0, true) => push_step.success("no bookmarks pushed", None),
+            (n, true) => push_step.success(&format!("{n} pushed"), None),
+            (n, false) => push_step.warn(
+                &format!("{} pushed, {} skipped", n, push_errors.len()),
+                Some(&push_errors.join("\n")),
+            ),
+        }
+    }
+
     // 5. gt submit --stack --branch <tip>.
     let submit_step = ui::Step::start(
         &format!("Submitting stack via `gt submit --stack --branch {tip}`"),
