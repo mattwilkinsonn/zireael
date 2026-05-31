@@ -303,6 +303,42 @@ fn submit_cmd(
         Some(jj::current_change_id(jj)?)
     };
 
+    // 4.5. Re-track adjacent diverged bookmarks. Closes #4.
+    //
+    // gt's `submit` scans ALL local tracked bookmarks' metadata
+    // and bails on the first one whose recorded parent doesn't
+    // match git's view ("Branch X has been updated remotely. Use
+    // gt get or gt sync to sync with remote."). When the user
+    // rebases via jj, every bookmark's parent might shift in jj's
+    // view but gt's metadata still records the pre-rebase parent —
+    // the submit aborts on a bookmark that's NOT in the
+    // user-selected stack.
+    //
+    // Fix: enumerate every tracked local bookmark NOT in
+    // stacked_sorted, derive its jj-side parent, and re-issue
+    // `gt track` for the ones whose jj parent doesn't match what
+    // gt has recorded. This mirrors the fetch pipeline's backfill
+    // step (cleanup.rs step 2) but scoped to the submit's needs.
+    //
+    // We only touch bookmarks that gt already knows about
+    // (intersect with `list_tracked_bookmarks_on_remote`) — a
+    // brand-new local bookmark unrelated to any stack shouldn't
+    // get auto-tracked by a submit that didn't mention it.
+    if !submit.dry_run {
+        let adjacent_step = ui::Step::start("Re-tracking adjacent diverged bookmarks", verbosity);
+        match retrack_adjacent_diverged(
+            jj,
+            &workspace_root,
+            &bookmarks.remote,
+            &stacked_sorted,
+            &trunk,
+        ) {
+            Ok(0) => adjacent_step.success("none diverged", None),
+            Ok(n) => adjacent_step.success(&format!("{n} re-tracked"), None),
+            Err(e) => adjacent_step.warn(&format!("could not re-track: {e}"), None),
+        }
+    }
+
     // 5. gt submit --stack --branch <tip>.
     let submit_step = ui::Step::start(
         &format!("Submitting stack via `gt submit --stack --branch {tip}`"),
@@ -379,6 +415,73 @@ fn submit_cmd(
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// PR-E / issue #4: re-track local bookmarks that gt knows about but
+/// whose jj-derived parent doesn't match what gt has recorded. Called
+/// from `submit_cmd` between the in-stack track loop and the
+/// `gt submit` call.
+///
+/// Scope is intentionally narrow:
+///
+/// - Only local bookmarks tracked on `remote` are considered (the
+///   ones gt knows about; an untracked one isn't gt's problem).
+/// - Bookmarks already in `stacked_sorted` are skipped (the in-stack
+///   loop just tracked them; re-running here would be redundant).
+/// - For each remaining bookmark, derive its jj parent and re-issue
+///   `gt track`. We don't compare jj parent vs gt's recorded parent
+///   first because reading gt's metadata is non-trivial across
+///   versions — re-tracking is idempotent when the metadata already
+///   matches, and the alternative (failing submit because metadata
+///   went stale) is the bug we're fixing.
+///
+/// Returns the number of adjacent bookmarks actually re-tracked.
+fn retrack_adjacent_diverged(
+    jj: &jj::JjCli,
+    workspace_root: &std::path::Path,
+    remote: &str,
+    stacked_sorted: &[stack::StackedBookmark],
+    trunk: &str,
+) -> Result<usize, JjGtError> {
+    use std::collections::BTreeSet;
+
+    let in_stack: BTreeSet<&str> = stacked_sorted.iter().map(|sb| sb.name.as_str()).collect();
+
+    let tracked = jj::list_tracked_bookmarks_on_remote(jj, remote).unwrap_or_default();
+    let adjacent: Vec<String> = tracked
+        .into_iter()
+        .filter(|name| !in_stack.contains(name.as_str()))
+        .collect();
+
+    if adjacent.is_empty() {
+        return Ok(0);
+    }
+
+    // Derive parents for the adjacent set + sort bottom→top so
+    // `gt track` accepts each parent reference (same ordering
+    // constraint the in-stack loop already handles).
+    let derived = stack::derive_parents(jj, &adjacent, trunk)?;
+    let sorted = stack::sort_for_tracking(&derived);
+
+    let mut count = 0usize;
+    for sb in &sorted {
+        let parent = sb.parent.as_branch_name(trunk);
+        // Tolerate individual failures: an adjacent bookmark
+        // whose parent isn't tracked yet would fail this call
+        // (gt rejects child-before-parent). The submit pipeline
+        // can still proceed; the failed-to-track bookmark just
+        // keeps its stale metadata. tracing::warn so the user
+        // sees it in -v.
+        match gt::track(workspace_root, &sb.name, parent) {
+            Ok(()) => count += 1,
+            Err(e) => tracing::warn!(
+                "jj-gt: could not re-track adjacent bookmark {} (parent: {}): {e}",
+                sb.name,
+                parent,
+            ),
+        }
+    }
+    Ok(count)
 }
 
 fn track_cmd(
