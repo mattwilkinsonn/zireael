@@ -732,6 +732,33 @@ in
     /bin/mkdir -p /var/lib/github-runners/sealed-macos-2/.cargo
     /usr/sbin/chown -R _github-runner:_github-runner /var/lib/github-runners
     /bin/chmod 0755 /var/lib/github-runners/shared
+
+    # Spotlight + Time Machine exclusions on the runner state tree.
+    # Two hygiene concerns specific to macOS:
+    #
+    # 1. Spotlight indexing surfaces matched content via `mdfind` /
+    #    Finder search / Quick Look. Build artifacts, intermediate
+    #    object files, and (worse) any secret that ever lands in
+    #    /var/lib/github-runners/<name>/work/ during a CI job would
+    #    show up in those interfaces — for any user on the box, not
+    #    just _github-runner. Disabling Spotlight on the tree closes
+    #    that exfil path.
+    #
+    # 2. Time Machine snapshots are content-addressed and persisted;
+    #    a secret that briefly existed in a CI workspace can stick
+    #    around in TM history for months. Excluding the runner state
+    #    tree means TM never sees those bytes in the first place.
+    #
+    # Both commands fail silently when their dependencies aren't
+    # available (mdutil bails if Spotlight isn't running; tmutil
+    # bails if TM isn't configured) — fine for a headless box that
+    # may not have either active. `|| true` suppresses the exit
+    # status either way so a failure here doesn't fail activation.
+    echo >&2 "applying runner-state Spotlight + Time Machine exclusions..."
+    /usr/bin/mdutil -i off /var/lib/github-runners 2>/dev/null || true
+    if [ -d /var/lib/github-runners ]; then
+      /usr/bin/tmutil addexclusion /var/lib/github-runners 2>/dev/null || true
+    fi
   '';
 
   services.github-runners = {

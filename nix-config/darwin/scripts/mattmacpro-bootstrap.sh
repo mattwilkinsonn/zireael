@@ -385,8 +385,7 @@ fi
 
 echo "[runners]"
 for svc in org.nixos.github-runner-sealed-macos \
-	org.nixos.github-runner-sealed-macos-2 \
-	org.nixos.github-runner-sealed-macos-3; do
+	org.nixos.github-runner-sealed-macos-2; do
 	if sudo launchctl list 2>/dev/null | grep -q "$svc"; then
 		echo "  $svc: loaded"
 	else
@@ -399,6 +398,45 @@ if sudo launchctl list 2>/dev/null | grep -q com.sealedsecurity.glances; then
 	echo "  glances: loaded (reachable at https://mattmacpro.tail08a5c5.ts.net:9443/)"
 else
 	warn "  glances launchd daemon not loaded"
+fi
+
+echo "[secrets-hygiene]"
+# Verify no OP service-account credential is reachable from the
+# runner UID. This is a defense-in-depth check on top of the
+# config-side guarantee — the system.nix postActivation +
+# bootstrap script don't write any SA token to disk, but a
+# previous version of either might have left one behind, OR
+# something added later might re-introduce one.
+#
+# Three places a runner-reachable SA could lurk:
+#   1. mattw's Keychain entry "OP_SERVICE_ACCOUNT_TOKEN" — still
+#      under mattw's UID-scoped ACL by default, so the _github-runner
+#      process can't read it, BUT if something ever called
+#      `security add-generic-password -T ""` (empty trusted-apps
+#      list) it'd be world-readable on the user keychain. Probe.
+#   2. /var/lib/github-runners/*/.config/op/ — if some legacy
+#      bootstrap layered an SA token into the runner's HOME.
+#   3. launchctl setenv OP_SERVICE_ACCOUNT_TOKEN — global env
+#      seen by every launchd job including the runner.
+hits=0
+if security find-generic-password -a "$USER" -s OP_SERVICE_ACCOUNT_TOKEN \
+	-w >/dev/null 2>&1; then
+	warn "  mattw keychain still has OP_SERVICE_ACCOUNT_TOKEN — delete with:"
+	warn "    security delete-generic-password -a \"$USER\" -s OP_SERVICE_ACCOUNT_TOKEN"
+	hits=$((hits + 1))
+fi
+if sudo find /var/lib/github-runners -name 'service-account-token*' \
+	-o -name 'team-service-account-token*' 2>/dev/null | grep -q .; then
+	warn "  found leftover OP SA token files under /var/lib/github-runners — remove manually"
+	hits=$((hits + 1))
+fi
+if sudo launchctl getenv OP_SERVICE_ACCOUNT_TOKEN 2>/dev/null | grep -q .; then
+	warn "  global launchctl OP_SERVICE_ACCOUNT_TOKEN set — clear with:"
+	warn "    sudo launchctl unsetenv OP_SERVICE_ACCOUNT_TOKEN"
+	hits=$((hits + 1))
+fi
+if [ "$hits" -eq 0 ]; then
+	echo "  no OP SA credentials reachable from runner UID — good"
 fi
 
 cat <<EOF
