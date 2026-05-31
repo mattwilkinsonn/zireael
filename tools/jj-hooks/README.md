@@ -157,14 +157,65 @@ Global flags:
 1. `hk.pkl` → `hk`
 2. `lefthook.yml` / `lefthook.yaml` / `.lefthook.yml` / `.lefthook.yaml` → `lefthook`
 3. `.pre-commit-config.yaml` / `.pre-commit-config.yml` → `pre-commit`
+4. `prek.toml` / `.prek.toml` → `prek` (prek's native TOML config)
 
-If multiple match, `jj-hooks` errors out and asks for `--runner`. `prek` is
-never autodetected by file — it shares pre-commit's config file. Instead, if
-the autodetected runner is `pre-commit` and `prek` is on `$PATH`, `jj-hooks`
-silently uses `prek` (it's a faster drop-in). Override with `--runner pre-commit`
-to force the slower path.
+If multiple match, `jj-hooks` errors out and asks for `--runner` — except for
+the pre-commit / prek pair, which collapse to `prek` since `prek` reads both
+formats. When only `.pre-commit-config.yaml` matches and `prek` is resolvable
+(see [Runner binary resolution](#runner-binary-resolution) below), `jj-hooks`
+silently uses `prek` (it's a faster drop-in). Override with
+`--runner pre-commit` to force the slower path.
 
-If no config matches, `jj-hp push` falls through to plain `jj git push`.
+If no config matches, `jj-hp push` falls through to plain `jj git push` and
+`jj-hp run` prints `no hook-runner config in target commit; skipping hooks`.
+
+## Runner binary resolution
+
+Once a runner is picked, `jj-hp` looks for the actual binary in the
+following order. First hit wins; if everything misses, you get a
+structured error naming the missing binary instead of a libc-level
+`No such file or directory`.
+
+1. **`jj-hooks.runner-bin.<runner>` config.** Explicit override. Set in
+   your jj user, repo, or workspace config:
+
+   ```toml
+   [jj-hooks.runner-bin]
+   prek = ".venv/bin/prek"                  # scalar: absolute or relative-to-workspace
+   pre-commit = ["uv", "run", "--", "pre-commit"]   # array: wrapper + args
+   ```
+
+   Relative paths in the scalar form are resolved against the workspace
+   root. The array form is taken verbatim and is the right shape for
+   wrappers like `uv run`, `poetry run`, `nix shell -c`, etc.
+
+2. **`.git/hooks/<stage>` shim path.** When you've run `prek install`
+   or `pre-commit install`, the shim bakes the absolute path to the
+   resolved binary into the hook file. `jj-hp` parses it out and uses
+   the same path, so `jj-hp push` invokes the same runner that `git
+   commit` / `git push` would. The two formats differ:
+   - prek bakes `PREK="…/.venv/bin/prek"` and is invoked directly.
+   - pre-commit bakes `INSTALL_PYTHON=…/.venv/bin/python` and is
+     invoked as `python -mpre_commit` (i.e. the Python interpreter is
+     the resolved binary; pre-commit is invoked as a module).
+   Both shapes are handled.
+
+3. **`uv run` wrapping.** When `workspace_root/uv.lock` exists *and*
+   `uv` is on `$PATH`, prek / pre-commit invocations are prefixed with
+   `uv run --project <workspace_root> --`. uv resolves the project's
+   venv automatically; you don't have to activate anything. The
+   `--project` flag points uv at your actual workspace rather than
+   the ephemeral worktree jj-hp runs the hook in (since `.venv` is
+   typically gitignored and wouldn't exist in the worktree). Only
+   applies to prek / pre-commit (lefthook / hk aren't Python tools).
+
+4. **`$PATH`.** The classic fallback — bare program name found via the
+   shell's PATH walk.
+
+If you see `hook runner ‹bin› is not on $PATH`, none of the four layers
+matched. Either install the runner globally (`brew install prek`,
+`pipx install prek`, `uv tool install prek`), activate your venv
+before invoking `jj-hp`, or set `jj-hooks.runner-bin.<runner>`.
 
 ## Fixup commits
 

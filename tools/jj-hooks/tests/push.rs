@@ -963,3 +963,307 @@ fn run_for_revset_uses_full_range_for_multi_commit_revset() {
          If this is the middle commit's SHA, the multi-commit-range fix has regressed.",
     );
 }
+
+// -- missing runner binary (issue #17) ---------------------------------------
+
+#[test]
+fn missing_runner_binary_surfaces_structured_error() {
+    // Regression for issue #17: when the configured runner binary
+    // isn't on $PATH, the pre-fix behaviour was a cryptic
+    // `jj-hooks: No such file or directory (os error 2)` with no
+    // indication of *which* binary couldn't be found. The fix
+    // pre-checks $PATH and emits a structured error that names the
+    // missing binary and points at the venv/install hint.
+    let repo = TestRepo::new();
+    repo.write_pre_commit_config(PRE_PUSH_PASSING);
+
+    // Move main forward so there's actually something to push.
+    repo.write("hello.txt", "hello\n");
+    let out = repo.jj(&["commit", "-m", "second"]);
+    assert!(out.status.success(), "{}", show(&out));
+    let out = repo.jj(&["bookmark", "set", "main", "-r", "@-"]);
+    assert!(out.status.success(), "{}", show(&out));
+
+    // Sanitized PATH includes only git + jj (and sh, which git's
+    // worktree machinery sometimes shells out to). Crucially: no
+    // pre-commit, no prek.
+    let out = repo.jj_hooks_with_path_allowlist(
+        &["--runner", "pre-commit", "push", "-b", "main"],
+        &["git", "jj", "sh"],
+    );
+    assert!(
+        !out.status.success(),
+        "push should fail when runner binary is missing:\n{}",
+        show(&out)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("hook runner `pre-commit` could not be resolved"),
+        "stderr should name the missing runner binary, got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("No such file or directory (os error 2)"),
+        "stderr should not be the cryptic libc message, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn resolver_prek_install_shim_path_wins_over_missing_path_binary() {
+    // The issue #17 repro: the user has `prek install`'d a hook that
+    // bakes in the venv path (`/…/.venv/bin/prek`), and prek is NOT
+    // on $PATH. Pre-fix: jj-hp would try `prek` against the bare
+    // PATH, fail to find it, and surface the cryptic os-error-2.
+    // Post-fix: layer 2 of the resolver reads `PREK=` out of
+    // `.git/hooks/<stage>` and uses that path directly.
+    //
+    // We simulate "prek installed in venv" by planting a fake prek
+    // script *outside* the sandbox PATH (in a dedicated tempdir),
+    // writing the install-shim that points at that path, and
+    // invoking jj-hp with a PATH that excludes prek entirely.
+    let repo = TestRepo::new();
+    repo.write_pre_commit_config(PRE_PUSH_PASSING);
+
+    // Move main forward so there's something to push.
+    repo.write("hello.txt", "hello\n");
+    let out = repo.jj(&["commit", "-m", "second"]);
+    assert!(out.status.success(), "{}", show(&out));
+    let out = repo.jj(&["bookmark", "set", "main", "-r", "@-"]);
+    assert!(out.status.success(), "{}", show(&out));
+
+    // Simulated "venv" outside any PATH: just a tempdir with a
+    // fake prek executable. This one ignores its argv and just
+    // exits 0 (it lives outside any env-cleared sandbox, so we
+    // can't easily smuggle a marker-file path to it).
+    let venv = tempfile::TempDir::new().unwrap();
+    let venv_prek = venv.path().join("prek");
+    std::fs::write(&venv_prek, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&venv_prek).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&venv_prek, perms).unwrap();
+    }
+
+    // Write the `prek install` shim pointing at the venv prek.
+    repo.write_prek_shim("pre-push", &venv_prek);
+
+    // Sandboxed PATH: git, jj, sh only — no prek. Pre-fix this would
+    // fail with RunnerNotFound; post-fix the resolver finds the
+    // venv prek via the shim and runs it.
+    let out = repo.jj_hooks_with_path_allowlist_and_extras(
+        &[
+            "--runner", "prek", "push", "--stage", "pre-push", "-b", "main",
+        ],
+        &["git", "jj", "sh"],
+        &[],
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "push should succeed via shim-resolved prek path:\n{}",
+        show(&out)
+    );
+    assert!(
+        !stderr.contains("hook runner `prek` could not be resolved"),
+        "RunnerNotFound should not fire — layer 2 should have resolved prek:\n{stderr}"
+    );
+}
+
+#[test]
+fn resolver_pre_commit_install_shim_path_wins_over_missing_path_binary() {
+    // Same as the prek shim test above, but exercising pre-commit's
+    // shim format. `pre-commit install` writes `INSTALL_PYTHON=<path>`
+    // pointing at the venv's Python interpreter and then runs it as
+    // `"$INSTALL_PYTHON" -mpre_commit "${ARGS[@]}"`. The resolver
+    // therefore needs to splice `[INSTALL_PYTHON, "-mpre_commit"]`
+    // (two argv elements) ahead of pre-commit's subcommand args —
+    // not just the python path.
+    let repo = TestRepo::new();
+    repo.write_pre_commit_config(PRE_PUSH_PASSING);
+
+    repo.write("hello.txt", "hello\n");
+    let out = repo.jj(&["commit", "-m", "second"]);
+    assert!(out.status.success(), "{}", show(&out));
+    let out = repo.jj(&["bookmark", "set", "main", "-r", "@-"]);
+    assert!(out.status.success(), "{}", show(&out));
+
+    // Fake "python" that emulates `python -mpre_commit run …`. It
+    // only needs to handle the exact argv we send: `-mpre_commit
+    // run --hook-stage <stage> --from-ref <from> --to-ref <to>`.
+    // We assert that the first arg is `-mpre_commit` (otherwise
+    // the resolver forgot to splice it in), then exit 0.
+    let venv = tempfile::TempDir::new().unwrap();
+    let fake_python = venv.path().join("python");
+    let script = r#"#!/bin/sh
+if [ "$1" != "-mpre_commit" ]; then
+    echo "expected first arg -mpre_commit, got: $@" >&2
+    exit 99
+fi
+exit 0
+"#;
+    std::fs::write(&fake_python, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&fake_python).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake_python, perms).unwrap();
+    }
+
+    repo.write_pre_commit_shim("pre-push", &fake_python);
+
+    // Sandboxed PATH: git, jj, sh only — no pre-commit, no python.
+    let out = repo.jj_hooks_with_path_allowlist_and_extras(
+        &[
+            "--runner",
+            "pre-commit",
+            "push",
+            "--stage",
+            "pre-push",
+            "-b",
+            "main",
+        ],
+        &["git", "jj", "sh"],
+        &[],
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "push should succeed via shim-resolved pre-commit (python -mpre_commit):\n{}",
+        show(&out)
+    );
+    assert!(
+        !stderr.contains("hook runner `pre-commit` could not be resolved"),
+        "RunnerNotFound should not fire — layer 2 should have resolved pre-commit:\n{stderr}"
+    );
+    // If the resolver dropped the `-mpre_commit` arg, the fake
+    // python would have exited 99 and the push would fail with
+    // exit code reflecting that — covered by the success assertion
+    // above. Belt-and-braces: also check no exit-99 marker.
+    assert!(
+        !stderr.contains("expected first arg -mpre_commit"),
+        "fake python complained — `-mpre_commit` got lost in splicing:\n{stderr}"
+    );
+}
+
+#[test]
+fn resolver_config_runner_bin_wins_over_path() {
+    // Layer 1 (jj-hooks.runner-bin.<runner> config) takes precedence
+    // over $PATH. Write the override into a JJ_CONFIG file (per-repo
+    // config in jj 0.41 lives in `~/.config/jj/repos/<hash>/` keyed
+    // to the workspace's opaque id, which env_clear breaks; a
+    // JJ_CONFIG-mounted config file sidesteps that and is the
+    // documented way to override jj's config in tests).
+    //
+    // The override points at a fake prek that writes a marker file
+    // with "config-prek"; we also plant a *different* prek on the
+    // sandbox PATH that would write "path-prek". If layer 1 didn't
+    // fire we'd see the PATH one run.
+    let repo = TestRepo::new();
+    repo.write_pre_commit_config(PRE_PUSH_PASSING);
+
+    repo.write("hello.txt", "hello\n");
+    let out = repo.jj(&["commit", "-m", "second"]);
+    assert!(out.status.success(), "{}", show(&out));
+    let out = repo.jj(&["bookmark", "set", "main", "-r", "@-"]);
+    assert!(out.status.success(), "{}", show(&out));
+
+    // Marker file (parent of repo.tmp so it survives the env_clear
+    // sandbox — the fake runner only needs PATH to find sh, and we
+    // hard-code the marker path into the script body).
+    let log_dir = tempfile::TempDir::new().unwrap();
+    let log_path = log_dir.path().join("ran.txt");
+    let log_str = log_path.to_string_lossy().into_owned();
+
+    // The "config-resolved" prek, planted outside any PATH.
+    let venv = tempfile::TempDir::new().unwrap();
+    let config_prek = venv.path().join("prek");
+    let config_script = format!("#!/bin/sh\necho \"config-prek: $@\" >> \"{log_str}\"\nexit 0\n");
+    std::fs::write(&config_prek, config_script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&config_prek).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&config_prek, perms).unwrap();
+    }
+
+    // JJ_CONFIG file with the runner-bin override + identity (the
+    // env_clear sandbox loses user-level identity, so jj would
+    // refuse to push without this).
+    let jj_config = repo.tmp.path().join("jj-config.toml");
+    let jj_config_body = format!(
+        r#"[user]
+name = "jj-hooks tests"
+email = "tests@jj-hooks.invalid"
+
+[jj-hooks.runner-bin]
+prek = "{}"
+"#,
+        config_prek.display()
+    );
+    std::fs::write(&jj_config, jj_config_body).unwrap();
+
+    // Build the sandbox bin dir manually so we can plant both the
+    // git/jj/sh symlinks AND a bait `prek` that records a different
+    // label. (The harness helper doesn't let us mix both in one
+    // step plus customize child env beyond the defaults.)
+    let bin_dir = repo.sandbox_bin_dir();
+    let _ = std::fs::remove_dir_all(&bin_dir);
+    std::fs::create_dir(&bin_dir).unwrap();
+    let parent_path = std::env::var_os("PATH").unwrap();
+    for name in ["git", "jj", "sh"] {
+        let src = std::env::split_paths(&parent_path)
+            .find_map(|d| {
+                let c = d.join(name);
+                c.is_file().then_some(c)
+            })
+            .unwrap_or_else(|| panic!("{name} not on parent PATH"));
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&src, bin_dir.join(name)).unwrap();
+    }
+    let bait_prek = bin_dir.join("prek");
+    let bait_script = format!("#!/bin/sh\necho \"path-prek: $@\" >> \"{log_str}\"\nexit 0\n");
+    std::fs::write(&bait_prek, bait_script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&bait_prek).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bait_prek, perms).unwrap();
+    }
+
+    let jj_hooks_bin = env!("CARGO_BIN_EXE_jj-hooks");
+    let out = std::process::Command::new(jj_hooks_bin)
+        .args([
+            "--runner", "prek", "push", "--stage", "pre-push", "-b", "main",
+        ])
+        .current_dir(repo.primary())
+        .env_clear()
+        .env("PATH", &bin_dir)
+        .env("JJ_CONFIG", &jj_config)
+        .env("JJ_HOOKS_LOG", "info")
+        .env("HOME", repo.tmp.path())
+        .output()
+        .unwrap();
+
+    assert!(
+        out.status.success(),
+        "push should succeed via config-resolved prek:\n{}",
+        show(&out)
+    );
+    let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+    assert!(
+        log.contains("config-prek"),
+        "config-resolved prek should have run, log was: {log:?}\n{}",
+        show(&out)
+    );
+    assert!(
+        !log.contains("path-prek"),
+        "PATH-resolved prek must NOT have run when config-runner-bin is set: {log:?}\n{}",
+        show(&out)
+    );
+}

@@ -222,6 +222,34 @@ fn autodetect_hk() {
 }
 
 #[test]
+fn autodetect_prek_native_toml() {
+    // Regression for issue #17: a repo with only `prek.toml` (prek's
+    // native config, not the pre-commit YAML) used to autodetect as
+    // None and silently skip hooks. It should be picked up as Prek.
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("prek.toml"), "").unwrap();
+    assert_eq!(Runner::autodetect(tmp.path()).unwrap(), Some(Runner::Prek));
+}
+
+#[test]
+fn autodetect_prek_native_dotted_toml() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join(".prek.toml"), "").unwrap();
+    assert_eq!(Runner::autodetect(tmp.path()).unwrap(), Some(Runner::Prek));
+}
+
+#[test]
+fn autodetect_prek_collapses_with_pre_commit_yaml() {
+    // prek consumes both `prek.toml` and `.pre-commit-config.yaml`. A
+    // repo with both shouldn't trip the "multiple hook-runner configs"
+    // ambiguity error — it's the same runner family. Collapse to Prek.
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("prek.toml"), "").unwrap();
+    std::fs::write(tmp.path().join(".pre-commit-config.yaml"), "").unwrap();
+    assert_eq!(Runner::autodetect(tmp.path()).unwrap(), Some(Runner::Prek));
+}
+
+#[test]
 fn autodetect_ambiguous_errors() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(tmp.path().join("lefthook.yml"), "").unwrap();
