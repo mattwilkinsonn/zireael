@@ -293,6 +293,73 @@ pub fn list_tracked_bookmarks_on_remote(
         .collect())
 }
 
+/// `jj bookmark set <name> -r <revset> --allow-backwards`. Used by the
+/// fetch pipeline's rewind detector to restore a bookmark that gt
+/// sync silently moved backward.
+///
+/// `--allow-backwards` is required when the target commit is an
+/// ancestor of the bookmark's current position — jj treats that as a
+/// rewind by default and refuses without the flag. The rewind
+/// detector is the only legitimate caller (gt sync just deleted the
+/// bookmark or moved it backward; we're putting it back where it was
+/// pre-pipeline).
+pub fn bookmark_set(jj: &JjCli, name: &str, revset: &str) -> Result<()> {
+    let _ = jj_run(
+        jj,
+        &[
+            "bookmark",
+            "set",
+            name,
+            "-r",
+            revset,
+            "--allow-backwards",
+            "--ignore-working-copy",
+        ],
+    )?;
+    Ok(())
+}
+
+/// `git merge-base --is-ancestor <a> <b>` — returns true iff commit
+/// `a` is an ancestor of commit `b` (or they're equal). Used by the
+/// rewind detector to classify pre/post-sync bookmark position
+/// changes:
+///
+/// - pre is_ancestor_of post → bookmark advanced (fast-forward). OK.
+/// - post is_ancestor_of pre → bookmark rewound. Restore.
+/// - neither → divergent. Restore + warn.
+///
+/// We shell out to git rather than asking jj because the commits we're
+/// checking may have been deleted from refs (gt sync removed the
+/// bookmark) — git's object database still has them addressable by
+/// SHA. jj would need a `bookmarks()`-style revset that doesn't
+/// require live refs, which is brittle.
+pub fn is_ancestor(workspace_root: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
+    let status = Command::new("git")
+        .args(["merge-base", "--is-ancestor", ancestor, descendant])
+        .current_dir(workspace_root)
+        .status()
+        .map_err(JjGtError::Io)?;
+    // Exit 0 → is ancestor; exit 1 → is not; exit 128+ → real error
+    // (bad SHA, etc.). Treat 0/1 as the answer; anything else
+    // propagates as a failure so we don't silently mis-classify.
+    match status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        Some(code) => Err(JjGtError::JjFailed {
+            status: code,
+            stderr: format!(
+                "git merge-base --is-ancestor {ancestor} {descendant} exited with code {code}"
+            ),
+        }),
+        None => Err(JjGtError::JjFailed {
+            status: -1,
+            stderr: format!(
+                "git merge-base --is-ancestor {ancestor} {descendant} terminated by signal"
+            ),
+        }),
+    }
+}
+
 /// Outcome of a `jj rebase` invocation that exits 0 — broken out
 /// because jj treats "rebased successfully but the result contains
 /// conflict markers" as a success exit code, and the only signal is

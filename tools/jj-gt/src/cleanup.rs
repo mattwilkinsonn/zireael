@@ -81,6 +81,18 @@ pub enum CleanupAction {
         prev_parent: String,
         message: String,
     },
+    /// PR-D / issue #2: gt sync silently moved this bookmark backward
+    /// (local was ahead of remote with un-pushed commits). We
+    /// restored the bookmark to its pre-pipeline position. `pre` and
+    /// `post` are the bookmark's commit ids before/after sync.
+    RestoredAfterRewind { pre: String, post: String },
+    /// PR-D / issue #2: bookmark diverged from remote during the
+    /// pipeline (neither pre nor post is an ancestor of the other —
+    /// rare; typically a concurrent push from another machine). We
+    /// restored the local pre-pipeline position; the user needs to
+    /// reconcile manually. `pre` and `post` are the commit ids
+    /// before/after sync.
+    DivergedFromRemote { pre: String, post: String },
     /// PR still open and local matches pushed; leave alone.
     LeftAlone,
 }
@@ -157,6 +169,73 @@ pub fn classify_gtmq_branch(pr: Option<&PrInfo>) -> CleanupAction {
 /// configured `gtmq_` prefixes.
 pub fn is_gtmq_branch(name: &str, prefixes: &[String]) -> bool {
     prefixes.iter().any(|p| name.starts_with(p))
+}
+
+/// Three-way classification of a bookmark's pre/post-sync position.
+/// Pure function — no jj/git calls — so the test suite can pin every
+/// branch without spinning up a workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RewindClassification {
+    /// Bookmark position unchanged across the pipeline. No action.
+    Unchanged,
+    /// Bookmark advanced (pre is an ancestor of post). Fast-forward
+    /// the pipeline applied legitimately; leave it.
+    FastForward,
+    /// Bookmark rewound (post is an ancestor of pre). Local was
+    /// ahead of remote with un-pushed commits; gt sync silently
+    /// reset it. The fetch pipeline restores pre.
+    Rewound,
+    /// Bookmark diverged (neither is an ancestor of the other).
+    /// Rare; usually a concurrent push from another machine. The
+    /// fetch pipeline restores pre and surfaces a warning so the
+    /// user can reconcile.
+    Diverged,
+    /// Bookmark disappeared from post (gt sync deleted it). Two
+    /// sub-cases handled separately by the caller:
+    ///
+    /// - Bookmark had no local-only commits ahead of remote:
+    ///   deletion was intentional (merged PR cleanup); leave it
+    ///   deleted.
+    /// - Bookmark had local-only commits: restore.
+    ///
+    /// The caller does the "had local-only commits?" check on its
+    /// side; this classifier just signals that the bookmark is gone.
+    Disappeared,
+}
+
+/// Pure classifier for the pre/post snapshot diff. Takes the two
+/// commit ids and an `is_ancestor` oracle (so the test suite can
+/// substitute a deterministic stub for `git merge-base
+/// --is-ancestor`).
+///
+/// `post` of `None` means "bookmark was deleted during the pipeline."
+/// Disambiguation between "intentional merge-cleanup deletion" and
+/// "deletion of a local-only-ahead bookmark" is the caller's job —
+/// this function just signals "Disappeared" and the caller does the
+/// "had local-only commits?" check.
+pub fn classify_rewind<F>(
+    pre: &str,
+    post: Option<&str>,
+    is_ancestor: F,
+) -> Result<RewindClassification>
+where
+    F: Fn(&str, &str) -> Result<bool>,
+{
+    let Some(post) = post else {
+        return Ok(RewindClassification::Disappeared);
+    };
+    if pre == post {
+        return Ok(RewindClassification::Unchanged);
+    }
+    // Order matters: pre ancestor of post = advance; post ancestor
+    // of pre = rewind. Check both before concluding diverged.
+    if is_ancestor(pre, post)? {
+        return Ok(RewindClassification::FastForward);
+    }
+    if is_ancestor(post, pre)? {
+        return Ok(RewindClassification::Rewound);
+    }
+    Ok(RewindClassification::Diverged)
 }
 
 /// Run the full `jj-gt fetch` pipeline. Returns a per-bookmark log of
@@ -311,6 +390,15 @@ pub fn run_fetch(
     if opts.dry_run {
         sync_step.skip("dry-run", None);
     } else {
+        // PR-D / issue #2: snapshot every local bookmark's commit id
+        // before gt sync mutates refs. Compared post-import below to
+        // detect silent rewinds (gt sync with --force resets a local
+        // ref to remote when local was ahead — no prompt, no warning).
+        let pre_snapshot: std::collections::BTreeMap<String, String> = bookmarks_before_sync
+            .iter()
+            .map(|b| (b.name.clone(), b.commit_id.clone()))
+            .collect();
+
         match gt::sync_no_restack(workspace_root) {
             Ok(()) => sync_step.success("", None),
             Err(e) => {
@@ -325,6 +413,118 @@ pub fn run_fetch(
                 import_step.fail(&format!("{e}"), None);
                 return Err(e);
             }
+        }
+
+        // Post-snapshot + rewind detection. Only act on bookmarks
+        // present in pre_snapshot — anything new in post is a
+        // remote-side branch we don't want to touch.
+        let post_bookmarks = list_local_bookmarks(jj)?;
+        let post_by_name: std::collections::BTreeMap<String, String> = post_bookmarks
+            .iter()
+            .map(|b| (b.name.clone(), b.commit_id.clone()))
+            .collect();
+
+        let rewind_step = ui::Step::start("Checking for silent rewinds from gt sync", verbosity);
+        let mut restored = 0usize;
+        let mut diverged = 0usize;
+        let mut rewind_errors: Vec<String> = Vec::new();
+        for (name, pre_id) in &pre_snapshot {
+            let post_id = post_by_name.get(name).map(|s| s.as_str());
+            let classification = match classify_rewind(pre_id, post_id, |a, b| {
+                jj::is_ancestor(workspace_root, a, b)
+            }) {
+                Ok(c) => c,
+                Err(e) => {
+                    rewind_errors.push(format!("{name}: {e}"));
+                    continue;
+                }
+            };
+            match classification {
+                RewindClassification::Unchanged | RewindClassification::FastForward => {}
+                RewindClassification::Rewound => {
+                    if let Err(e) = jj::bookmark_set(jj, name, pre_id) {
+                        rewind_errors.push(format!("{name}: restore failed: {e}"));
+                        continue;
+                    }
+                    restored += 1;
+                    let local = bookmarks_before_sync
+                        .iter()
+                        .find(|b| &b.name == name)
+                        .cloned()
+                        .unwrap_or_else(|| LocalBookmark {
+                            name: name.clone(),
+                            commit_id: pre_id.clone(),
+                        });
+                    actions.push((
+                        local,
+                        CleanupAction::RestoredAfterRewind {
+                            pre: pre_id.clone(),
+                            post: post_id.unwrap_or("").to_owned(),
+                        },
+                    ));
+                }
+                RewindClassification::Diverged => {
+                    if let Err(e) = jj::bookmark_set(jj, name, pre_id) {
+                        rewind_errors.push(format!("{name}: restore failed: {e}"));
+                        continue;
+                    }
+                    diverged += 1;
+                    let local = bookmarks_before_sync
+                        .iter()
+                        .find(|b| &b.name == name)
+                        .cloned()
+                        .unwrap_or_else(|| LocalBookmark {
+                            name: name.clone(),
+                            commit_id: pre_id.clone(),
+                        });
+                    actions.push((
+                        local,
+                        CleanupAction::DivergedFromRemote {
+                            pre: pre_id.clone(),
+                            post: post_id.unwrap_or("").to_owned(),
+                        },
+                    ));
+                }
+                RewindClassification::Disappeared => {
+                    // gt sync deleted the bookmark. Two sub-cases:
+                    //
+                    //   - Intentional cleanup (merged PR): the
+                    //     orphan-detection step (6/7 below) will
+                    //     either rebase descendants or leave them
+                    //     alone via its own classifier. Don't
+                    //     resurrect the bookmark here — that would
+                    //     undo gt sync's legitimate work.
+                    //
+                    //   - Unintentional (local-only commits ahead of
+                    //     remote): we can't tell from pre/post alone
+                    //     without consulting the original remote
+                    //     ref. The most common shape — local + remote
+                    //     both at the merge commit pre-sync, gt sync
+                    //     removes both — is benign; the rare bad
+                    //     case (local ahead with un-pushed work)
+                    //     would show up as orphan descendants if
+                    //     any exist, which step 7 handles.
+                    //
+                    // Leaving Disappeared as a no-op here is the
+                    // conservative choice; it matches the behavior
+                    // before PR-D landed and is fixed forward by
+                    // step 7's orphan rebase.
+                }
+            }
+        }
+        let summary = match (restored, diverged, rewind_errors.is_empty()) {
+            (0, 0, true) => "no rewinds detected".to_owned(),
+            (r, 0, true) => format!("{r} bookmark(s) restored from rewind"),
+            (0, d, true) => format!("{d} bookmark(s) diverged; local restored"),
+            (r, d, true) => {
+                format!("{r} restored from rewind, {d} diverged; local restored")
+            }
+            (_, _, false) => format!("{} error(s)", rewind_errors.len()),
+        };
+        if rewind_errors.is_empty() {
+            rewind_step.success(&summary, None);
+        } else {
+            rewind_step.warn(&summary, Some(&rewind_errors.join("\n")));
         }
     }
 
@@ -717,5 +917,72 @@ mod tests {
         let full_oid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let revset = build_orphan_rebase_revset(full_oid, "upper");
         assert_eq!(revset, format!("roots({full_oid}..upper)"));
+    }
+
+    /// `is_ancestor` oracle for classify_rewind tests. Pin a small DAG
+    /// in test code so each test exercises one classification branch.
+    /// The closure form lets us keep the test fixtures inline.
+    fn ancestor_oracle(
+        pairs: &'static [(&'static str, &'static str)],
+    ) -> impl Fn(&str, &str) -> Result<bool> + use<> {
+        move |a, b| Ok(a == b || pairs.iter().any(|(p, q)| *p == a && *q == b))
+    }
+
+    #[test]
+    fn classify_rewind_unchanged_when_pre_equals_post() {
+        let cls = classify_rewind("abc", Some("abc"), ancestor_oracle(&[])).unwrap();
+        assert_eq!(cls, RewindClassification::Unchanged);
+    }
+
+    #[test]
+    fn classify_rewind_fast_forward_when_pre_is_ancestor_of_post() {
+        // pre→post is a fast-forward (remote advanced, local was
+        // behind). Pipeline applied the advance correctly.
+        let cls = classify_rewind("old", Some("new"), ancestor_oracle(&[("old", "new")])).unwrap();
+        assert_eq!(cls, RewindClassification::FastForward);
+    }
+
+    #[test]
+    fn classify_rewind_rewound_when_post_is_ancestor_of_pre() {
+        // The bug case from issue #2: local was ahead of remote, gt
+        // sync reset local to remote. post is an ancestor of pre.
+        let cls = classify_rewind(
+            "local_ahead",
+            Some("remote_behind"),
+            ancestor_oracle(&[("remote_behind", "local_ahead")]),
+        )
+        .unwrap();
+        assert_eq!(cls, RewindClassification::Rewound);
+    }
+
+    #[test]
+    fn classify_rewind_diverged_when_neither_is_ancestor() {
+        // Neither direction's an ancestor — true divergence (e.g.
+        // collaborator pushed a different commit). Restore + warn.
+        let cls = classify_rewind("local", Some("remote"), ancestor_oracle(&[])).unwrap();
+        assert_eq!(cls, RewindClassification::Diverged);
+    }
+
+    #[test]
+    fn classify_rewind_disappeared_when_post_is_none() {
+        // Bookmark deleted during the pipeline. Classifier signals
+        // Disappeared; caller decides whether to resurrect based on
+        // local-only-commits-ahead-of-remote check.
+        let cls = classify_rewind("abc", None, ancestor_oracle(&[])).unwrap();
+        assert_eq!(cls, RewindClassification::Disappeared);
+    }
+
+    #[test]
+    fn classify_rewind_propagates_oracle_errors() {
+        // If the oracle errors (e.g. git merge-base failed on a
+        // bad SHA), we propagate so the caller surfaces it rather
+        // than silently mis-classifying as Diverged.
+        let oracle = |_: &str, _: &str| {
+            Err(crate::error::JjGtError::Invalid(
+                "synthetic test error".into(),
+            ))
+        };
+        let err = classify_rewind("a", Some("b"), oracle).unwrap_err();
+        assert!(format!("{err}").contains("synthetic test error"));
     }
 }

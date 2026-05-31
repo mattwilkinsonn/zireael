@@ -558,6 +558,22 @@ fn action_to_row(action: &cleanup::CleanupAction) -> (ui::ActionStatus, String) 
                 "rebase onto {onto} produced conflicts (parent `{prev_parent}` was removed by gt sync) — {message}; run `jj resolve` to fix"
             ),
         ),
+        CleanupAction::RestoredAfterRewind { pre, post } => (
+            ui::ActionStatus::Warn,
+            format!(
+                "restored after gt sync silently rewound (pre {}, gt-sync moved to {})",
+                &pre[..pre.len().min(12)],
+                &post[..post.len().min(12)],
+            ),
+        ),
+        CleanupAction::DivergedFromRemote { pre, post } => (
+            ui::ActionStatus::Warn,
+            format!(
+                "DIVERGED — local {} restored; remote moved to {}; reconcile manually",
+                &pre[..pre.len().min(12)],
+                &post[..post.len().min(12)],
+            ),
+        ),
         CleanupAction::LeftAlone => (ui::ActionStatus::Skipped, "left alone".into()),
     }
 }

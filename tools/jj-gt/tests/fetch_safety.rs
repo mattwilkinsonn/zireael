@@ -177,3 +177,56 @@ fn has_uncommitted_changes_true_after_file_edit() {
     let jj_cli = JjCli::new(tmp.path().to_path_buf());
     assert!(jj_gt::jj::has_uncommitted_changes(&jj_cli).unwrap());
 }
+
+#[test]
+fn is_ancestor_recognizes_linear_ancestry() {
+    // PR-D's rewind detector relies on git merge-base --is-ancestor
+    // to classify pre/post snapshot diffs. Pin that the wrapper:
+    //   (a) returns true for a commit that's actually an ancestor,
+    //   (b) returns false for a commit that isn't,
+    //   (c) returns true for a commit compared with itself.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_workspace();
+    // Add an explicit non-empty commit + bookmark on top so the
+    // git side has a HEAD strictly above main. The build_workspace
+    // helper leaves @ as an empty WIP commit which jj doesn't
+    // necessarily export to git refs.
+    std::fs::write(tmp.path().join("file.txt"), "content\n").unwrap();
+    jj(tmp.path(), &["describe", "-m", "tip commit"]);
+    jj(tmp.path(), &["bookmark", "create", "tip", "-r", "@"]);
+    jj(tmp.path(), &["git", "export"]);
+
+    let main_oid = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "main"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    let tip_oid = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "tip"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+
+    assert_ne!(main_oid, tip_oid, "fixture didn't advance tip past main");
+    // main is an ancestor of tip.
+    assert!(jj_gt::jj::is_ancestor(tmp.path(), &main_oid, &tip_oid).unwrap());
+    // tip is not an ancestor of main.
+    assert!(!jj_gt::jj::is_ancestor(tmp.path(), &tip_oid, &main_oid).unwrap());
+    // A commit is its own ancestor (reflexive — git's contract).
+    assert!(jj_gt::jj::is_ancestor(tmp.path(), &main_oid, &main_oid).unwrap());
+}
