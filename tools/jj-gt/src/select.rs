@@ -68,6 +68,54 @@ pub fn resolve_bookmarks(jj: &JjCli, args: &BookmarkArgs, trunk: &str) -> Result
     Ok(out)
 }
 
+/// Expand a selected bookmark set to include every bookmark on the
+/// ancestor chain between `trunk` and each selected tip.
+///
+/// Closes the `submit -b <tip>` UX gap: `gt track <child> --parent
+/// <parent>` errors out if `<parent>` isn't already tracked, but the
+/// user shouldn't have to enumerate every bookmark in their stack
+/// when they just want to ship the tip. `resolve_bookmarks` parses
+/// the literal `-b` selection (that's its contract); this helper
+/// layers submit-shape semantics on top by walking each tip's
+/// ancestor chain via `bookmarks() & ::<tip> & {trunk}..` and
+/// returning the union, deduped, in the order jj emits them
+/// (bottom→top per chain).
+///
+/// Called only from `submit_cmd`. `track_cmd`, `status_cmd`, and
+/// `log_cmd` keep using `resolve_bookmarks` directly because they
+/// don't have the same ordering constraint and the user typically
+/// wants them to act on the literal selection.
+pub fn expand_ancestors_for_submit(
+    jj: &JjCli,
+    selected: &[String],
+    trunk: &str,
+) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for tip in selected {
+        let revset = format!("bookmarks() & ::{tip} & {trunk}..");
+        let chain = bookmarks_in_revset(jj, &revset)?;
+        if chain.is_empty() {
+            // Defensive: tip sits exactly on trunk (no commits
+            // between trunk and tip). The revset returns the empty
+            // set but the user still wants the tip itself in the
+            // output. Fall back to a literal one-element entry —
+            // derive_parents will classify it as parent=Trunk and
+            // the tracker will accept it.
+            if seen.insert(tip.clone()) {
+                out.push(tip.clone());
+            }
+            continue;
+        }
+        for name in chain {
+            if seen.insert(name.clone()) {
+                out.push(name);
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn any_flag_set(args: &BookmarkArgs) -> bool {
     !args.bookmark.is_empty() || !args.revision.is_empty() || !args.change.is_empty()
 }

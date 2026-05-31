@@ -455,3 +455,109 @@ fn list_tracked_bookmarks_round_trips() {
         "expected `top` in tracked set, got {tracked:?}",
     );
 }
+
+#[test]
+fn expand_ancestors_for_submit_includes_chain_between_trunk_and_tip() {
+    // Regression for issue #7: `jj-gt submit -b <tip>` against a
+    // stack of unsubmitted bookmarks must expand the selection to
+    // include every ancestor bookmark on the chain, otherwise
+    // `gt track <tip> --parent <mid>` errors because <mid> isn't
+    // tracked yet.
+    //
+    // We assert content not order — jj's revset emission order
+    // varies and `sort_for_tracking` handles the bottom→top
+    // ordering needed for `gt track` downstream. What this test
+    // pins is "the full chain is in the output."
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_linear_stack_fixture();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    let expanded =
+        jj_gt::select::expand_ancestors_for_submit(&jj_cli, &["top".into()], "main").unwrap();
+    let as_set: std::collections::BTreeSet<String> = expanded.iter().cloned().collect();
+    assert_eq!(
+        as_set,
+        ["bottom", "mid", "top"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect::<std::collections::BTreeSet<String>>(),
+        "expected {{bottom, mid, top}} from `-b top` expansion, got {expanded:?}",
+    );
+
+    // The expanded set must round-trip through derive_parents +
+    // sort_for_tracking with the right order for `gt track`.
+    let stacked = derive_parents(&jj_cli, &expanded, "main").unwrap();
+    let sorted = jj_gt::stack::sort_for_tracking(&stacked);
+    let order: Vec<&str> = sorted.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(order, vec!["bottom", "mid", "top"]);
+    // And the tip should still be `top`.
+    assert_eq!(find_tip(&stacked).unwrap(), "top");
+}
+
+#[test]
+fn expand_ancestors_for_submit_dedupes_across_tips() {
+    // Two selected tips sharing a common ancestor chain. The shared
+    // ancestor should appear exactly once in the output. (Realistic
+    // case: user passes both `-b foo-tip -b bar-tip` where both
+    // sit on top of the same `base` bookmark.)
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_linear_stack_fixture();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    // `mid` is an ancestor of `top` (chain: bottom → mid → top).
+    // Expanding both `mid` and `top` together should yield bottom,
+    // mid, top — each exactly once.
+    let expanded =
+        jj_gt::select::expand_ancestors_for_submit(&jj_cli, &["mid".into(), "top".into()], "main")
+            .unwrap();
+    assert_eq!(
+        expanded.len(),
+        3,
+        "expected 3 unique entries, got {expanded:?}",
+    );
+    let as_set: std::collections::BTreeSet<String> = expanded.iter().cloned().collect();
+    assert_eq!(as_set.len(), expanded.len(), "duplicates in {expanded:?}");
+    assert_eq!(
+        as_set,
+        ["bottom", "mid", "top"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect::<std::collections::BTreeSet<String>>(),
+        "expected deduped union {{bottom, mid, top}}, got {expanded:?}",
+    );
+}
+
+#[test]
+fn expand_ancestors_for_submit_single_on_trunk_keeps_just_tip() {
+    // A bookmark sitting directly on trunk has no intermediate
+    // ancestors. The expansion should return just the tip itself so
+    // downstream derive_parents/track sees a single-element stack
+    // with parent=Trunk.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(cwd, &["describe", "-m", "root"]);
+    jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
+    jj(cwd, &["new", "-m", "feature"]);
+    jj(cwd, &["bookmark", "create", "feature", "-r", "@"]);
+
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+    let expanded =
+        jj_gt::select::expand_ancestors_for_submit(&jj_cli, &["feature".into()], "main").unwrap();
+    assert_eq!(expanded, vec!["feature".to_owned()]);
+}
