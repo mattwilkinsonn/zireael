@@ -93,58 +93,64 @@ pub fn run_pre_push(
     interpret_outcome(&outcome, bookmark, trunk_commit, tip_commit)
 }
 
-/// Per-bookmark pre-push gate over a sorted (bottom→top) stack of
-/// updates.
+/// Per-bookmark pre-push gate over N independent stacks. Each
+/// `partitions` entry is one stack (a `Vec<(bookmark_name,
+/// tip_commit)>`, bottom→top).
 ///
-/// Each entry of `stack_tips` is `(bookmark_name, tip_commit)`; the
-/// merge-base for entry `i` is entry `i-1`'s tip (so each
-/// BookmarkUpdate captures the bookmark's *own* diff range, not
-/// trunk..tip). Entry 0's merge-base is `trunk_commit`.
+/// Within a partition, bookmark `i`'s diff-base is bookmark
+/// `i-1`'s tip (and bookmark 0's is `trunk_commit`), matching the
+/// per-bookmark slicing introduced in PR-B. Across partitions,
+/// nothing is shared — partitions are independent stacks rooted at
+/// trunk.
 ///
-/// When `parallel` is true, runs N updates concurrently via
-/// [`jj_hooks::hooks::run_for_updates_parallel`] with output capture;
-/// when false, runs sequentially with live output. Either way the
-/// returned outcomes are in input order.
+/// Fail-fast scope is per-partition. If bookmark `mid` in stack A
+/// fails fmt, stack A's `head` cancels its remaining hk steps
+/// — but stack B keeps running to completion. The user's mental
+/// model "those two `-b` tips were independent" matches what the
+/// pipeline actually does.
 ///
-/// First failing bookmark aborts the submit. The caller decides
-/// whether to surface the captured output (parallel path) or
-/// trust the user already saw the live stream (sequential path).
+/// When `parallel` is true, runs all partitions concurrently via
+/// [`jj_hooks::hooks::run_for_partitioned_updates_parallel`] with
+/// output capture; when false, runs everything sequentially with
+/// live output (no fail-fast — `--hooks-sequential` users want to
+/// see the runner's progress bar end-to-end).
 pub fn run_pre_push_stack(
     jj: &JjCli,
     workspace_root: &Path,
     remote: &str,
     trunk_commit: &str,
-    stack_tips: &[(String, String)],
+    partitions: &[Vec<(String, String)>],
     parallel: bool,
     opts: &HookOpts,
 ) -> Result<()> {
-    if stack_tips.is_empty() {
+    if partitions.is_empty() || partitions.iter().all(|p| p.is_empty()) {
         return Ok(());
     }
     let primary_git_dir = jj::primary_git_dir(workspace_root).map_err(JjGtError::Hooks)?;
 
-    // Build per-bookmark BookmarkUpdates. Each entry's from-ref is
-    // the previous entry's tip (or trunk for the first one) — that
-    // way each bookmark's hook gate sees just *its* diff, not the
-    // cumulative trunk..tip stack range.
-    let mut updates: Vec<BookmarkUpdate> = Vec::with_capacity(stack_tips.len());
-    let mut prev_tip = trunk_commit.to_owned();
-    let mut nontrivial_indices: Vec<usize> = Vec::new();
-    for (idx, (name, tip)) in stack_tips.iter().enumerate() {
-        if &prev_tip == tip {
-            // Empty range — bookmark is at the same commit as its
-            // parent. Skip but keep prev_tip moving forward.
-            tracing::info!(
-                "pre-push: bookmark `{name}` is at the same commit as its parent; skipping hooks"
-            );
-        } else {
-            updates.push(build_update(remote, name, &prev_tip, tip));
-            nontrivial_indices.push(idx);
+    // Build per-partition `Vec<BookmarkUpdate>`s. Each partition's
+    // first update has from-ref = trunk; subsequent updates use the
+    // previous update's tip as their from-ref. Empty ranges (a
+    // bookmark sitting at the same commit as its parent) are
+    // skipped but `prev_tip` still advances.
+    let mut update_partitions: Vec<Vec<BookmarkUpdate>> = Vec::with_capacity(partitions.len());
+    for partition in partitions {
+        let mut updates: Vec<BookmarkUpdate> = Vec::with_capacity(partition.len());
+        let mut prev_tip = trunk_commit.to_owned();
+        for (name, tip) in partition {
+            if &prev_tip == tip {
+                tracing::info!(
+                    "pre-push: bookmark `{name}` is at the same commit as its parent; skipping hooks"
+                );
+            } else {
+                updates.push(build_update(remote, name, &prev_tip, tip));
+            }
+            prev_tip = tip.clone();
         }
-        prev_tip = tip.clone();
+        update_partitions.push(updates);
     }
 
-    if updates.is_empty() {
+    if update_partitions.iter().all(|p| p.is_empty()) {
         return Ok(());
     }
 
@@ -154,59 +160,88 @@ pub fn run_pre_push_stack(
         capture_output: parallel,
     };
 
-    let outcomes = if parallel {
-        let progress = |idx: usize, update: &BookmarkUpdate, outcome: &HookOutcome| {
-            // Print the captured block as soon as each thread
-            // finishes so the user gets feedback in completion
-            // order. The block is self-contained — argv-prefixed
-            // subprocess invocations + their output.
-            let header = if outcome.success {
-                format!("--- pre-push hooks: {} (clean) ---", update.bookmark)
-            } else {
-                format!("--- pre-push hooks: {} (FAILED) ---", update.bookmark)
-            };
-            eprintln!("{header}");
-            if let Some(buf) = outcome.captured_output.as_ref() {
-                eprint!("{buf}");
-                if !buf.ends_with('\n') {
-                    eprintln!();
+    let outcomes: Vec<Vec<HookOutcome>> = if parallel {
+        let progress =
+            |_p_idx: usize, _u_idx: usize, update: &BookmarkUpdate, outcome: &HookOutcome| {
+                // Print the captured block as soon as each thread
+                // finishes so the user gets feedback in completion
+                // order. The block is self-contained — argv-prefixed
+                // subprocess invocations + their output. Cancelled
+                // siblings get a one-line "cancelled" marker so the
+                // user knows they didn't run, not that they passed.
+                if outcome.cancelled {
+                    eprintln!(
+                        "--- pre-push hooks: {} (cancelled — sibling failed) ---",
+                        update.bookmark
+                    );
+                    return;
                 }
-            }
-            eprintln!("--- end {} (#{}) ---", update.bookmark, idx + 1);
-        };
-        jj_hooks::hooks::run_for_updates_parallel(
+                let header = if outcome.success {
+                    format!("--- pre-push hooks: {} (clean) ---", update.bookmark)
+                } else {
+                    format!("--- pre-push hooks: {} (FAILED) ---", update.bookmark)
+                };
+                eprintln!("{header}");
+                if let Some(buf) = outcome.captured_output.as_ref() {
+                    eprint!("{buf}");
+                    if !buf.ends_with('\n') {
+                        eprintln!();
+                    }
+                }
+                eprintln!("--- end {} ---", update.bookmark);
+            };
+        jj_hooks::hooks::run_for_partitioned_updates_parallel(
             jj,
             &primary_git_dir,
             workspace_root,
             opts.runner_override,
             Stage::PrePush,
-            &updates,
+            &update_partitions,
             run_opts,
             progress,
         )
         .map_err(JjGtError::Hooks)?
     } else {
+        // Sequential path: no fail-fast (the user opted into
+        // serial execution explicitly; aborting a 5-bookmark
+        // run on bookmark 2 would surprise them). Flatten the
+        // partitions for the sequential entrypoint and rebuild
+        // the partitioned outcome shape on the way back.
         let progress = |_idx: usize, _update: &BookmarkUpdate, _outcome: &HookOutcome| {};
-        jj_hooks::hooks::run_for_updates_sequential(
+        let flat: Vec<BookmarkUpdate> = update_partitions
+            .iter()
+            .flat_map(|p| p.iter().cloned())
+            .collect();
+        let flat_outcomes = jj_hooks::hooks::run_for_updates_sequential(
             jj,
             &primary_git_dir,
             workspace_root,
             opts.runner_override,
             Stage::PrePush,
-            &updates,
+            &flat,
             run_opts,
             progress,
         )
-        .map_err(JjGtError::Hooks)?
+        .map_err(JjGtError::Hooks)?;
+        let mut iter = flat_outcomes.into_iter();
+        update_partitions
+            .iter()
+            .map(|p| (0..p.len()).filter_map(|_| iter.next()).collect())
+            .collect()
     };
 
-    // Surface the first failure. Outcomes are in updates-order; the
-    // updates were built from `nontrivial_indices` so map back to
-    // the original stack_tips entry for a useful error message.
-    for (outcome, update) in outcomes.iter().zip(updates.iter()) {
-        let trunk_for_this = update.old_commit.clone().unwrap_or_default();
-        let tip_for_this = update.new_commit.clone().unwrap_or_default();
-        interpret_outcome(outcome, &update.bookmark, &trunk_for_this, &tip_for_this)?;
+    // Surface the first non-cancelled failure. Outcomes mirror the
+    // input partition shape; cancelled entries just mean a sibling
+    // already failed and we'll report THAT one.
+    for (partition_outcomes, partition_updates) in outcomes.iter().zip(update_partitions.iter()) {
+        for (outcome, update) in partition_outcomes.iter().zip(partition_updates.iter()) {
+            if outcome.cancelled {
+                continue;
+            }
+            let trunk_for_this = update.old_commit.clone().unwrap_or_default();
+            let tip_for_this = update.new_commit.clone().unwrap_or_default();
+            interpret_outcome(outcome, &update.bookmark, &trunk_for_this, &tip_for_this)?;
+        }
     }
     Ok(())
 }
