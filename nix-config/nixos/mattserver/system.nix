@@ -850,6 +850,12 @@ in
   # works on either backend; nftables gives us the user-matched
   # output chain we want for the lockdown.
   networking.nftables.enable = true;
+  # Skip the rule-check at build time. The check would invoke `nft -c`
+  # inside the build sandbox, where only nixbld* users exist —
+  # `meta skuid != "sealed-runner"` fails name resolution and the
+  # build aborts with "User does not exist". The check still runs at
+  # activation time on the host, where sealed-runner is present.
+  networking.nftables.checkRuleset = false;
 
   networking.firewall = {
     enable = true;
