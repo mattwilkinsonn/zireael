@@ -27,18 +27,33 @@ let
   # and its subdirs. SEA-640.
   sealedRunnerUser = "sealed-runner";
 
-  # Four sealed runner instances. Lints + tests run concurrently on one
-  # push; the extra slots absorb additional pushes arriving before the
-  # first finishes. Each gets 4 CARGO_BUILD_JOBS → 4 × 4 = 16 parallel
-  # rustc clients. That oversubscribes the Ryzen 3600's 12 logical
-  # cores by ~33%, which is fine in practice because rustc is link-
-  # and IO-bound enough that strict 1:1 mapping leaves cores idle.
+  # Two sealed runner instances (SEA-680 round-4 drop from 4 → 2). Each
+  # gets 6 CARGO_BUILD_JOBS → 2 × 6 = 12 parallel rustc clients, 1:1
+  # with the Ryzen 3600's 12 logical cores (no oversubscription).
   #
-  # Pre-SEA-672 was 4 instances; dropped to 3 to ease memory pressure
-  # on the 32 GB config (4 × 4 × ~2.5 GB peak rustc = ~40 GB on a 32
-  # GB box → sccache OOM kills). 64 GB upgrade restores the 4th slot
-  # with comfortable headroom (see the per-runner MemoryMax math
-  # below).
+  # History:
+  #   - SEA-501 initial: 4 instances × 4 jobs = 16 rustc (33% oversub).
+  #   - SEA-672 round 1: dropped to 3 to ease memory pressure on the
+  #     32 GB config (4 × 4 × ~2.5 GB rustc = ~40 GB on a 32 GB box →
+  #     sccache OOM kills).
+  #   - SEA-672 round 3: 64 GB upgrade, restored 4th slot.
+  #   - SEA-680 round 4: dropped 4 → 2. The SEA-680 loadtest data
+  #     surfaced ~25-30% per-job slowdown under 4-concurrent contention
+  #     (Clippy 6m 33s solo vs 8m+ under 4-way load, timing out the
+  #     8min cap on 1/4 PRs). 33% oversub was a net throughput LOSS
+  #     once cancel-family test races (SEA-450 / SEA-714 family,
+  #     scheduler-starvation surface) and Build cap timeouts are
+  #     factored in. N=2 with jobs=6 = 12 cores 1:1, no oversub,
+  #     matches mattmacpro's shape, halves the contention surface
+  #     area for the SEA-714 races. 4-PR stack pushes serialize as
+  #     2 batches of 2 (~2× single-PR wall time) instead of one batch
+  #     of 4 contention-degraded jobs — net wall time roughly tied or
+  #     better, with much lower variance.
+  #
+  # If 4-PR stack-push wall time becomes a regular pain point, the
+  # right fix is a second Linux box (NUC-class Ryzen 7700, ~$800)
+  # rather than re-introducing oversub on this one. See SEA-713 for
+  # the audit + decision capture.
   #
   # State dirs are per-instance under /var/lib/github-runners/<name>/ so
   # cargo/rustup don't race across instances. The runner services run as
@@ -189,7 +204,7 @@ let
       # index-lockfile that cargo uses serializes registry *index*
       # updates, NOT source unpacks — so a shared registry is only
       # safe when at most one cargo runs at a time, which doesn't
-      # hold on a 4-runner box. Per-instance CARGO_HOME costs
+      # hold on a multi-runner box. Per-instance CARGO_HOME costs
       # ~1-2 GB extra per runner for the warm registry; trivial
       # given the TB-class NVMe.
       CARGO_HOME = "/var/lib/github-runners/${name}/.cargo";
@@ -197,11 +212,13 @@ let
       # and will corrupt toolchain state if two instances install
       # simultaneously.
       RUSTUP_HOME = "/var/lib/github-runners/${name}/.rustup";
-      # 4 build jobs per instance × 4 instances = 16 parallel rustc
-      # clients. Oversubscribes the Ryzen 3600's 12 logical cores by
-      # ~33%, which is fine in practice because rustc's link + IO
-      # latency leaves cores idle under strict 1:1 mapping.
-      CARGO_BUILD_JOBS = "4";
+      # 6 build jobs per instance × 2 instances = 12 parallel rustc
+      # clients, 1:1 with the Ryzen 3600's 12 logical cores. SEA-680
+      # round-4 dropped from 4 jobs × 4 instances (33% oversub) after
+      # loadtest data showed the oversub was a net throughput loss
+      # once contention-induced flakes were factored in — see the
+      # `mkSealedRunner` header comment for the full history.
+      CARGO_BUILD_JOBS = "6";
 
       # pkg-config search path. On NixOS, `pkg-config` outside a Nix dev
       # shell can't auto-discover .pc files — there's no /usr/lib/pkgconfig
@@ -256,28 +273,36 @@ let
     serviceOverrides = {
       ReadWritePaths = [ "/var/lib/github-runners" ];
 
-      # SEA-672: per-runner memory ceiling. With 4 sibling runners each
-      # running 4 parallel rustc processes (~2-3 GB peak each on
-      # monomorphization-heavy crates) plus a shared sccache server
-      # (now 12 GB cap), the box's 64 GB ceiling has comfortable
+      # SEA-672 + SEA-680: per-runner memory ceiling. With 2 sibling
+      # runners each running 6 parallel rustc processes (~2-3 GB peak
+      # each on monomorphization-heavy crates) plus a shared sccache
+      # server (12 GB cap), the box's 64 GB ceiling has generous
       # headroom even under worst-case load.
       #
-      # Box-wide math under load:
-      #   4 runners × 12 GB MemoryMax = 48 GB
+      # Box-wide math under load (post-SEA-680 round-4):
+      #   2 runners × 20 GB MemoryMax = 40 GB
       #   sccache server MemoryMax    = 12 GB
-      #   kernel + page cache headroom ≈  4 GB
+      #   kernel + page cache headroom ≈ 12 GB
       #   ────────────────────────────────────
       #   Total                       = 64 GB physical
       #
+      # Per-runner cap is bumped 12 → 20 GB from the N=4 era because
+      # (a) only 2 sibling cgroups now share the 64 GB box, so each
+      # can have a larger share; (b) jobs=6 per runner means a worst-
+      # case 6 × ~2.5 GB = 15 GB working set inside one cgroup — the
+      # 12 GB cap of the N=4 era would now OOM-kill the runner mid-
+      # compile rather than just throttling. 20 GB gives ~33% headroom
+      # over the worst-case rustc working set.
+      #
       # `MemoryHigh` is a soft cap — the kernel tries to keep the
-      # unit under 10 GB by throttling allocations and aggressively
+      # unit under 16 GB by throttling allocations and aggressively
       # reclaiming page cache. `MemoryMax` is the hard ceiling —
       # exceeding it gets the unit's processes OOM-killed instead
       # of dragging the whole host into swap thrash (and taking
       # the sccache server down with it, which is the specific
       # failure mode we're closing here).
-      MemoryHigh = "10G";
-      MemoryMax = "12G";
+      MemoryHigh = "16G";
+      MemoryMax = "20G";
 
       # Sandbox unwrap: seal's daemon spawns its own bwrap-based
       # sandbox for every `command_run`. The github-runner module's
@@ -552,9 +577,6 @@ in
     "d /var/lib/github-runners/sealed-2        0755 ${sealedRunnerUser} ${sealedRunnerUser} -"
     "d /var/lib/github-runners/sealed-2/.cargo 0755 ${sealedRunnerUser} ${sealedRunnerUser} -"
     "d /var/lib/github-runners/sealed-2/work   0755 ${sealedRunnerUser} ${sealedRunnerUser} -"
-    "d /var/lib/github-runners/sealed-3        0755 ${sealedRunnerUser} ${sealedRunnerUser} -"
-    "d /var/lib/github-runners/sealed-3/.cargo 0755 ${sealedRunnerUser} ${sealedRunnerUser} -"
-    "d /var/lib/github-runners/sealed-3/work   0755 ${sealedRunnerUser} ${sealedRunnerUser} -"
     # BUN_INSTALL_CACHE_DIR + UV_CACHE_DIR are intentionally NOT listed
     # here — both `bun install` and `uv` create their cache dirs with
     # `mkdir -p` on first use, and the per-instance parent
@@ -581,8 +603,6 @@ in
   services.github-runners = {
     sealed = mkSealedRunner "sealed";
     sealed-2 = mkSealedRunner "sealed-2";
-    sealed-3 = mkSealedRunner "sealed-3";
-    sealed-4 = mkSealedRunner "sealed-4";
   };
 
   # Decrypt the host-bound encrypted PAT into tmpfs at boot. systemd-creds
@@ -686,8 +706,8 @@ in
   # SCCACHE_CACHE_SIZE (500 GiB on-disk, ~1-2 GB resident for the
   # LRU index at that scale) plus inflight compile bytes. 12 GiB
   # hard cap keeps a runaway from squeezing the runner pools while
-  # leaving the server room to handle 4 × 4 = 16 concurrent rustc
-  # clients post-64 GB upgrade.
+  # leaving the server room to handle 2 × 6 = 12 concurrent rustc
+  # clients (post-SEA-680 round-4 drop from 4 × 4 = 16).
   systemd.services.sccache-server = {
     description = "Shared sccache server for self-hosted GitHub runners";
     wantedBy = [ "multi-user.target" ];
@@ -734,10 +754,13 @@ in
       # parallel rustc clients) + the LRU index + cache lookup
       # state, the 4G ceiling was hitting MemoryMax mid-PR.
       #
-      # 64 GB upgrade + restored 4th runner: bumped 8G → 12G to
-      # cover 4 × 4 = 16 concurrent rustc clients. Box-wide math
-      # in serviceOverrides comment above: 4×12G runners + 12G
-      # sccache + ~4G kernel/page-cache ≈ 64 GB physical. A
+      # 64 GB upgrade restored a 4th runner (jobs=4); SEA-680 round-4
+      # then dropped back to 2 runners (jobs=6) after loadtest data
+      # showed N=4 was a net throughput LOSS once contention-induced
+      # flakes were factored in. 12G sccache cap covers the post-
+      # round-4 2 × 6 = 12 concurrent rustc clients. Box-wide math
+      # in serviceOverrides comment above: 2×20G runners + 12G
+      # sccache + ~12G kernel/page-cache ≈ 64 GB physical. A
       # genuinely-leaked compile result still can't squeeze the
       # runner pools because the hard ceiling kicks in at 12G.
       MemoryHigh = "10G";
