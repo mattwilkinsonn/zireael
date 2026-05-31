@@ -18,7 +18,7 @@ pub mod worktree;
 
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::FromArgMatches;
 use tracing_subscriber::EnvFilter;
 
 use crate::cli::{Cli, Command};
@@ -39,7 +39,31 @@ pub fn run() -> ExitCode {
     use clap::CommandFactory;
     clap_complete::CompleteEnv::with_factory(Cli::command).complete();
 
-    let cli = Cli::parse();
+    // Dispatch CLI parsing through a command whose `name` matches the
+    // invoked binary name (argv[0]'s file_name). Both `jj-hooks` and
+    // `jj-hp` share this entrypoint, so without this swap clap's
+    // `#[command(name = "jj-hooks")]` would make `jj-hp --version` print
+    // `jj-hooks 0.3.x` — wrong identifier, and the homebrew tap formula
+    // test catches it. Bonus: `--help` headers are also self-correct.
+    let bin_name = std::env::args()
+        .next()
+        .and_then(|arg0| {
+            std::path::Path::new(&arg0)
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "jj-hooks".into());
+    // clap's `Command::name`/`bin_name` require `Into<Str>` which only
+    // accepts `&'static str` (not `&str` with a shorter lifetime). The
+    // `bin_name` String is built from argv[0] at runtime; leak it once
+    // so the slice satisfies the lifetime bound. The leak is process-
+    // lifetime (one allocation per `run()` call, which is at most one
+    // per process), so it's effectively free.
+    let bin_name_static: &'static str = Box::leak(bin_name.into_boxed_str());
+    let cmd = Cli::command()
+        .name(bin_name_static)
+        .bin_name(bin_name_static);
+    let cli = Cli::from_arg_matches(&cmd.get_matches()).unwrap_or_else(|e| e.exit());
 
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
