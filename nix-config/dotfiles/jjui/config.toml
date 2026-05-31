@@ -1,3 +1,6 @@
+[revisions]
+template = "builtin_log_compact"
+
 [[actions]]
 lua = """
   jj_async("util", "exec", "--", "jj-hp", "push")

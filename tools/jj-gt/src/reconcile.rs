@@ -44,6 +44,32 @@ pub struct ReconcileReport {
     pub push_errors: Vec<String>,
 }
 
+/// Filter the tracked-bookmark set down to "adjacent bookmarks
+/// reconcile should consider re-tracking." Two exclusions:
+///
+/// - Trunk itself. `gt track <trunk> --parent <trunk>` errors with
+///   "Cannot set parent of <trunk> to itself!" because gt's
+///   tracking metadata classifies trunk as the root of every
+///   stack, not a tracked branch. Including it would abort the
+///   reconcile step on every submit (regression from PR-G that hit
+///   in the wild).
+/// - The submit-stack `skip` set. The in-stack track loop already
+///   handled those; re-running here would be redundant work.
+///
+/// Pure function so the test suite can pin the filter without
+/// spinning up a workspace.
+pub fn filter_adjacent_targets(
+    tracked: &std::collections::BTreeSet<String>,
+    trunk: &str,
+    skip: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    tracked
+        .iter()
+        .filter(|name| name.as_str() != trunk && !skip.contains(name.as_str()))
+        .cloned()
+        .collect()
+}
+
 /// Re-track local bookmarks whose jj-derived parent differs from
 /// gt's recorded parent. Closes #4.
 ///
@@ -65,10 +91,7 @@ pub fn retrack_adjacent_diverged(
     skip: &std::collections::BTreeSet<String>,
 ) -> Result<(usize, Vec<String>)> {
     let tracked = jj::list_tracked_bookmarks_on_remote(jj, &opts.remote).unwrap_or_default();
-    let adjacent: Vec<String> = tracked
-        .into_iter()
-        .filter(|name| !skip.contains(name))
-        .collect();
+    let adjacent = filter_adjacent_targets(&tracked, &opts.trunk, skip);
 
     if adjacent.is_empty() {
         return Ok((0, Vec::new()));
@@ -244,4 +267,68 @@ pub fn run_reconcile_subcommand(
 
     let _ = reconcile(jj, &workspace_root, &opts, &selected, &push_set, verbosity)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(items: &[&str]) -> std::collections::BTreeSet<String> {
+        items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn filter_adjacent_excludes_trunk() {
+        // Regression: gt's `list_tracked_bookmarks_on_remote`
+        // returns the trunk bookmark when it's tracked on the
+        // remote. We must skip it — `gt track main --parent main`
+        // errors with "Cannot set parent of main to itself!".
+        let tracked = names(&["main", "feature-a", "feature-b"]);
+        let out = filter_adjacent_targets(&tracked, "main", &names(&[]));
+        assert!(
+            !out.contains(&"main".to_owned()),
+            "trunk should not be in adjacent set, got {out:?}",
+        );
+        // The non-trunk entries should be retained.
+        assert!(out.contains(&"feature-a".to_owned()));
+        assert!(out.contains(&"feature-b".to_owned()));
+    }
+
+    #[test]
+    fn filter_adjacent_excludes_skip_set() {
+        // The submit-stack bookmarks ARE in the tracked set (the
+        // in-stack track loop just put them there), but reconcile
+        // shouldn't re-process them.
+        let tracked = names(&["main", "feature-tip", "feature-mid", "other-feature"]);
+        let skip = names(&["feature-tip", "feature-mid"]);
+        let out = filter_adjacent_targets(&tracked, "main", &skip);
+        // Only "other-feature" — main is trunk, the others are
+        // in skip.
+        assert_eq!(out, vec!["other-feature".to_owned()]);
+    }
+
+    #[test]
+    fn filter_adjacent_excludes_trunk_under_alternate_name() {
+        // Pin that the trunk filter is name-based, not hardcoded
+        // to `main`. A repo whose default branch is `master` or
+        // `trunk` should still be excluded.
+        let tracked = names(&["master", "feature"]);
+        let out = filter_adjacent_targets(&tracked, "master", &names(&[]));
+        assert_eq!(out, vec!["feature".to_owned()]);
+    }
+
+    #[test]
+    fn filter_adjacent_no_overlap_returns_everything() {
+        let tracked = names(&["a", "b", "c"]);
+        let out = filter_adjacent_targets(&tracked, "main", &names(&[]));
+        // Order is BTreeSet alphabetical (since we collect from
+        // the input set's iter).
+        assert_eq!(out, vec!["a".to_owned(), "b".to_owned(), "c".to_owned()]);
+    }
+
+    #[test]
+    fn filter_adjacent_empty_input_returns_empty() {
+        let out = filter_adjacent_targets(&names(&[]), "main", &names(&[]));
+        assert!(out.is_empty());
+    }
 }
