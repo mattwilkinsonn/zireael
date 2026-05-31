@@ -1,6 +1,6 @@
 {
 	"name": "akiflow-cli",
-	"version": "0.3.1",
+	"version": "0.3.2",
 	"description": "Akiflow CLI - Task management from the command line",
 	"author": "YeonGyu Kim <code.yeongyu@gmail.com>",
 	"license": "MIT",
