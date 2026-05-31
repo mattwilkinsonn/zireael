@@ -44,8 +44,12 @@ pub enum Command {
     /// because there's no other mode. `jj-gt submit -b head` walks
     /// back through every bookmark between `head` and trunk,
     /// tracks them with gt in bottom→top order, and pushes the
-    /// whole stack via `gt submit --stack`. To restrict the submit
-    /// to a subset, name each bookmark with its own `-b` flag.
+    /// whole stack via `gt submit --stack`. Multiple `-b` flags
+    /// for unrelated tips submit each as its own independent stack
+    /// — `jj-gt submit -b a -b b` where `a` and `b` sit on
+    /// disjoint chains rooted at trunk fans out to two
+    /// `gt submit --stack` calls, one per tip. To submit a subset
+    /// of a single stack, name each bookmark with its own `-b` flag.
     Submit {
         #[command(flatten)]
         bookmarks: BookmarkArgs,

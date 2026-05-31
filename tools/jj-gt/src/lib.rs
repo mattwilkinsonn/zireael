@@ -176,15 +176,39 @@ fn submit_cmd(
     // `select::expand_ancestors_for_submit` for the rationale.
     let expanded = select::expand_ancestors_for_submit(jj, &selected, &trunk)?;
     let stacked = stack::derive_parents(jj, &expanded, &trunk)?;
-    let tip = stack::find_tip(&stacked)?;
-    let stacked_sorted = stack::sort_for_tracking(&stacked);
+    // Partition into independent stacks. One tip → one stack; N
+    // unrelated tips → N stacks, each fully expanded back to trunk.
+    // Each partition is bottom→top sorted ready for `gt track`.
+    let partitions = stack::partition_stacks(&stacked)?;
+    if partitions.is_empty() {
+        return Err(JjGtError::NoBookmarksSelected);
+    }
+    // Flat union of every bookmark across all partitions — used for
+    // the shared pre-push hook batch and the reconcile step (both
+    // are workspace-global concerns, not per-stack).
+    let all_sorted: Vec<stack::StackedBookmark> =
+        partitions.iter().flat_map(|p| p.iter().cloned()).collect();
+    let stack_count = partitions.len();
+    let tips: Vec<String> = partitions
+        .iter()
+        .filter_map(|p| p.last().map(|sb| sb.name.clone()))
+        .collect();
 
-    ui::section(&format!(
-        "Submitting stack to {} (tip: {tip})",
-        bookmarks.remote
-    ));
+    if stack_count == 1 {
+        ui::section(&format!(
+            "Submitting stack to {} (tip: {})",
+            bookmarks.remote, tips[0]
+        ));
+    } else {
+        ui::section(&format!(
+            "Submitting {} independent stacks to {} (tips: {})",
+            stack_count,
+            bookmarks.remote,
+            tips.join(", "),
+        ));
+    }
 
-    // 1. Export jj bookmarks → git refs (idempotent).
+    // 1. Export jj bookmarks → git refs (idempotent, shared).
     if !no_export {
         let step = ui::Step::start("Exporting jj bookmarks to git refs", verbosity);
         match jj::git_export(jj) {
@@ -196,44 +220,65 @@ fn submit_cmd(
         }
     }
 
-    // 2. Hook gate. Two paths:
+    // 2. Hook gate across ALL bookmarks in all partitions. Sharing
+    // the batch keeps the parallel runner's worktree pool warm
+    // across the whole stack set rather than spinning fresh
+    // worktrees per partition; correctness is unaffected because
+    // each BookmarkUpdate is independent.
     //
-    //   - Per-bookmark (default): one `BookmarkUpdate` per
-    //     bookmark in the stack, each with its own (parent_tip,
-    //     this_tip) diff range. Matches what git's `pre-push`
-    //     hook receives on stdin for a multi-bookmark push and
-    //     catches the "B has a fmt violation, C fixes it" failure
-    //     mode that a single trunk..tip run would hide.
-    //
-    //   - Tip-only (`--hooks-tip-only`): single run over the full
-    //     trunk..tip range. Faster on cold caches; pre-PR-B
-    //     default. Recovery flag for trusted stacks.
-    //
-    // Parallelism: per-bookmark runs default to parallel via
-    // jj_hooks::run_for_updates_parallel (one ephemeral worktree
-    // per bookmark, output captured + replayed). `--hooks-sequential`
-    // forces serial execution with live output. Single-bookmark
-    // stacks always use the sequential path so the user sees the
-    // live runner progress bar.
+    // `hooks_tip_only` collapses to one run per stack tip (the
+    // ancestor merge-base is each stack's trunk-rooted ancestor).
+    // Otherwise per-bookmark BookmarkUpdates fan out.
     if !no_hooks {
         let trunk_commit = jj::resolve_commit_id(jj, &trunk)?;
-        let tip_commit = jj::resolve_commit_id(jj, &tip)?;
         let opts = hooks::HookOpts {
             runner_override: hk_runner.map(Into::into),
         };
 
-        if hooks_tip_only || stacked_sorted.len() == 1 {
-            let label = if hooks_tip_only {
-                format!("Running pre-push hooks against {trunk}..{tip} (tip-only)")
-            } else {
-                format!("Running pre-push hooks against {trunk}..{tip}")
-            };
+        if hooks_tip_only {
+            // One run per stack tip (trunk..tip range each), still
+            // captures intermediate-commit failures when there's
+            // only one bookmark per stack.
+            for partition in &partitions {
+                let Some(tip_sb) = partition.last() else {
+                    continue;
+                };
+                let tip_commit = jj::resolve_commit_id(jj, &tip_sb.name)?;
+                let label = format!(
+                    "Running pre-push hooks against {trunk}..{} (tip-only)",
+                    tip_sb.name
+                );
+                let step = ui::Step::start(&label, verbosity);
+                match hooks::run_pre_push(
+                    jj,
+                    &workspace_root,
+                    &bookmarks.remote,
+                    &tip_sb.name,
+                    &trunk_commit,
+                    &tip_commit,
+                    &opts,
+                ) {
+                    Ok(()) => step.success("clean", None),
+                    Err(e) => {
+                        step.fail(&format!("{e}"), None);
+                        return Err(e);
+                    }
+                }
+            }
+        } else if all_sorted.len() == 1 {
+            // Single bookmark, single stack — use the unbatched
+            // path so the user sees the runner's live progress
+            // bar (the batch API forces capture, which is the
+            // right trade for N>1 but unnecessary for N=1).
+            let tip_sb = &all_sorted[0];
+            let tip_commit = jj::resolve_commit_id(jj, &tip_sb.name)?;
+            let label = format!("Running pre-push hooks against {trunk}..{}", tip_sb.name);
             let step = ui::Step::start(&label, verbosity);
             match hooks::run_pre_push(
                 jj,
                 &workspace_root,
                 &bookmarks.remote,
-                &tip,
+                &tip_sb.name,
                 &trunk_commit,
                 &tip_commit,
                 &opts,
@@ -245,25 +290,30 @@ fn submit_cmd(
                 }
             }
         } else {
-            // Resolve each bookmark's tip commit so per-bookmark
-            // BookmarkUpdates have real OIDs (no synthesis layer
-            // — same rationale that motivated resolve_commit_id
-            // for the single-update path).
-            let mut stack_tips: Vec<(String, String)> = Vec::with_capacity(stacked_sorted.len());
-            for sb in &stacked_sorted {
-                let tip_oid = jj::resolve_commit_id(jj, &sb.name)?;
-                stack_tips.push((sb.name.clone(), tip_oid));
+            // Per-bookmark gate across ALL bookmarks in all
+            // partitions. For each bookmark we need (parent_tip,
+            // this_tip) — within a partition, parent_tip is the
+            // previous bookmark's tip; for each partition's
+            // root bookmark, parent_tip is trunk.
+            let mut stack_tips: Vec<(String, String)> = Vec::with_capacity(all_sorted.len());
+            for partition in &partitions {
+                for sb in partition {
+                    let tip_oid = jj::resolve_commit_id(jj, &sb.name)?;
+                    stack_tips.push((sb.name.clone(), tip_oid));
+                }
             }
             let parallel = !hooks_sequential;
             let label = if parallel {
                 format!(
-                    "Running pre-push hooks per-bookmark (parallel, {} bookmarks)",
-                    stack_tips.len()
+                    "Running pre-push hooks per-bookmark (parallel, {} bookmarks across {} stack(s))",
+                    stack_tips.len(),
+                    stack_count,
                 )
             } else {
                 format!(
-                    "Running pre-push hooks per-bookmark (sequential, {} bookmarks)",
-                    stack_tips.len()
+                    "Running pre-push hooks per-bookmark (sequential, {} bookmarks across {} stack(s))",
+                    stack_tips.len(),
+                    stack_count,
                 )
             };
             let step = ui::Step::start(&label, verbosity);
@@ -285,29 +335,40 @@ fn submit_cmd(
         }
     }
 
-    // 3. gt track per (bookmark, parent). Must be bottom→top because
-    // `gt track <child> --parent <parent>` errors if `<parent>` isn't
-    // already tracked.
-    for sb in &stacked_sorted {
-        let parent = sb.parent.as_branch_name(&trunk);
-        let step = ui::Step::start(
-            &format!("Tracking {} (parent: {})", sb.name, parent),
-            verbosity,
-        );
-        if submit.dry_run {
-            step.skip("dry-run", None);
-        } else {
-            match gt::track(&workspace_root, &sb.name, parent) {
-                Ok(()) => step.success("", None),
-                Err(e) => {
-                    step.fail(&format!("{e}"), None);
-                    return Err(e);
+    // 3. gt track per (bookmark, parent), per partition. Bottom→top
+    // ordering within each partition; partitions themselves are
+    // independent so ordering between them doesn't matter.
+    for (idx, partition) in partitions.iter().enumerate() {
+        if stack_count > 1 {
+            ui::section(&format!(
+                "Stack {}/{stack_count}: tracking {} bookmark(s)",
+                idx + 1,
+                partition.len(),
+            ));
+        }
+        for sb in partition {
+            let parent = sb.parent.as_branch_name(&trunk);
+            let step = ui::Step::start(
+                &format!("Tracking {} (parent: {})", sb.name, parent),
+                verbosity,
+            );
+            if submit.dry_run {
+                step.skip("dry-run", None);
+            } else {
+                match gt::track(&workspace_root, &sb.name, parent) {
+                    Ok(()) => step.success("", None),
+                    Err(e) => {
+                        step.fail(&format!("{e}"), None);
+                        return Err(e);
+                    }
                 }
             }
         }
     }
 
-    // 4. Record @ for restoration.
+    // 4. Record @ for restoration (shared across all submits — gt's
+    // git-push triggers a ref-import that can shift @ once, not N
+    // times).
     let saved_change_id = if no_restore_cwc {
         None
     } else {
@@ -315,23 +376,12 @@ fn submit_cmd(
     };
 
     // 4.5. Reconcile gt's tracking metadata + push rebased SHAs
-    // before handing off to `gt submit`. Closes #4 + #5 via the
-    // shared `reconcile` module.
-    //
-    // - retrack adjacent: gt's submit scans EVERY local tracked
-    //   bookmark's metadata and aborts on stale-parent ones — even
-    //   bookmarks NOT in the user's selection. Re-issuing
-    //   `gt track` for adjacents brings their metadata in line
-    //   with jj's current view.
-    //
-    // - push rebased tips: when the user did a `jj rebase` on
-    //   their stack, the local SHAs shifted but remote-tracking
-    //   refs still point at pre-rebase commits. `gt submit` would
-    //   bail with "Branch X has been updated remotely". jj's
-    //   force-with-lease push brings remote in sync without
-    //   bypassing legitimate collaborator-race detection.
+    // across ALL stacks in one pass. Closes #4 + #5. Workspace-
+    // global by design (adjacent re-track is "every tracked
+    // bookmark not in our skip set"); running it once per stack
+    // would re-track the same adjacents N times.
     if !submit.dry_run {
-        let stack_names: Vec<String> = stacked_sorted.iter().map(|sb| sb.name.clone()).collect();
+        let stack_names: Vec<String> = all_sorted.iter().map(|sb| sb.name.clone()).collect();
         let reconcile_opts = reconcile::ReconcileOpts {
             remote: bookmarks.remote.clone(),
             trunk: trunk.clone(),
@@ -345,43 +395,45 @@ fn submit_cmd(
             &stack_names,
             verbosity,
         ) {
-            // Reconciliation surface area is wide (touches every
-            // tracked bookmark + pushes the stack); a failure here
-            // shouldn't auto-abort the submit because gt's own
-            // submit will surface a clearer error if reconciliation
-            // missed something material. Just warn.
             tracing::warn!("jj-gt: reconcile step failed: {e}");
         }
     }
 
-    // 5. gt submit --stack --branch <tip>.
-    let submit_step = ui::Step::start(
-        &format!("Submitting stack via `gt submit --stack --branch {tip}`"),
-        verbosity,
-    );
-    let argv = gt::build_submit_argv(&tip, &submit);
-    if submit.dry_run {
-        submit_step.skip(&format!("dry-run: gt {}", argv.join(" ")), None);
-    } else {
-        match gt::submit(&workspace_root, &argv) {
-            Ok(()) => submit_step.success("PRs created/updated", None),
-            Err(e) => {
-                submit_step.fail(&format!("{e}"), None);
-                return Err(e);
+    // 5. gt submit --stack --branch <tip>, once per partition.
+    // Aborts on the first failure — partitions already submitted
+    // stay submitted (gt has no rollback; we don't either).
+    for (idx, partition) in partitions.iter().enumerate() {
+        let Some(tip_sb) = partition.last() else {
+            continue;
+        };
+        let tip = &tip_sb.name;
+        let label = if stack_count == 1 {
+            format!("Submitting stack via `gt submit --stack --branch {tip}`")
+        } else {
+            format!(
+                "Submitting stack {}/{stack_count} via `gt submit --stack --branch {tip}`",
+                idx + 1
+            )
+        };
+        let submit_step = ui::Step::start(&label, verbosity);
+        let argv = gt::build_submit_argv(tip, &submit);
+        if submit.dry_run {
+            submit_step.skip(&format!("dry-run: gt {}", argv.join(" ")), None);
+        } else {
+            match gt::submit(&workspace_root, &argv) {
+                Ok(()) => submit_step.success("PRs created/updated", None),
+                Err(e) => {
+                    submit_step.fail(&format!("{e}"), None);
+                    return Err(e);
+                }
             }
         }
     }
 
-    // 6. Track each pushed bookmark so jj's `untracked_remote_bookmarks()`
-    // (part of the default `immutable_heads()` revset) doesn't freeze
-    // the commits we just submitted. See jj::track_bookmark_on_remote
-    // for the full rationale; short version: `gt submit` shells out
-    // to raw `git push`, jj never sees that push, and the next jj
-    // op imports the new `refs/remotes/<remote>/*` refs as
-    // untracked → ancestors flip immutable → users can't amend
-    // their just-pushed commits.
-    //
-    // Skip bookmarks already tracked (typical re-submit case).
+    // 6. Track each pushed bookmark with jj so the next op doesn't
+    // import the remote ref as untracked. See
+    // jj::track_bookmark_on_remote for the rationale. Single pass
+    // across all stacks — the operation is workspace-global.
     if !submit.dry_run {
         let track_step = ui::Step::start("Tracking pushed bookmarks with jj", verbosity);
         let already_tracked =
@@ -389,7 +441,7 @@ fn submit_cmd(
         let mut tracked = 0usize;
         let mut skipped = 0usize;
         let mut errors: Vec<String> = Vec::new();
-        for sb in &stacked_sorted {
+        for sb in &all_sorted {
             if already_tracked.contains(&sb.name) {
                 skipped += 1;
                 continue;
