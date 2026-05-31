@@ -360,6 +360,36 @@ pub fn is_ancestor(workspace_root: &Path, ancestor: &str, descendant: &str) -> R
     }
 }
 
+/// `jj git push --remote <remote> --bookmark <bookmark>
+///  --ignore-working-copy`. Used by `submit_cmd` to bring the remote
+/// in sync with a locally-rebased stack BEFORE handing off to
+/// `gt submit` — gt's "branch updated remotely" check would otherwise
+/// abort on the first bookmark whose local SHA differs from remote.
+///
+/// jj's `git push` is force-with-lease by default: it pushes when the
+/// local bookmark has diverged from what jj last fetched, but ONLY if
+/// the remote's current state still matches what jj last saw
+/// (preventing the "collaborator pushed something I haven't fetched"
+/// race). The natural shape we want.
+///
+/// `--ignore-working-copy` matches the rest of this module — the
+/// push is a refs-only operation and we don't want it to snapshot.
+pub fn git_push_bookmark(jj: &JjCli, remote: &str, bookmark: &str) -> Result<()> {
+    let _ = jj_run(
+        jj,
+        &[
+            "git",
+            "push",
+            "--remote",
+            remote,
+            "--bookmark",
+            bookmark,
+            "--ignore-working-copy",
+        ],
+    )?;
+    Ok(())
+}
+
 /// Outcome of a `jj rebase` invocation that exits 0 — broken out
 /// because jj treats "rebased successfully but the result contains
 /// conflict markers" as a success exit code, and the only signal is
