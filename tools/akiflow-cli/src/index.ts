@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { defineCommand, runMain } from "citty";
+import pkg from "../package.json" with { type: "json" };
 import { add } from "./commands/add";
 import { authCommand } from "./commands/auth";
 import { block } from "./commands/block";
@@ -27,7 +28,15 @@ const main = defineCommand({
 	meta: {
 		name: "af",
 		description: "Akiflow CLI - Task management and automation",
-		version: "0.1.1",
+		// Version comes from package.json so `af --version` matches the
+		// release the binary was built from. The `just release` recipe
+		// bumps `tools/akiflow-cli/package.json:version` in lockstep
+		// with the workspace Cargo.toml + Formula/*.rb files, and bun's
+		// `--compile` bundles the json import into the binary at build
+		// time. Without this, the version was hardcoded and silently
+		// drifted from the release tag — homebrew tap formula tests
+		// caught it on v0.3.3.
+		version: pkg.version,
 	},
 	subCommands: {
 		add,
