@@ -23,6 +23,9 @@ pub struct FetchOpts {
     pub no_gtmq_prune: bool,
     pub gtmq_prefixes: Vec<String>,
     pub auto: bool,
+    /// Bypass the uncommitted-changes refusal. See
+    /// [`crate::cli::Command::Fetch::force_with_changes`].
+    pub force_with_changes: bool,
     pub dry_run: bool,
 }
 
@@ -36,6 +39,7 @@ impl Default for FetchOpts {
             no_gtmq_prune: false,
             gtmq_prefixes: vec!["gtmq_".into()],
             auto: false,
+            force_with_changes: false,
             dry_run: false,
         }
     }
@@ -178,6 +182,35 @@ pub fn run_fetch(
     verbosity: crate::ui::Verbosity,
 ) -> Result<Vec<(LocalBookmark, CleanupAction)>> {
     use crate::ui;
+
+    // 0a. Acquire the cooperative pipeline lock. Blocks other
+    // `jj-gt fetch` / `jj-gt submit` invocations from racing this
+    // one's gt-sync → jj-import → rebase pipeline. The lock is
+    // released on function exit (or panic). Does not block plain
+    // `jj` operations in other shells — see crate::lock for the
+    // scope rationale.
+    let _lock = if opts.dry_run {
+        // Dry-run doesn't mutate refs; no need to fight other
+        // invocations for the lock.
+        None
+    } else {
+        Some(crate::lock::PipelineLock::acquire(workspace_root)?)
+    };
+
+    // 0b. Refuse to run with uncommitted working-copy edits unless
+    // the user explicitly opted in. Concurrent jj operations during
+    // the pipeline (or the snapshotting jj does as a side effect
+    // of other commands the user runs from another shell) can
+    // produce divergent commits that silently lose those edits.
+    // See issue #1 for the full damage shape.
+    if !opts.force_with_changes && !opts.dry_run && jj::has_uncommitted_changes(jj)? {
+        return Err(crate::error::JjGtError::Invalid(
+            "workspace has uncommitted working-copy edits. \
+             Commit or describe them before running `jj-gt fetch`, \
+             or pass --force-with-changes to proceed anyway."
+                .into(),
+        ));
+    }
 
     // 1. Fetch.
     let fetch_step = ui::Step::start(&format!("Fetching from {}", opts.remote), verbosity);
