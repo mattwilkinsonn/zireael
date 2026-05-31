@@ -121,6 +121,41 @@ fn hooks_sequential_conflicts_with_hooks_tip_only() {
 }
 
 #[test]
+fn reconcile_subcommand_in_help() {
+    // PR-G added `jj-gt reconcile` as the standalone umbrella for
+    // the #4 + #5 reconciliation steps. Pin that it surfaces in
+    // the top-level help.
+    let out = Command::new(bin()).args(["--help"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("reconcile"),
+        "missing 'reconcile' subcommand in --help:\n{stdout}",
+    );
+}
+
+#[test]
+fn reconcile_help_documents_push_and_dry_run() {
+    let out = Command::new(bin())
+        .args(["reconcile", "--help"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--push"), "missing --push:\n{stdout}");
+    assert!(stdout.contains("--dry-run"), "missing --dry-run:\n{stdout}");
+    assert!(stdout.contains("--remote"), "missing --remote:\n{stdout}");
+}
+
+#[test]
 fn completions_zsh_emits_script() {
     let out = Command::new(bin())
         .args(["completions", "zsh"])
