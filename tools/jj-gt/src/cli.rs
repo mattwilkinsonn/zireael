@@ -38,6 +38,14 @@ pub struct Cli {
 pub enum Command {
     /// Track + submit selected bookmarks as a stack (drives
     /// `gt submit --stack` end-to-end).
+    ///
+    /// The full ancestor chain from trunk up to each `-b <tip>` is
+    /// submitted automatically — there's no separate `--stack` flag
+    /// because there's no other mode. `jj-gt submit -b head` walks
+    /// back through every bookmark between `head` and trunk,
+    /// tracks them with gt in bottom→top order, and pushes the
+    /// whole stack via `gt submit --stack`. To restrict the submit
+    /// to a subset, name each bookmark with its own `-b` flag.
     Submit {
         #[command(flatten)]
         bookmarks: BookmarkArgs,
