@@ -165,31 +165,39 @@ bash /run/media/*/Ventoy/home-manager/nixos/scripts/mattserver-bootstrap.sh
 > them.
 
 The four runner instances (`sealed`, `sealed-2`, `sealed-3`, `sealed-4`)
-share a single org-scoped token at `/etc/github-runner/sealed-token`,
-which must exist *before* `enableRunners` flips to `true` or
-`nixos-rebuild` will fail trying to start services with no token on
-disk.
+share a single org-scoped token. The plaintext PAT is encrypted at rest
+via `systemd-creds` (host-bound — only this box's machine ID can
+decrypt) and decrypted into tmpfs (`/run/github-runner/sealed-token`)
+at boot by `decrypt-runner-token.service`. The encrypted file at
+`/etc/github-runner/sealed-token.cred` must exist *before*
+`enableRunners` flips to `true` or `nixos-rebuild` will fail trying to
+start services with no token to decrypt.
 
 Token scope:
 
-| Runner pool | Token file | PAT scope |
-| ----------- | ---------- | --------- |
-| `sealed`, `sealed-2`, `sealed-3`, `sealed-4` | `/etc/github-runner/sealed-token` | `manage_runners:org` (fine-grained) or `admin:org` (classic) |
+| Runner pool | Encrypted file | PAT scope |
+| ----------- | -------------- | --------- |
+| `sealed`, `sealed-2`, `sealed-3`, `sealed-4` | `/etc/github-runner/sealed-token.cred` | `manage_runners:org` (fine-grained) or `admin:org` (classic) |
 
 Create a fine-grained PAT scoped to the sealedsecurity org at
 <https://github.com/organizations/sealedsecurity/settings/personal-access-tokens>.
-Then write it:
+Then encrypt it with the helper script (prompts for the token, writes
+the host-bound .cred file, optionally shreds any pre-existing
+plaintext):
 
 ```bash
-sudo mkdir -p /etc/github-runner
-sudo install -m 600 -o root -g root \
-  /dev/stdin /etc/github-runner/sealed-token <<< 'ghp_...'
+sudo bash ~/repos/zireael/nix-config/nixos/scripts/mattserver-encrypt-runner-token.sh
 ```
 
-The runner service starts as root and reads the file before dropping
-privileges, so the runner user groups (`github-runner-sealed`, etc.)
-don't need read access — and they don't exist yet on a fresh install
-where `enableRunners` is still false.
+The script verifies the decrypt path before exiting, so a successful
+run means the runner units will pick up the same plaintext at boot.
+
+> **Why systemd-creds instead of a plaintext token file:** the .cred
+> file is decryptable only by this host (encryption is bound to the
+> machine ID), so an attacker who exfiltrates `/etc/github-runner/`
+> off the box gets a useless blob. The plaintext only ever lives in
+> tmpfs after decrypt — it disappears on shutdown. Same pattern the
+> Pi uses for `op-pi-svc-token.cred`.
 
 Now flip `enableRunners = true;` in `nixos/mattserver/system.nix` and
 rebuild — all four runner services come up registered:
@@ -197,6 +205,7 @@ rebuild — all four runner services come up registered:
 ```bash
 nix-switch
 sudo systemctl status \
+  decrypt-runner-token \
   github-runner-sealed \
   github-runner-sealed-2 \
   github-runner-sealed-3 \
@@ -207,12 +216,21 @@ Confirm the four runners appear at
 <https://github.com/organizations/sealedsecurity/settings/actions/runners>
 with labels `[self-hosted, Linux, X64, seal-linux-x64, mattserver]`.
 
-If you're migrating from the older personal+sealed runner layout, the
-`/etc/github-runner/personal-token` file from that setup is no longer
-referenced — clean it up:
+If you're migrating from an earlier plaintext layout, clean up the
+leftover files:
 
 ```bash
-sudo rm -f /etc/github-runner/personal-token
+sudo shred -u /etc/github-runner/sealed-token         # plaintext PAT
+sudo rm -f   /etc/github-runner/personal-token        # pre-2026 split
+```
+
+To rotate the PAT, re-run the encrypt script with the new token and
+restart the decrypt + runner units:
+
+```bash
+sudo bash ~/repos/zireael/nix-config/nixos/scripts/mattserver-encrypt-runner-token.sh
+sudo systemctl restart decrypt-runner-token.service
+sudo systemctl restart 'github-runner-sealed*.service'
 ```
 
 To later expand the pool (sealed-5, etc.), edit

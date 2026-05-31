@@ -52,7 +52,14 @@ let
   mkSealedRunner = name: {
     enable = enableRunners;
     url = "https://github.com/sealedsecurity";
-    tokenFile = "/etc/github-runner/sealed-token";
+    # Decrypt-at-boot path — `decrypt-runner-token.service` below
+    # decrypts /etc/github-runner/sealed-token.cred (host-bound via
+    # systemd-creds, plaintext token never touches disk persistently)
+    # into this tmpfs location before any runner unit starts. The
+    # github-runner module's configure script reads the path literally
+    # via `install --mode=…`, so it has to exist at unit start —
+    # ordering enforced by the `Requires=`/`After=` overrides below.
+    tokenFile = "/run/github-runner/sealed-token";
 
     # Pin to a static user so the shared dirs in
     # /var/lib/github-runners/shared/ have a stable owner. The
@@ -559,14 +566,93 @@ in
   # (classic). The org-level URL below means runners pick up jobs from any
   # sealedsecurity repo (seal, sealed, etc.) without per-repo registration.
   #
-  # Write token file after first boot (see INSTALL.md):
-  #   sudo install -m 600 -o root -g root \
-  #     /dev/stdin /etc/github-runner/sealed-token <<< 'ghp_...'
+  # Provisioning: encrypt the PAT once on the host (input prompts for
+  # the token, output is host-bound via systemd-creds machine-ID
+  # encryption):
+  #
+  #   sudo bash nixos/scripts/mattserver-encrypt-runner-token.sh
+  #
+  # That writes /etc/github-runner/sealed-token.cred. The
+  # decrypt-runner-token.service oneshot below decrypts it to
+  # /run/github-runner/sealed-token (tmpfs, mode 600, owned by
+  # sealed-runner) before any runner unit starts. Plaintext never
+  # touches persistent storage after the bootstrap step.
   services.github-runners = {
     sealed = mkSealedRunner "sealed";
     sealed-2 = mkSealedRunner "sealed-2";
     sealed-3 = mkSealedRunner "sealed-3";
     sealed-4 = mkSealedRunner "sealed-4";
+  };
+
+  # Decrypt the host-bound encrypted PAT into tmpfs at boot. systemd-creds
+  # decrypt + machine-ID-bound encryption means:
+  #   - The .cred file at rest can't be decrypted off-host (rsync attack).
+  #   - The plaintext lives in /run (tmpfs), so it disappears on shutdown.
+  #   - File mode 0600 owned by the runner user means only that user (and
+  #     root) can read the decrypted token.
+  #
+  # `Type=oneshot, RemainAfterExit=true` so the unit stays "active" after
+  # the decrypt finishes — the runner units' `Requires=` won't fire a
+  # restart of an active unit, and `After=` correctly orders the runners
+  # behind it on every boot.
+  #
+  # `+` prefix on ExecStart runs as root (needed for systemd-creds decrypt
+  # against the host machine-ID key); the install command then chowns the
+  # plaintext to sealed-runner so the runner service can read its
+  # tokenFile.
+  systemd.services.decrypt-runner-token = {
+    description = "Decrypt the GitHub Actions runner PAT into /run";
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      RuntimeDirectory = "github-runner";
+      RuntimeDirectoryMode = "0750";
+      RuntimeDirectoryPreserve = true;
+      ExecStart = [
+        ''
+          +${pkgs.writeShellScript "decrypt-runner-token" ''
+            set -euo pipefail
+            ${pkgs.systemd}/bin/systemd-creds decrypt \
+              --name=sealed-runner-token \
+              /etc/github-runner/sealed-token.cred \
+              /run/github-runner/sealed-token
+            chown ${sealedRunnerUser}:${sealedRunnerUser} \
+              /run/github-runner/sealed-token
+            chmod 600 /run/github-runner/sealed-token
+          ''}
+        ''
+      ];
+    };
+  };
+
+  # Wire each runner unit to wait for the decrypt to land. `Requires=`
+  # alone isn't enough — it only fires the decrypt if the runner unit
+  # starts before it; `After=` enforces ordering both ways. NixOS
+  # merges these lists with the upstream module's own `after`
+  # (`network.target`, `network-online.target`).
+  #
+  # Each unit gets the same override, so we define them by name. Keep
+  # this list in sync with `services.github-runners` above. We declare
+  # by single-key path (`systemd.services.<name>`) rather than
+  # `systemd.services = { … }` so the NixOS module system merges with
+  # `systemd.services.decrypt-runner-token` (above) and
+  # `systemd.services.sccache-server` (below) instead of conflicting.
+  systemd.services.github-runner-sealed = {
+    after = [ "decrypt-runner-token.service" ];
+    requires = [ "decrypt-runner-token.service" ];
+  };
+  systemd.services.github-runner-sealed-2 = {
+    after = [ "decrypt-runner-token.service" ];
+    requires = [ "decrypt-runner-token.service" ];
+  };
+  systemd.services.github-runner-sealed-3 = {
+    after = [ "decrypt-runner-token.service" ];
+    requires = [ "decrypt-runner-token.service" ];
+  };
+  systemd.services.github-runner-sealed-4 = {
+    after = [ "decrypt-runner-token.service" ];
+    requires = [ "decrypt-runner-token.service" ];
   };
 
   # ============================================================
