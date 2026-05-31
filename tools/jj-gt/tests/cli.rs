@@ -59,6 +59,68 @@ fn submit_help_documents_publish_default() {
 }
 
 #[test]
+fn submit_help_documents_per_bookmark_hook_flags() {
+    // PR-B added --hooks-tip-only and --hooks-sequential as
+    // opt-outs from the default per-bookmark parallel hook gate.
+    // Pin that both surface in `submit --help` so users discover
+    // them.
+    let out = Command::new(bin())
+        .args(["submit", "--help"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("--hooks-tip-only"),
+        "missing --hooks-tip-only in help:\n{stdout}",
+    );
+    assert!(
+        stdout.contains("--hooks-sequential"),
+        "missing --hooks-sequential in help:\n{stdout}",
+    );
+}
+
+#[test]
+fn hooks_tip_only_conflicts_with_no_hooks() {
+    // --no-hooks already skips the gate entirely; --hooks-tip-only
+    // changes the gate's shape. The combination is meaningless;
+    // clap should reject it.
+    let out = Command::new(bin())
+        .args(["submit", "--no-hooks", "--hooks-tip-only", "-b", "main"])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "--no-hooks + --hooks-tip-only should error, but it succeeded",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("cannot be used") || stderr.contains("conflict"),
+        "expected conflict error, got: {stderr}",
+    );
+}
+
+#[test]
+fn hooks_sequential_conflicts_with_hooks_tip_only() {
+    // tip-only is a single hook run; sequential is about HOW to
+    // run N hooks. Combining them is meaningless.
+    let out = Command::new(bin())
+        .args([
+            "submit",
+            "--hooks-tip-only",
+            "--hooks-sequential",
+            "-b",
+            "main",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "--hooks-tip-only + --hooks-sequential should error, but it succeeded",
+    );
+}
+
+#[test]
 fn completions_zsh_emits_script() {
     let out = Command::new(bin())
         .args(["completions", "zsh"])

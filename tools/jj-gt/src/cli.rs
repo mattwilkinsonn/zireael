@@ -64,6 +64,26 @@ pub enum Command {
         #[arg(long)]
         no_hooks: bool,
 
+        /// Run pre-push hooks against the full trunk..tip range
+        /// instead of per-bookmark. Faster — one hook invocation
+        /// instead of N — but hides intermediate-commit failures
+        /// (a fmt violation in commit B that commit C fixes will
+        /// pass when checked against trunk..tip but fail in CI
+        /// which builds each commit independently). Recovery flag.
+        #[arg(long, conflicts_with = "no_hooks")]
+        hooks_tip_only: bool,
+
+        /// Run per-bookmark pre-push hooks sequentially instead of
+        /// in parallel. Default is parallel: one ephemeral worktree
+        /// per bookmark, all hook runners executing concurrently
+        /// (output captured + replayed in completion order). Falls
+        /// back to sequential automatically when the stack has only
+        /// one bookmark. Use this flag when the parallel runs are
+        /// thrashing disk / sccache or you want the live runner
+        /// progress bar for a multi-bookmark stack.
+        #[arg(long, conflicts_with_all = ["no_hooks", "hooks_tip_only"])]
+        hooks_sequential: bool,
+
         /// Force a specific hook runner. Forwarded as the `runner`
         /// arg of `jj_hooks::run_for_revset`.
         #[arg(long, value_enum)]

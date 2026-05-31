@@ -69,6 +69,8 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
             no_export,
             no_restore_cwc,
             no_hooks,
+            hooks_tip_only,
+            hooks_sequential,
             hk_runner,
         } => submit_cmd(
             &jj,
@@ -78,6 +80,8 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
             no_export,
             no_restore_cwc,
             no_hooks,
+            hooks_tip_only,
+            hooks_sequential,
             hk_runner,
             verbosity,
         ),
@@ -138,6 +142,8 @@ fn submit_cmd(
     no_export: bool,
     no_restore_cwc: bool,
     no_hooks: bool,
+    hooks_tip_only: bool,
+    hooks_sequential: bool,
     hk_runner: Option<cli::RunnerArg>,
     verbosity: ui::Verbosity,
 ) -> Result<ExitCode, JjGtError> {
@@ -176,33 +182,91 @@ fn submit_cmd(
         }
     }
 
-    // 2. Hook gate against the full trunk..tip range. Resolve both
-    // ends to commit ids ourselves so we can hand `jj_hooks` a
-    // proper BookmarkUpdate (skipping the synthesis layer that was
-    // historically a bug magnet for multi-commit revsets).
+    // 2. Hook gate. Two paths:
+    //
+    //   - Per-bookmark (default): one `BookmarkUpdate` per
+    //     bookmark in the stack, each with its own (parent_tip,
+    //     this_tip) diff range. Matches what git's `pre-push`
+    //     hook receives on stdin for a multi-bookmark push and
+    //     catches the "B has a fmt violation, C fixes it" failure
+    //     mode that a single trunk..tip run would hide.
+    //
+    //   - Tip-only (`--hooks-tip-only`): single run over the full
+    //     trunk..tip range. Faster on cold caches; pre-PR-B
+    //     default. Recovery flag for trusted stacks.
+    //
+    // Parallelism: per-bookmark runs default to parallel via
+    // jj_hooks::run_for_updates_parallel (one ephemeral worktree
+    // per bookmark, output captured + replayed). `--hooks-sequential`
+    // forces serial execution with live output. Single-bookmark
+    // stacks always use the sequential path so the user sees the
+    // live runner progress bar.
     if !no_hooks {
-        let step = ui::Step::start(
-            &format!("Running pre-push hooks against {trunk}..{tip}"),
-            verbosity,
-        );
         let trunk_commit = jj::resolve_commit_id(jj, &trunk)?;
         let tip_commit = jj::resolve_commit_id(jj, &tip)?;
         let opts = hooks::HookOpts {
             runner_override: hk_runner.map(Into::into),
         };
-        match hooks::run_pre_push(
-            jj,
-            &workspace_root,
-            &bookmarks.remote,
-            &tip,
-            &trunk_commit,
-            &tip_commit,
-            &opts,
-        ) {
-            Ok(()) => step.success("clean", None),
-            Err(e) => {
-                step.fail(&format!("{e}"), None);
-                return Err(e);
+
+        if hooks_tip_only || stacked_sorted.len() == 1 {
+            let label = if hooks_tip_only {
+                format!("Running pre-push hooks against {trunk}..{tip} (tip-only)")
+            } else {
+                format!("Running pre-push hooks against {trunk}..{tip}")
+            };
+            let step = ui::Step::start(&label, verbosity);
+            match hooks::run_pre_push(
+                jj,
+                &workspace_root,
+                &bookmarks.remote,
+                &tip,
+                &trunk_commit,
+                &tip_commit,
+                &opts,
+            ) {
+                Ok(()) => step.success("clean", None),
+                Err(e) => {
+                    step.fail(&format!("{e}"), None);
+                    return Err(e);
+                }
+            }
+        } else {
+            // Resolve each bookmark's tip commit so per-bookmark
+            // BookmarkUpdates have real OIDs (no synthesis layer
+            // — same rationale that motivated resolve_commit_id
+            // for the single-update path).
+            let mut stack_tips: Vec<(String, String)> = Vec::with_capacity(stacked_sorted.len());
+            for sb in &stacked_sorted {
+                let tip_oid = jj::resolve_commit_id(jj, &sb.name)?;
+                stack_tips.push((sb.name.clone(), tip_oid));
+            }
+            let parallel = !hooks_sequential;
+            let label = if parallel {
+                format!(
+                    "Running pre-push hooks per-bookmark (parallel, {} bookmarks)",
+                    stack_tips.len()
+                )
+            } else {
+                format!(
+                    "Running pre-push hooks per-bookmark (sequential, {} bookmarks)",
+                    stack_tips.len()
+                )
+            };
+            let step = ui::Step::start(&label, verbosity);
+            match hooks::run_pre_push_stack(
+                jj,
+                &workspace_root,
+                &bookmarks.remote,
+                &trunk_commit,
+                &stack_tips,
+                parallel,
+                &opts,
+            ) {
+                Ok(()) => step.success("clean", None),
+                Err(e) => {
+                    step.fail(&format!("{e}"), None);
+                    return Err(e);
+                }
             }
         }
     }
