@@ -290,30 +290,30 @@ fn submit_cmd(
                 }
             }
         } else {
-            // Per-bookmark gate across ALL bookmarks in all
-            // partitions. For each bookmark we need (parent_tip,
-            // this_tip) — within a partition, parent_tip is the
-            // previous bookmark's tip; for each partition's
-            // root bookmark, parent_tip is trunk.
-            let mut stack_tips: Vec<(String, String)> = Vec::with_capacity(all_sorted.len());
+            // Per-bookmark gate, grouped by partition so the
+            // fail-fast cancellation token is scoped to each
+            // independent stack (sibling failures inside stack A
+            // don't cancel stack B).
+            let mut partition_tips: Vec<Vec<(String, String)>> =
+                Vec::with_capacity(partitions.len());
+            let mut total_bookmarks = 0usize;
             for partition in &partitions {
+                let mut this_partition: Vec<(String, String)> = Vec::with_capacity(partition.len());
                 for sb in partition {
                     let tip_oid = jj::resolve_commit_id(jj, &sb.name)?;
-                    stack_tips.push((sb.name.clone(), tip_oid));
+                    this_partition.push((sb.name.clone(), tip_oid));
                 }
+                total_bookmarks += this_partition.len();
+                partition_tips.push(this_partition);
             }
             let parallel = !hooks_sequential;
             let label = if parallel {
                 format!(
-                    "Running pre-push hooks per-bookmark (parallel, {} bookmarks across {} stack(s))",
-                    stack_tips.len(),
-                    stack_count,
+                    "Running pre-push hooks per-bookmark (parallel, {total_bookmarks} bookmarks across {stack_count} stack(s))",
                 )
             } else {
                 format!(
-                    "Running pre-push hooks per-bookmark (sequential, {} bookmarks across {} stack(s))",
-                    stack_tips.len(),
-                    stack_count,
+                    "Running pre-push hooks per-bookmark (sequential, {total_bookmarks} bookmarks across {stack_count} stack(s))",
                 )
             };
             let step = ui::Step::start(&label, verbosity);
@@ -322,7 +322,7 @@ fn submit_cmd(
                 &workspace_root,
                 &bookmarks.remote,
                 &trunk_commit,
-                &stack_tips,
+                &partition_tips,
                 parallel,
                 &opts,
             ) {

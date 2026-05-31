@@ -16,6 +16,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::bookmark_updates::BookmarkUpdate;
 use crate::error::{JjHooksError, Result};
@@ -26,6 +28,46 @@ use crate::runner::{
 };
 use crate::setup::{self, SetupStep};
 use crate::worktree::Worktree;
+
+/// Cooperative cancellation handle for parallel hook runs.
+///
+/// `run_once` checks this between each hook-runner subprocess
+/// invocation (per-from-ref iteration in the diff-range path, the
+/// single call in the all-files path) and between the runner and the
+/// fixup-commit step. If cancellation has been requested, the
+/// outcome short-circuits with `success: true` and no captured
+/// output — the caller knows the run was cancelled because it
+/// requested it, and the no-op return keeps the result-collection
+/// loop in `run_for_partitioned_updates_parallel` simple.
+///
+/// `Cancel::never()` produces a no-op token for callers that never
+/// want to cancel (the per-bookmark `jj-hp push` CLI path). The
+/// `Default` impl gives the same.
+#[derive(Debug, Clone, Default)]
+pub struct Cancel(Arc<AtomicBool>);
+
+impl Cancel {
+    /// A fresh cancellation token in the un-cancelled state.
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    /// A token that never fires. Cheaper than `new()` only in
+    /// readability — both allocate one `AtomicBool`.
+    pub fn never() -> Self {
+        Self::new()
+    }
+
+    /// Mark this token as cancelled. Idempotent.
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    /// Has cancellation been requested?
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct HookOutcome {
@@ -54,6 +96,13 @@ pub struct HookOutcome {
     /// multiplex N parallel runs into ordered output blocks. See
     /// [`run_for_updates_parallel`] for the canonical consumer.
     pub captured_output: Option<String>,
+    /// `true` iff the pipeline observed cancellation between
+    /// subprocess invocations and short-circuited the remaining
+    /// runs. The partitioned-parallel entrypoint flips its
+    /// partition's `Cancel` when any sibling fails; the user sees a
+    /// "cancelled" annotation in the output rather than treating
+    /// this as a normal success/failure.
+    pub cancelled: bool,
 }
 
 /// Inputs that control how [`run_for_update`] behaves. Defaults match
@@ -104,6 +153,40 @@ pub fn run_for_update(
     update: &BookmarkUpdate,
     opts: RunOpts,
 ) -> Result<HookOutcome> {
+    run_for_update_with_cancel(
+        jj,
+        primary_git_dir,
+        workspace_root,
+        cli_runner,
+        stage,
+        update,
+        opts,
+        &Cancel::never(),
+    )
+}
+
+/// Like [`run_for_update`] but takes a cancellation token so callers
+/// running multiple updates in parallel can short-circuit siblings
+/// when one fails.
+///
+/// Set the token (`Cancel::cancel`) from a progress callback when
+/// any earlier sibling reports `success: false`; the remaining
+/// `run_for_update_with_cancel` calls in the same scope will check
+/// the token before each subprocess and skip the rest of their
+/// pipeline. The function never *kills* an in-flight subprocess —
+/// it skips the next one. For an hk config with N steps that
+/// translates to "save the (N-1) remaining steps".
+#[allow(clippy::too_many_arguments)]
+pub fn run_for_update_with_cancel(
+    jj: &JjCli,
+    primary_git_dir: &Path,
+    workspace_root: &Path,
+    cli_runner: Option<Runner>,
+    stage: Stage,
+    update: &BookmarkUpdate,
+    opts: RunOpts,
+    cancel: &Cancel,
+) -> Result<HookOutcome> {
     let Some(new_commit) = update.new_commit.as_ref() else {
         // Pure delete — nothing to check.
         return Ok(HookOutcome {
@@ -112,6 +195,7 @@ pub fn run_for_update(
             retried: false,
             initial_failure: false,
             captured_output: None,
+            cancelled: false,
         });
     };
 
@@ -130,6 +214,7 @@ pub fn run_for_update(
         &setup_steps,
         opts.all_files,
         opts.capture_output,
+        cancel,
     )?;
 
     // Initial run was clean OR caller opted out of retry OR there's nothing
@@ -142,6 +227,7 @@ pub fn run_for_update(
             retried: false,
             initial_failure: !initial.success,
             captured_output: initial.captured_output,
+            cancelled: initial.cancelled,
         });
     }
 
@@ -161,6 +247,7 @@ pub fn run_for_update(
         &setup_steps,
         opts.all_files,
         opts.capture_output,
+        cancel,
     )?;
 
     // The retry should be clean (no failure, no new fixup) for the
@@ -199,19 +286,35 @@ pub fn run_for_update(
         retried: true,
         initial_failure: true,
         captured_output,
+        cancelled: initial.cancelled || retry.cancelled,
     })
 }
 
-/// Batch entrypoint: run hooks for N bookmark updates in parallel.
+/// Batch entrypoint: run hooks for N bookmark updates in parallel,
+/// with fail-fast cancellation across siblings.
 ///
 /// One thread per update. Each thread runs the full
-/// [`run_for_update`] pipeline against its own ephemeral worktree —
-/// the worktrees are filesystem-isolated and don't share index locks,
-/// so per-bookmark hook backends (cargo, hk, etc.) can run truly
-/// concurrently. The shared `.git/objects/` directory is read-mostly
-/// during hook execution; the per-bookmark `jj git import` invoked at
-/// the end of `run_for_update` (if a fixup was produced) relies on
-/// jj's own concurrent-op reconciliation.
+/// [`run_for_update_with_cancel`] pipeline against its own
+/// ephemeral worktree — the worktrees are filesystem-isolated and
+/// don't share index locks, so per-bookmark hook backends (cargo,
+/// hk, etc.) can run truly concurrently. The shared `.git/objects/`
+/// directory is read-mostly during hook execution; the per-bookmark
+/// `jj git import` invoked at the end of `run_for_update_with_cancel`
+/// (if a fixup was produced) relies on jj's own concurrent-op
+/// reconciliation.
+///
+/// Fail-fast: every update in the batch shares one `Cancel` token.
+/// As soon as any thread observes `outcome.success == false`, it
+/// flips the token; siblings still in the middle of a multi-step
+/// hk pipeline check the token between subprocess invocations and
+/// short-circuit the rest. For an N-bookmark batch where bookmark
+/// 1 fails fmt while bookmarks 2 and 3 are doing clippy, this
+/// converts a "wait for two slow clippy runs to finish" symptom
+/// into "skip them as soon as the current step exits."
+///
+/// Use [`run_for_partitioned_updates_parallel`] when the batch
+/// represents multiple independent stacks — each stack gets its
+/// own Cancel scope so a failure in stack A doesn't cancel stack B.
 ///
 /// Mandatory call-site invariant: `opts.capture_output` MUST be true.
 /// Letting N hook backends stream live to the same terminal garbles
@@ -251,11 +354,13 @@ where
     let results: Vec<Mutex<Option<Result<HookOutcome>>>> =
         (0..updates.len()).map(|_| Mutex::new(None)).collect();
     let results_ref = &results;
+    let cancel = Cancel::new();
+    let cancel_ref = &cancel;
 
     std::thread::scope(|s| {
         for (idx, update) in updates.iter().enumerate() {
             s.spawn(move || {
-                let outcome = run_for_update(
+                let outcome = run_for_update_with_cancel(
                     jj,
                     primary_git_dir,
                     workspace_root,
@@ -263,8 +368,18 @@ where
                     stage,
                     update,
                     opts,
+                    cancel_ref,
                 );
                 if let Ok(o) = &outcome {
+                    // Trip the cancellation token on any failure
+                    // (including initial-failure that ended up
+                    // healing via retry — the user wants the
+                    // siblings to stop). Cancelled outcomes don't
+                    // count as failures; they just bail out
+                    // because someone else already did.
+                    if !o.success && !o.cancelled {
+                        cancel_ref.cancel();
+                    }
                     progress(idx, update, o);
                 }
                 *results_ref[idx].lock().unwrap() = Some(outcome);
@@ -279,6 +394,97 @@ where
             .unwrap()
             .expect("thread::scope joined all threads but a slot is still None");
         out.push(result?);
+    }
+    Ok(out)
+}
+
+/// Partitioned variant of [`run_for_updates_parallel`]. Each
+/// partition runs as an atomic fail-fast unit (siblings cancel each
+/// other within the partition); partitions are independent (a
+/// failure in one partition does NOT cancel any other).
+///
+/// Use this when the user passed `-b X -b Y` for two unrelated
+/// tips: stack X's bookmarks share a Cancel, stack Y's share a
+/// different Cancel, and stack Y keeps going to completion even
+/// if stack X fails out on its first bookmark.
+///
+/// Partitions run concurrently with each other (each partition is
+/// its own `run_for_updates_parallel` call inside a `thread::scope`).
+/// Outcomes are returned in the same shape as the input partitions
+/// (`Vec<Vec<HookOutcome>>`), in the same order.
+///
+/// `progress` is called with `(partition_idx, update_idx_in_partition,
+/// update, outcome)` whenever any thread finishes one update.
+#[allow(clippy::too_many_arguments)]
+pub fn run_for_partitioned_updates_parallel<F>(
+    jj: &JjCli,
+    primary_git_dir: &Path,
+    workspace_root: &Path,
+    cli_runner: Option<Runner>,
+    stage: Stage,
+    partitions: &[Vec<BookmarkUpdate>],
+    opts: RunOpts,
+    progress: F,
+) -> Result<Vec<Vec<HookOutcome>>>
+where
+    F: Fn(usize, usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
+{
+    assert!(
+        opts.capture_output,
+        "run_for_partitioned_updates_parallel requires capture_output=true",
+    );
+
+    use std::sync::Mutex;
+    let progress = &progress;
+    // Pre-allocate the result shape. Outer index = partition;
+    // inner index = position in partition.
+    let results: Vec<Vec<Mutex<Option<Result<HookOutcome>>>>> = partitions
+        .iter()
+        .map(|p| (0..p.len()).map(|_| Mutex::new(None)).collect())
+        .collect();
+    let results_ref = &results;
+
+    std::thread::scope(|s| {
+        for (p_idx, partition) in partitions.iter().enumerate() {
+            // One Cancel token per partition — the fail-fast scope
+            // is exactly the partition.
+            let cancel = Cancel::new();
+            for (u_idx, update) in partition.iter().enumerate() {
+                let cancel = cancel.clone();
+                s.spawn(move || {
+                    let outcome = run_for_update_with_cancel(
+                        jj,
+                        primary_git_dir,
+                        workspace_root,
+                        cli_runner,
+                        stage,
+                        update,
+                        opts,
+                        &cancel,
+                    );
+                    if let Ok(o) = &outcome {
+                        if !o.success && !o.cancelled {
+                            cancel.cancel();
+                        }
+                        progress(p_idx, u_idx, update, o);
+                    }
+                    *results_ref[p_idx][u_idx].lock().unwrap() = Some(outcome);
+                });
+            }
+        }
+    });
+
+    let mut out = Vec::with_capacity(partitions.len());
+    for partition_slots in results {
+        let mut partition_out = Vec::with_capacity(partition_slots.len());
+        for slot in partition_slots {
+            let result = slot
+                .into_inner()
+                .unwrap()
+                .expect("thread::scope joined but a slot is still None");
+            partition_out.push(result?);
+        }
+        out.push(partition_out);
     }
     Ok(out)
 }
@@ -329,6 +535,12 @@ struct OnceOutcome {
     /// [`RunOpts::capture_output`]). Carries the concatenated
     /// stdout+stderr of every subprocess invoked during this pass.
     captured_output: Option<String>,
+    /// `true` iff this pass short-circuited because the cancellation
+    /// token was already set when the pass started. Distinguishes
+    /// "cancelled before doing real work" from "ran to completion
+    /// and happened to succeed" so the result-collection layer can
+    /// filter cancelled outcomes out of progress callbacks.
+    cancelled: bool,
 }
 
 /// Replace element 0 of `command_argv` (the bare runner binary name
@@ -378,7 +590,16 @@ fn run_once(
     setup_steps: &[SetupStep],
     all_files: bool,
     capture_output: bool,
+    cancel: &Cancel,
 ) -> Result<OnceOutcome> {
+    if cancel.is_cancelled() {
+        return Ok(OnceOutcome {
+            success: true,
+            fixup_commit: None,
+            captured_output: None,
+            cancelled: true,
+        });
+    }
     let wt = Worktree::create(primary_git_dir, target_commit)?;
 
     // User-declared setup commands (e.g. `bun install`) run inside
@@ -404,6 +625,7 @@ fn run_once(
                     success: true,
                     fixup_commit: None,
                     captured_output: None,
+                    cancelled: false,
                 });
             };
             // prek is a faster drop-in for pre-commit; prefer it when
@@ -458,19 +680,35 @@ fn run_once(
     } else {
         None
     };
+    let mut cancelled = false;
     if all_files {
-        let argv = match runner {
-            Runner::Lefthook => lefthook_command_all_files(stage),
-            _ => hook_command_all_files(runner, stage),
-        };
-        let argv = splice_runner_prefix(&runner_argv, &argv);
-        tracing::info!("running (--all-files): {:?}", argv);
-        let ok = run_subprocess(&argv, wt.path(), workspace_root, captured.as_mut())?;
-        if !ok {
-            success = false;
+        if cancel.is_cancelled() {
+            cancelled = true;
+        } else {
+            let argv = match runner {
+                Runner::Lefthook => lefthook_command_all_files(stage),
+                _ => hook_command_all_files(runner, stage),
+            };
+            let argv = splice_runner_prefix(&runner_argv, &argv);
+            tracing::info!("running (--all-files): {:?}", argv);
+            let ok = run_subprocess(&argv, wt.path(), workspace_root, captured.as_mut())?;
+            if !ok {
+                success = false;
+            }
         }
     } else {
         for from_ref in from_refs {
+            // Cancellation check between subprocess invocations. The
+            // hk/cargo subprocess itself isn't cancellable from
+            // outside, but skipping the *next* one short-circuits
+            // the rest of this bookmark's pipeline. For a typical
+            // hk config (fmt → clippy-native → clippy-wasm) this
+            // saves ~30-60s on cold caches when a parallel sibling
+            // bookmark already failed.
+            if cancel.is_cancelled() {
+                cancelled = true;
+                break;
+            }
             let argv = match runner {
                 Runner::Lefthook => {
                     let files = changed_files(wt.path(), from_ref, target_commit)?;
@@ -523,6 +761,7 @@ fn run_once(
         success,
         fixup_commit,
         captured_output: captured,
+        cancelled,
     })
 }
 

@@ -10,7 +10,10 @@ mod harness;
 
 use harness::{PRE_PUSH_FAILING, PRE_PUSH_PASSING, show};
 use jj_hooks::bookmark_updates::{BookmarkUpdate, UpdateType};
-use jj_hooks::hooks::{RunOpts, run_for_updates_parallel, run_for_updates_sequential};
+use jj_hooks::hooks::{
+    Cancel, RunOpts, run_for_partitioned_updates_parallel, run_for_updates_parallel,
+    run_for_updates_sequential,
+};
 use jj_hooks::jj::{JjCli, primary_git_dir};
 use jj_hooks::runner::{Runner, Stage};
 
@@ -155,24 +158,45 @@ fn run_for_updates_parallel_first_failure_aborts_with_per_bookmark_attribution()
     .unwrap();
 
     assert_eq!(outcomes.len(), 3);
+    let mut had_failure = false;
     for (idx, outcome) in outcomes.iter().enumerate() {
-        assert!(
-            !outcome.success,
-            "outcome #{idx} unexpectedly passed: captured = {:?}",
-            outcome.captured_output
-        );
-        let captured = outcome
-            .captured_output
-            .as_deref()
-            .unwrap_or_else(|| panic!("outcome #{idx} has no captured output"));
-        // The captured block tags the subprocess argv with `$ <argv>`
-        // (see run_subprocess in hooks.rs); the failing hook produces
-        // some diagnostic output. Just check the buffer is non-empty.
-        assert!(
-            !captured.is_empty(),
-            "outcome #{idx} captured an empty buffer",
-        );
+        // Each outcome is either a real failure (success=false,
+        // cancelled=false) or a fail-fast short-circuit (success=true,
+        // cancelled=true). We must NOT see a real pass (success=true,
+        // cancelled=false) — that would mean the hook config silently
+        // ignored the failure config.
+        if outcome.cancelled {
+            assert!(
+                outcome.success,
+                "cancelled outcome #{idx} should have success=true, got {:?}",
+                outcome
+            );
+        } else {
+            had_failure = true;
+            assert!(
+                !outcome.success,
+                "non-cancelled outcome #{idx} unexpectedly passed: captured = {:?}",
+                outcome.captured_output
+            );
+            let captured = outcome
+                .captured_output
+                .as_deref()
+                .unwrap_or_else(|| panic!("outcome #{idx} has no captured output"));
+            assert!(
+                !captured.is_empty(),
+                "outcome #{idx} captured an empty buffer",
+            );
+        }
     }
+    // PR-fail-fast: with cancellation in play, at LEAST one of the
+    // outcomes is an actual hook failure (the one that tripped the
+    // cancellation); the others may have observed cancellation
+    // before they got to spawn their own subprocess and short-
+    // circuited as cancelled-not-failed.
+    assert!(
+        had_failure,
+        "expected at least one outcome to be a real hook failure, got all-cancelled",
+    );
 }
 
 #[test]
@@ -306,4 +330,170 @@ fn run_for_updates_parallel_without_capture_panics() {
         opts,
         |_idx, _update, _outcome| {},
     );
+}
+
+#[test]
+fn cancel_token_round_trip() {
+    let c = Cancel::new();
+    assert!(!c.is_cancelled());
+    c.cancel();
+    assert!(c.is_cancelled());
+
+    // Clone shares the underlying atomic.
+    let c2 = Cancel::new();
+    let c2_clone = c2.clone();
+    assert!(!c2.is_cancelled());
+    c2_clone.cancel();
+    assert!(c2.is_cancelled());
+
+    // never() is just a no-op alias for new().
+    let n = Cancel::never();
+    assert!(!n.is_cancelled());
+}
+
+#[test]
+fn run_for_partitioned_updates_parallel_two_independent_stacks() {
+    // PR-fail-fast: two-partition input. Both pass. Outcomes shape
+    // matches the input partition shape; nothing is cancelled
+    // because nothing fails.
+    let repo = TestRepo::new();
+    repo.write_pre_commit_config(PRE_PUSH_PASSING);
+    let (main, b1, b2, b3) = build_three_stack(&repo);
+    // Partition 1: just b1. Partition 2: b2, b3.
+    let p1: Vec<BookmarkUpdate> = vec![BookmarkUpdate {
+        remote: "origin".into(),
+        bookmark: "b1".into(),
+        update_type: UpdateType::Add,
+        old_commit: Some(main.clone()),
+        new_commit: Some(b1.clone()),
+    }];
+    let p2: Vec<BookmarkUpdate> = vec![
+        BookmarkUpdate {
+            remote: "origin".into(),
+            bookmark: "b2".into(),
+            update_type: UpdateType::Add,
+            old_commit: Some(b1.clone()),
+            new_commit: Some(b2.clone()),
+        },
+        BookmarkUpdate {
+            remote: "origin".into(),
+            bookmark: "b3".into(),
+            update_type: UpdateType::Add,
+            old_commit: Some(b2.clone()),
+            new_commit: Some(b3.clone()),
+        },
+    ];
+    let partitions = vec![p1, p2];
+
+    let jj = JjCli::new(repo.primary().to_path_buf());
+    let primary_git_dir = primary_git_dir(repo.primary()).unwrap();
+    let opts = RunOpts {
+        retry_after_fixup: true,
+        all_files: false,
+        capture_output: true,
+    };
+
+    let outcomes = run_for_partitioned_updates_parallel(
+        &jj,
+        &primary_git_dir,
+        repo.primary(),
+        Some(Runner::PreCommit),
+        Stage::PrePush,
+        &partitions,
+        opts,
+        |_p, _u, _update, _outcome| {},
+    )
+    .unwrap();
+
+    assert_eq!(outcomes.len(), 2, "expected 2 partitions, got {outcomes:?}");
+    assert_eq!(outcomes[0].len(), 1);
+    assert_eq!(outcomes[1].len(), 2);
+    for partition_outcomes in &outcomes {
+        for o in partition_outcomes {
+            assert!(o.success, "expected pass, got {o:?}");
+            assert!(!o.cancelled, "no failures means no cancellation");
+        }
+    }
+}
+
+#[test]
+fn run_for_partitioned_updates_parallel_failure_in_one_stack_does_not_cancel_the_other() {
+    // The user-facing motivation for the partitioned API: when the
+    // user passes `-b X -b Y` for two unrelated stacks, a failure
+    // in X should NOT cancel Y. Stack Y must run to completion
+    // (success or failure of its own) regardless of what stack X
+    // does.
+    //
+    // We can't easily get a "one stack passes, the other fails" in a
+    // single hook config (PRE_PUSH_PASSING and PRE_PUSH_FAILING are
+    // global config knobs), so the test pins the structural
+    // invariant: when ALL partitions use a failing config, each
+    // partition's outcomes show real-failure-not-just-cancelled at
+    // least once. That proves the partitions' Cancel scopes are
+    // independent — if they were shared, stack X's failure would
+    // cancel stack Y before stack Y had a chance to fail on its
+    // own, and stack Y's outcome would be "cancelled".
+    let repo = TestRepo::new();
+    repo.write_pre_commit_config(PRE_PUSH_FAILING);
+    let (main, b1, b2, b3) = build_three_stack(&repo);
+    let p1: Vec<BookmarkUpdate> = vec![BookmarkUpdate {
+        remote: "origin".into(),
+        bookmark: "b1".into(),
+        update_type: UpdateType::Add,
+        old_commit: Some(main.clone()),
+        new_commit: Some(b1.clone()),
+    }];
+    let p2: Vec<BookmarkUpdate> = vec![BookmarkUpdate {
+        remote: "origin".into(),
+        bookmark: "b2".into(),
+        update_type: UpdateType::Add,
+        old_commit: Some(b1.clone()),
+        new_commit: Some(b2.clone()),
+    }];
+    let p3: Vec<BookmarkUpdate> = vec![BookmarkUpdate {
+        remote: "origin".into(),
+        bookmark: "b3".into(),
+        update_type: UpdateType::Add,
+        old_commit: Some(b2.clone()),
+        new_commit: Some(b3.clone()),
+    }];
+    let partitions = vec![p1, p2, p3];
+
+    let jj = JjCli::new(repo.primary().to_path_buf());
+    let primary_git_dir = primary_git_dir(repo.primary()).unwrap();
+    let opts = RunOpts {
+        retry_after_fixup: false,
+        all_files: false,
+        capture_output: true,
+    };
+
+    let outcomes = run_for_partitioned_updates_parallel(
+        &jj,
+        &primary_git_dir,
+        repo.primary(),
+        Some(Runner::PreCommit),
+        Stage::PrePush,
+        &partitions,
+        opts,
+        |_p, _u, _update, _outcome| {},
+    )
+    .unwrap();
+
+    assert_eq!(outcomes.len(), 3);
+    for (p_idx, partition_outcomes) in outcomes.iter().enumerate() {
+        // Each partition's single-bookmark outcome must be a real
+        // failure (success=false, cancelled=false). If any partition
+        // came back cancelled-not-failed, cancellation leaked across
+        // partition boundaries — the bug we're guarding against.
+        assert_eq!(partition_outcomes.len(), 1);
+        let o = &partition_outcomes[0];
+        assert!(
+            !o.cancelled,
+            "partition {p_idx} outcome was cancelled — cancellation leaked across partition boundaries: {o:?}",
+        );
+        assert!(
+            !o.success,
+            "partition {p_idx} outcome unexpectedly passed: {o:?}",
+        );
+    }
 }
