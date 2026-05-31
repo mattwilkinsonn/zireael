@@ -89,7 +89,9 @@ USAGE:
 
 COMMANDS:
     submit      Track + submit selected bookmarks as a stack
-                (drives `gt submit --stack` end-to-end).
+                (drives `gt submit --stack` end-to-end). The full
+                ancestor chain from trunk up to `-b <tip>` is
+                submitted automatically.
     track       Sync refs/branch-metadata/* without submitting
                 (manual escape hatch — same logic as submit minus the
                 gt-submit invocation).
@@ -98,20 +100,53 @@ COMMANDS:
                 branch cleanup, restacks orphaned children with `jj
                 rebase`, prunes `gtmq_*` queue-test artifacts, and
                 falls back to merge-marker scan for PRs gt sync misses.
+    reconcile   Reconcile gt's tracking metadata + (optionally) remote
+                refs with jj's current view of the bookmark graph.
+                Standalone version of the pre-submit reconcile step.
     status      Print stack-wide PR + queue state in stack order.
     log         Print the derived stack as jj-gt sees it (debug).
     init        Print suggested aliases + setup reminders.
     completions Emit a shell completion script.
 ```
 
+### How `jj-gt submit` picks the stack
+
+Submit is always stack-shaped. There's no `--stack` flag because
+there's no other mode — the full ancestor chain from trunk up to
+each `-b <tip>` is included automatically.
+
+```text
+       trunk    bottom    mid    head
+main ───●─────────●────────●──────●
+
+jj-gt submit -b head
+  → walks back to find bottom + mid on the ancestor chain
+  → tracks bookmarks with gt in bottom→top order (gt rejects
+    `gt track <child> --parent <parent>` if the parent isn't
+    tracked yet)
+  → pushes the whole stack via `gt submit --stack`
+```
+
+To submit a subset, name each bookmark with its own `-b` flag —
+`jj-gt submit -b mid -b head` submits just those two, omitting
+`bottom`. Per-bookmark pre-push hooks run in parallel by default;
+use `--hooks-sequential` for serial execution with live runner
+output, or `--hooks-tip-only` to skip the per-bookmark gate and
+run hooks once against the full `trunk..tip` range.
+
 ### Examples
 
 ```bash
-# Submit the whole current stack
-jj-gt submit --all
+# Submit the whole stack ending at `head` (the common case)
+jj-gt submit -b head
 
-# Submit two specific bookmarks as a stack
+# Submit two specific bookmarks as a stack (skips anything above
+# `top--athena` and anything between `bottom--athena` and trunk
+# that isn't in the selection)
 jj-gt submit -b bottom--athena -b top--athena
+
+# Submit every bookmark on the @-ancestor chain
+jj-gt submit --all
 
 # Submit as draft PRs, set merge-when-ready
 jj-gt submit --all --draft --merge-when-ready
