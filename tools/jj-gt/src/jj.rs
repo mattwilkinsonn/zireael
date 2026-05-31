@@ -128,6 +128,44 @@ pub fn git_import(jj: &JjCli) -> Result<()> {
     Ok(())
 }
 
+/// Returns true if the working copy has uncommitted file changes
+/// (added / modified / deleted files relative to `@`'s parent).
+///
+/// Used by the fetch pipeline to refuse to run when the user has
+/// in-progress edits, the companion of [`crate::lock::PipelineLock`]
+/// for the "another shell is editing files concurrently with my
+/// fetch" hazard. `--ignore-working-copy` matches the rest of this
+/// module — we don't want to snapshot the very state we're trying
+/// to detect.
+///
+/// The check is "does `@` have any diff vs its parent" via a
+/// template-based check: `self.diff()` returns a `TreeDiff` whose
+/// `len()` is zero when the working copy is clean. We use this
+/// rather than parsing `jj status` output because the template
+/// API is stable across jj versions and produces a single boolean
+/// we don't have to parse.
+pub fn has_uncommitted_changes(jj: &JjCli) -> Result<bool> {
+    let out = jj_run(
+        jj,
+        &[
+            "log",
+            "-r",
+            "@",
+            "--no-graph",
+            "-T",
+            r#"self.diff().files().len()"#,
+            "--ignore-working-copy",
+        ],
+    )?;
+    let n: u64 = out.trim().parse().map_err(|e| {
+        JjGtError::Invalid(format!(
+            "unexpected `jj log -T self.diff().files().len()` output `{}`: {e}",
+            out.trim(),
+        ))
+    })?;
+    Ok(n > 0)
+}
+
 /// `jj log -r @ --no-graph -T change_id`. Captured before gt submit so
 /// we can restore `@` after — gt's git-push triggers a jj ref-import
 /// that moves `@` as a side effect.

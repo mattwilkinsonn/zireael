@@ -13,6 +13,7 @@ pub mod gt;
 pub mod hooks;
 pub mod init;
 pub mod jj;
+pub mod lock;
 pub mod select;
 pub mod stack;
 pub mod status;
@@ -102,6 +103,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
             no_gtmq_prune,
             gtmq_prefix,
             auto,
+            force_with_changes,
             dry_run,
         } => fetch_cmd(
             &jj,
@@ -112,6 +114,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
             no_gtmq_prune,
             gtmq_prefix,
             auto,
+            force_with_changes,
             dry_run,
             verbosity,
         ),
@@ -455,6 +458,7 @@ fn fetch_cmd(
     no_gtmq_prune: bool,
     gtmq_prefix: Vec<String>,
     auto: bool,
+    force_with_changes: bool,
     dry_run: bool,
     verbosity: ui::Verbosity,
 ) -> Result<ExitCode, JjGtError> {
@@ -475,6 +479,7 @@ fn fetch_cmd(
         no_gtmq_prune,
         gtmq_prefixes: prefixes,
         auto,
+        force_with_changes,
         dry_run,
     };
 
