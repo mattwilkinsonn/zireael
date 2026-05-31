@@ -656,6 +656,16 @@ in
         # forks and launchd immediately marks the job exited.
         SCCACHE_START_SERVER = "1";
         SCCACHE_NO_DAEMON = "1";
+        # SEA-680: disable the default 10-minute idle timeout.
+        # launchd's `KeepAlive = true` re-spawns on clean exit
+        # too (unlike systemd's `Restart=on-failure`) so the macOS
+        # side doesn't see the dead-server cascade mattserver hit,
+        # but letting the server idle-exit + re-spawn every 10
+        # minutes still costs ~1-2s per cycle to re-read the LRU
+        # index off disk. `0` keeps the server permanently up,
+        # which is the right shape for a supervised always-on
+        # cache server. SEA-680.
+        SCCACHE_IDLE_TIMEOUT = "0";
       };
       RunAtLoad = true;
       KeepAlive = true;

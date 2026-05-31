@@ -618,13 +618,25 @@ in
       # `Type=simple, finished`.
       SCCACHE_START_SERVER = "1";
       SCCACHE_NO_DAEMON = "1";
+      # SEA-680: disable the default 10-minute idle timeout. With
+      # the timeout active sccache exits CLEANLY (status=0) after
+      # 600s without a client connect, and `Restart=on-failure`
+      # below does NOT restart on a clean exit. The first lull in
+      # PR-time CI traffic killed the server; the next wave of
+      # builds saw `Connection reset by peer (os error 104)` /
+      # `Failed to read response header` on every cc/rustc
+      # invocation because nothing was listening on 4226 anymore.
+      # `0` means "never idle-exit", which is what we want for a
+      # supervised always-on server. SEA-680 surfaced the dead-
+      # server cascade across all four loadtest PRs.
+      SCCACHE_IDLE_TIMEOUT = "0";
     };
     serviceConfig = {
       Type = "simple";
       ExecStart = "${pkgs.sccache}/bin/sccache";
       User = sealedRunnerUser;
       Group = sealedRunnerUser;
-      Restart = "on-failure";
+      Restart = "always";
       RestartSec = "2s";
       # Per-unit memory accounting. Bumped from 4G → 8G after
       # SEA-672 round-3 surfaced sccache-server OOM kills under
