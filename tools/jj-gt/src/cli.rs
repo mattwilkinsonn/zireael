@@ -178,6 +178,35 @@ pub enum Command {
         trunk: Option<String>,
     },
 
+    /// Reconcile gt's tracking metadata + (optionally) remote refs
+    /// with jj's current view of the bookmark graph. Standalone
+    /// version of the pre-submit reconciliation step that
+    /// `jj-gt submit` runs internally. Useful after an interrupted
+    /// submit or a manual `jj rebase` outside the submit flow.
+    Reconcile {
+        /// Remote to reconcile against. Default: `origin`.
+        #[arg(long, default_value = "origin", add = clap_complete::ArgValueCompleter::new(remote_value_completer))]
+        remote: String,
+
+        /// Trunk to walk back to. Default: read from gt's repo config
+        /// (.git/.graphite_repo_config), then fall back to `main`.
+        #[arg(long)]
+        trunk: Option<String>,
+
+        /// Also `jj git push --bookmark <name>` each bookmark in the
+        /// active stack. Default off — reconcile-only updates gt's
+        /// tracking metadata without touching remote refs. Pass this
+        /// to bring the remote in sync with locally-rebased SHAs
+        /// (jj's force-with-lease default protects against
+        /// collaborator-race overrides).
+        #[arg(long)]
+        push: bool,
+
+        /// Print what would happen at every step.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Print suggested aliases + setup reminders.
     Init,
 
