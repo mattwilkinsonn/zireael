@@ -440,12 +440,13 @@ in
     /usr/bin/pmset -a hibernatemode 0  # no hibernation
 
     # SSH (Remote Login). Tailscale SSH (enabled via `tailscale up
-    # --ssh` in the bootstrap script) handles every interactive
-    # access path; the LAN-side native sshd is unneeded attack
-    # surface for a runner host that nobody should be SSHing to
-    # over the LAN. Earlier configs enabled `com.openssh.sshd` here
-    # as a Tailscale-fallback; that's been retired now that
-    # Tailscale has been stable for months.
+    # --ssh` in the bootstrap script + the `tailscale set --ssh=true`
+    # reconciliation below) handles every interactive access path;
+    # the LAN-side native sshd is unneeded attack surface for a
+    # runner host that nobody should be SSHing to over the LAN.
+    # Earlier configs enabled `com.openssh.sshd` here as a
+    # Tailscale-fallback; that's been retired now that Tailscale has
+    # been stable for months.
     #
     # `launchctl bootout` is the macOS equivalent of `systemctl
     # disable && systemctl stop`. `disable` flips the persistent
@@ -455,6 +456,23 @@ in
     # fresh macOS install) doesn't error.
     /bin/launchctl disable system/com.openssh.sshd 2>/dev/null || true
     /bin/launchctl bootout system/com.openssh.sshd 2>/dev/null || true
+
+    # Tailscale SSH on this host MUST stay set, because the previous
+    # block disabled native sshd — without `--ssh` tailscaled won't
+    # intercept incoming SSH connections and the host becomes
+    # unreachable.
+    #
+    # nix-darwin doesn't model brew-installed daemons' runtime state
+    # (services.tailscale is NixOS-only), and the bootstrap script
+    # only runs once. If anyone ever invokes `sudo tailscale up`
+    # without `--ssh` (e.g. an unrelated config tweak, or
+    # `--reset` for a hostname change) the flag silently drops.
+    # Reconcile every activation with `tailscale set` — unlike
+    # `tailscale up`, `set` updates one knob without touching any
+    # other state, so re-running is idempotent. The `|| true`
+    # covers the brief first-boot window where tailscaled isn't
+    # yet up.
+    /usr/local/bin/tailscale set --ssh=true 2>/dev/null || true
   '';
 
   # ============================================================
