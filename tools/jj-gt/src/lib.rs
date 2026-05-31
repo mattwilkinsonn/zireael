@@ -151,7 +151,11 @@ fn submit_cmd(
     if selected.is_empty() {
         return Err(JjGtError::NoBookmarksSelected);
     }
-    let stacked = stack::derive_parents(jj, &selected, &trunk)?;
+    // Expand each tip's ancestor chain so `gt track <child> --parent
+    // <parent>` doesn't error on an untracked intermediate. See
+    // `select::expand_ancestors_for_submit` for the rationale.
+    let expanded = select::expand_ancestors_for_submit(jj, &selected, &trunk)?;
+    let stacked = stack::derive_parents(jj, &expanded, &trunk)?;
     let tip = stack::find_tip(&stacked)?;
     let stacked_sorted = stack::sort_for_tracking(&stacked);
 
