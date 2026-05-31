@@ -46,6 +46,14 @@ pub struct HookOutcome {
     /// warn the user that something was racy even when the final state
     /// is OK.
     pub initial_failure: bool,
+    /// Captured stdout/stderr from every hook subprocess invoked for
+    /// this update, in order. `None` when [`RunOpts::capture_output`]
+    /// is false (the default — hook output streams straight to the
+    /// parent's terminal so the user sees runner progress live).
+    /// `Some(buf)` when the caller asked for capture so it can
+    /// multiplex N parallel runs into ordered output blocks. See
+    /// [`run_for_updates_parallel`] for the canonical consumer.
+    pub captured_output: Option<String>,
 }
 
 /// Inputs that control how [`run_for_update`] behaves. Defaults match
@@ -67,6 +75,16 @@ pub struct RunOpts {
     /// diff range since the bookmark's ref bounds are the whole
     /// point.
     pub all_files: bool,
+    /// Capture hook subprocess stdout/stderr into the returned
+    /// [`HookOutcome::captured_output`] instead of letting it stream
+    /// straight to the parent's terminal. Required for parallel
+    /// per-bookmark hook runs (see [`run_for_updates_parallel`]) so
+    /// N concurrent runs don't garble the terminal; the caller
+    /// replays the captured blocks in completion order.
+    ///
+    /// Default is `false` — sequential single-bookmark runs (the
+    /// `jj-hp push` path) want the live runner progress bar.
+    pub capture_output: bool,
 }
 
 /// Run hooks for one bookmark update. Returns the outcome (success +
@@ -93,6 +111,7 @@ pub fn run_for_update(
             fixup_commit: None,
             retried: false,
             initial_failure: false,
+            captured_output: None,
         });
     };
 
@@ -110,6 +129,7 @@ pub fn run_for_update(
         &from_refs,
         &setup_steps,
         opts.all_files,
+        opts.capture_output,
     )?;
 
     // Initial run was clean OR caller opted out of retry OR there's nothing
@@ -121,6 +141,7 @@ pub fn run_for_update(
             fixup_commit: initial.fixup_commit,
             retried: false,
             initial_failure: !initial.success,
+            captured_output: initial.captured_output,
         });
     }
 
@@ -139,12 +160,25 @@ pub fn run_for_update(
         &from_refs,
         &setup_steps,
         opts.all_files,
+        opts.capture_output,
     )?;
 
     // The retry should be clean (no failure, no new fixup) for the
     // "healed by retry" verdict. Any further fixup means the tree is
     // still drifting; bail with the original failure semantics.
     let healed = retry.success && retry.fixup_commit.is_none();
+    // Concatenate initial + retry captured output so the caller sees
+    // both passes in order. Only relevant when capture_output is on;
+    // when off, both are None.
+    let captured_output = match (initial.captured_output, retry.captured_output) {
+        (Some(mut a), Some(b)) => {
+            a.push_str(&b);
+            Some(a)
+        }
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
     Ok(HookOutcome {
         // If the retry healed it, report success and surface the fixup
         // so the user knows to advance their bookmark. If the retry
@@ -164,7 +198,125 @@ pub fn run_for_update(
         },
         retried: true,
         initial_failure: true,
+        captured_output,
     })
+}
+
+/// Batch entrypoint: run hooks for N bookmark updates in parallel.
+///
+/// One thread per update. Each thread runs the full
+/// [`run_for_update`] pipeline against its own ephemeral worktree —
+/// the worktrees are filesystem-isolated and don't share index locks,
+/// so per-bookmark hook backends (cargo, hk, etc.) can run truly
+/// concurrently. The shared `.git/objects/` directory is read-mostly
+/// during hook execution; the per-bookmark `jj git import` invoked at
+/// the end of `run_for_update` (if a fixup was produced) relies on
+/// jj's own concurrent-op reconciliation.
+///
+/// Mandatory call-site invariant: `opts.capture_output` MUST be true.
+/// Letting N hook backends stream live to the same terminal garbles
+/// the user's view. The function asserts on this — passing
+/// `capture_output: false` is a programmer error.
+///
+/// Returns results in the same order as `updates` (not completion
+/// order). `progress` is invoked once per update on the thread that
+/// finished it, with the update's index + outcome — the caller uses
+/// this to print captured output in completion order rather than
+/// input order.
+///
+/// First subprocess error (spawn failure, etc.) aborts before
+/// returning; per-update non-zero exits are reported via
+/// [`HookOutcome::success`], not as `Err`.
+#[allow(clippy::too_many_arguments)]
+pub fn run_for_updates_parallel<F>(
+    jj: &JjCli,
+    primary_git_dir: &Path,
+    workspace_root: &Path,
+    cli_runner: Option<Runner>,
+    stage: Stage,
+    updates: &[BookmarkUpdate],
+    opts: RunOpts,
+    progress: F,
+) -> Result<Vec<HookOutcome>>
+where
+    F: Fn(usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
+{
+    assert!(
+        opts.capture_output,
+        "run_for_updates_parallel requires capture_output=true; parallel runs without capture garble the terminal",
+    );
+
+    use std::sync::Mutex;
+    let progress = &progress;
+    let results: Vec<Mutex<Option<Result<HookOutcome>>>> =
+        (0..updates.len()).map(|_| Mutex::new(None)).collect();
+    let results_ref = &results;
+
+    std::thread::scope(|s| {
+        for (idx, update) in updates.iter().enumerate() {
+            s.spawn(move || {
+                let outcome = run_for_update(
+                    jj,
+                    primary_git_dir,
+                    workspace_root,
+                    cli_runner,
+                    stage,
+                    update,
+                    opts,
+                );
+                if let Ok(o) = &outcome {
+                    progress(idx, update, o);
+                }
+                *results_ref[idx].lock().unwrap() = Some(outcome);
+            });
+        }
+    });
+
+    let mut out = Vec::with_capacity(updates.len());
+    for slot in results {
+        let result = slot
+            .into_inner()
+            .unwrap()
+            .expect("thread::scope joined all threads but a slot is still None");
+        out.push(result?);
+    }
+    Ok(out)
+}
+
+/// Sequential counterpart to [`run_for_updates_parallel`] for the
+/// `--hooks-sequential` opt-out path. Same contract (per-bookmark
+/// `run_for_update`, in-order results) but no thread fan-out. Output
+/// streams live by default — `opts.capture_output` is honored if
+/// set, but unlike the parallel variant it isn't required.
+#[allow(clippy::too_many_arguments)]
+pub fn run_for_updates_sequential<F>(
+    jj: &JjCli,
+    primary_git_dir: &Path,
+    workspace_root: &Path,
+    cli_runner: Option<Runner>,
+    stage: Stage,
+    updates: &[BookmarkUpdate],
+    opts: RunOpts,
+    progress: F,
+) -> Result<Vec<HookOutcome>>
+where
+    F: Fn(usize, &BookmarkUpdate, &HookOutcome),
+{
+    let mut out = Vec::with_capacity(updates.len());
+    for (idx, update) in updates.iter().enumerate() {
+        let outcome = run_for_update(
+            jj,
+            primary_git_dir,
+            workspace_root,
+            cli_runner,
+            stage,
+            update,
+            opts,
+        )?;
+        progress(idx, update, &outcome);
+        out.push(outcome);
+    }
+    Ok(out)
 }
 
 /// Internal shape returned by [`run_once`]: a single hook run plus the
@@ -173,6 +325,10 @@ pub fn run_for_update(
 struct OnceOutcome {
     success: bool,
     fixup_commit: Option<String>,
+    /// `Some(buf)` iff the caller asked for capture (see
+    /// [`RunOpts::capture_output`]). Carries the concatenated
+    /// stdout+stderr of every subprocess invoked during this pass.
+    captured_output: Option<String>,
 }
 
 /// Replace element 0 of `command_argv` (the bare runner binary name
@@ -200,8 +356,15 @@ fn splice_runner_prefix(prefix: &[String], command_argv: &[String]) -> Vec<Strin
 /// commit + cleans up the temp ref / bookmark that `jj git import`
 /// creates.
 ///
-/// Callers (currently just [`run_for_update`]) decide whether to retry
-/// based on the returned `success` / `fixup_commit`.
+/// When `capture_output` is true, every subprocess's stdout+stderr
+/// gets folded into the returned `OnceOutcome::captured_output`
+/// instead of streaming to the parent terminal. The trade is no live
+/// progress bar — the caller (typically [`run_for_updates_parallel`])
+/// replays the captured block when the pass finishes.
+///
+/// Callers (currently [`run_for_update`] and the batch entrypoint)
+/// decide whether to retry based on the returned `success` /
+/// `fixup_commit`.
 #[allow(clippy::too_many_arguments)]
 fn run_once(
     jj: &JjCli,
@@ -214,6 +377,7 @@ fn run_once(
     from_refs: &[String],
     setup_steps: &[SetupStep],
     all_files: bool,
+    capture_output: bool,
 ) -> Result<OnceOutcome> {
     let wt = Worktree::create(primary_git_dir, target_commit)?;
 
@@ -239,6 +403,7 @@ fn run_once(
                 return Ok(OnceOutcome {
                     success: true,
                     fixup_commit: None,
+                    captured_output: None,
                 });
             };
             // prek is a faster drop-in for pre-commit; prefer it when
@@ -288,6 +453,11 @@ fn run_once(
     // shared worktree, mirroring how the standard pre-push pipeline
     // builds up its fixup.
     let mut success = true;
+    let mut captured = if capture_output {
+        Some(String::new())
+    } else {
+        None
+    };
     if all_files {
         let argv = match runner {
             Runner::Lefthook => lefthook_command_all_files(stage),
@@ -295,12 +465,8 @@ fn run_once(
         };
         let argv = splice_runner_prefix(&runner_argv, &argv);
         tracing::info!("running (--all-files): {:?}", argv);
-        let status = Command::new(&argv[0])
-            .args(&argv[1..])
-            .current_dir(wt.path())
-            .env("JJ_HOOKS_WORKSPACE", workspace_root)
-            .status()?;
-        if !status.success() {
+        let ok = run_subprocess(&argv, wt.path(), workspace_root, captured.as_mut())?;
+        if !ok {
             success = false;
         }
     } else {
@@ -315,13 +481,8 @@ fn run_once(
             let argv = splice_runner_prefix(&runner_argv, &argv);
 
             tracing::info!("running: {:?}", argv);
-            let status = Command::new(&argv[0])
-                .args(&argv[1..])
-                .current_dir(wt.path())
-                .env("JJ_HOOKS_WORKSPACE", workspace_root)
-                .status()?;
-
-            if !status.success() {
+            let ok = run_subprocess(&argv, wt.path(), workspace_root, captured.as_mut())?;
+            if !ok {
                 success = false;
             }
         }
@@ -361,7 +522,51 @@ fn run_once(
     Ok(OnceOutcome {
         success,
         fixup_commit,
+        captured_output: captured,
     })
+}
+
+/// Run a hook subprocess. When `capture` is `Some`, the child's
+/// stdout+stderr are captured into the buffer (chronological order is
+/// approximated by concatenating stdout then stderr — the runner CLIs
+/// we wrap mostly print failures to stderr so this preserves the
+/// signal even though it's not a true byte-level interleave). When
+/// `capture` is `None`, the child inherits stdio so the user sees the
+/// runner's progress bar live.
+///
+/// Returns `Ok(true)` on a zero exit, `Ok(false)` on any non-zero
+/// exit. IO errors (spawn failure, etc.) propagate as `Err`.
+fn run_subprocess(
+    argv: &[String],
+    cwd: &Path,
+    workspace_root: &Path,
+    capture: Option<&mut String>,
+) -> Result<bool> {
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..])
+        .current_dir(cwd)
+        .env("JJ_HOOKS_WORKSPACE", workspace_root);
+    match capture {
+        None => {
+            let status = cmd.status()?;
+            Ok(status.success())
+        }
+        Some(buf) => {
+            let output = cmd.output()?;
+            // Tag the captured block with the argv so the user can
+            // see which subprocess produced each chunk when N hook
+            // backends are multiplexed.
+            buf.push_str(&format!("$ {}\n", argv.join(" ")));
+            buf.push_str(&String::from_utf8_lossy(&output.stdout));
+            if !output.stderr.is_empty() {
+                buf.push_str(&String::from_utf8_lossy(&output.stderr));
+            }
+            if !buf.ends_with('\n') {
+                buf.push('\n');
+            }
+            Ok(output.status.success())
+        }
+    }
 }
 
 /// Resolve the `from_ref` commits to diff against. For an existing

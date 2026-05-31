@@ -115,6 +115,11 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjHooksError> {
                 // push always uses the diff range — the bookmark's ref
                 // bounds are the whole point.
                 all_files: false,
+                // jj-hp push is a single-bookmark CLI invocation; the
+                // user wants the runner's live progress bar in their
+                // terminal. Capture is only needed by the multi-update
+                // parallel batch API used by jj-gt.
+                capture_output: false,
             };
 
             let report = run_checks(
@@ -192,6 +197,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjHooksError> {
             let run_opts = crate::hooks::RunOpts {
                 retry_after_fixup: !no_retry_after_fixup,
                 all_files,
+                capture_output: false,
             };
 
             run_for_revset(
