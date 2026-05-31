@@ -29,6 +29,6 @@ class AkiflowCli < Formula
   end
 
   test do
-    assert_match "0.3.0", shell_output("#{bin}/af --version")
+    assert_match version.to_s, shell_output("#{bin}/af --version")
   end
 end
