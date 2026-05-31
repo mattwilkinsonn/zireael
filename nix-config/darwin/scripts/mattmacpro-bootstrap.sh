@@ -4,8 +4,9 @@
 # Pre-reqs (see darwin/mattmacpro/INSTALL.md for the full procedure):
 #   - macOS Sonoma installed via OCLP, root-patched.
 #   - mattw admin user created during macOS setup.
-#   - Remote Login enabled + Energy Saver tuned per the hardening
-#     section of INSTALL.md.
+#   - Energy Saver tuned per the hardening section of INSTALL.md.
+#     (Remote Login is intentionally left OFF — Tailscale SSH is the
+#     only access path; see system.nix "SSH" block.)
 #   - This script is reachable on disk (USB containing nix-config, or
 #     `gh repo clone` from /tmp once you have an SSH path).
 #
@@ -317,8 +318,10 @@ fi
 # Lays down:
 #   - Tailscale cask (re-confirmation; already installed in step 4)
 #   - Tailscale CLI symlink at /usr/local/bin/tailscale (re-confirmation)
-#   - Remote Login (sshd) enabled via systemsetup
+#   - Native sshd intentionally unloaded (see system.nix postActivation)
 #   - Strict pmset (sleep 0, autorestart, etc.)
+#   - pf egress filter for the runner UID (see system.nix
+#     pf-runner-egress launchd daemon)
 #   - GitHub runner LaunchDaemons (start immediately — token in place)
 #   - Glances + tailscale-serve-glances LaunchDaemons
 #
@@ -343,16 +346,34 @@ fi
 step "Sanity checks"
 
 echo "[ssh]"
-# `systemsetup -getremotelogin` requires Full Disk Access from the
-# calling process. SSH sessions don't have it, so the command
-# silently returns "Off" instead of erroring — false negative. Probe
-# the launchd plist directly: if com.openssh.sshd is registered with
-# the system domain, sshd is enabled regardless of whether
-# systemsetup can read the state.
+# Native sshd is intentionally unloaded post-bootstrap (see
+# system.nix postActivation). The probe below uses
+# `launchctl print system/com.openssh.sshd` to confirm the unit
+# isn't registered — exit 0 means it IS registered (bad here),
+# non-zero means it isn't (good).
 if sudo launchctl print system/com.openssh.sshd >/dev/null 2>&1; then
-	echo "  Remote Login (sshd): on"
+	warn "  Remote Login (sshd): unexpectedly enabled — re-run nix-switch to unload"
 else
-	warn "  Remote Login (sshd): off — enable via System Settings → General → Sharing"
+	echo "  Remote Login (sshd): off (Tailscale SSH is the access path)"
+fi
+
+echo "[pf]"
+# Egress filter for the _github-runner UID — see system.nix
+# `launchd.daemons.pf-runner-egress`. We load our ruleset
+# top-level (no anchor), so `pfctl -sr` enumerates the active
+# rules; counting "user _github-runner" lines confirms our rules
+# made it in. Apple-default anchors at the top of the ruleset
+# pass through; the runner-scoped rules are the ones we care
+# about for this check.
+if sudo pfctl -s info 2>/dev/null | grep -q "Status: Enabled"; then
+	rule_count=$(sudo pfctl -sr 2>/dev/null | grep -c "user _github-runner")
+	if [ "$rule_count" -gt 0 ]; then
+		echo "  pf enabled, $rule_count runner-egress rules loaded"
+	else
+		warn "  pf enabled but no runner-egress rules found — re-run nix-switch"
+	fi
+else
+	warn "  pf disabled — runner-egress filter not active"
 fi
 
 echo "[tailscale]"

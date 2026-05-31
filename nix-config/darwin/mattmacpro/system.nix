@@ -17,11 +17,11 @@
 # root-patch quality doesn't matter much; we only need the desktop
 # to render at all for occasional VNC/screen sharing debug.
 #
-# Headless / always-on. Lives in a closet on wired ethernet; SSH
-# (both Tailscale SSH and native sshd as a LAN fallback) is the only
-# user-facing interface. pmset is locked into "never sleep, never
-# hibernate, autorestart on power loss" — see the pmset activation
-# block below.
+# Headless / always-on. Lives in a closet on wired ethernet;
+# Tailscale SSH (LAN-side native sshd is intentionally unloaded)
+# is the only user-facing interface. pmset is locked into "never
+# sleep, never hibernate, autorestart on power loss" — see the
+# pmset activation block below.
 
 let
   # Two runner instances. Xeon E5 in the Mac Pro 2013 is typically
@@ -439,22 +439,22 @@ in
     /usr/bin/pmset -a standby 0        # disable deep-idle standby
     /usr/bin/pmset -a hibernatemode 0  # no hibernation
 
-    # SSH (Remote Login). macOS ships sshd disabled by default. We
-    # enable com.openssh.sshd via launchctl directly — using
-    # `systemsetup -setremotelogin on` requires the calling process
-    # to have Full Disk Access in TCC, which `darwin-rebuild` running
-    # over SSH or from a non-Aqua shell doesn't have, so it silently
-    # no-ops. launchctl + the system-wide plist path works in any
-    # session.
+    # SSH (Remote Login). Tailscale SSH (enabled via `tailscale up
+    # --ssh` in the bootstrap script) handles every interactive
+    # access path; the LAN-side native sshd is unneeded attack
+    # surface for a runner host that nobody should be SSHing to
+    # over the LAN. Earlier configs enabled `com.openssh.sshd` here
+    # as a Tailscale-fallback; that's been retired now that
+    # Tailscale has been stable for months.
     #
-    # Tailscale SSH (enabled via `tailscale up --ssh` in the
-    # bootstrap script) is the primary entry point. Native sshd is
-    # the LAN fallback for cases where Tailscale is itself the
-    # problem (auth issue, control-plane outage, etc.).
-    if [ -f /System/Library/LaunchDaemons/ssh.plist ]; then
-      /bin/launchctl enable system/com.openssh.sshd 2>/dev/null || true
-      /bin/launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist 2>/dev/null || true
-    fi
+    # `launchctl bootout` is the macOS equivalent of `systemctl
+    # disable && systemctl stop`. `disable` flips the persistent
+    # enabled bit; `bootout` unloads from the running launchd
+    # session. Both 2>/dev/null so re-running a host that's already
+    # in the desired state (or one that never had sshd loaded —
+    # fresh macOS install) doesn't error.
+    /bin/launchctl disable system/com.openssh.sshd 2>/dev/null || true
+    /bin/launchctl bootout system/com.openssh.sshd 2>/dev/null || true
   '';
 
   # ============================================================
@@ -566,6 +566,134 @@ in
       RunAtLoad = true;
       StandardOutPath = "/var/log/tailscale-serve-glances.log";
       StandardErrorPath = "/var/log/tailscale-serve-glances.log";
+    };
+  };
+
+  # ============================================================
+  # pf egress filter — UID-scoped lockdown for the runner pool
+  # ============================================================
+  #
+  # Mirror of mattserver's nftables runner-egress rule, adapted for
+  # macOS's pf. Same threat model: a malicious GHA workflow lands
+  # code-exec as `_github-runner`; we cut that UID off from LAN
+  # reachability so it can't talk to the router admin UI, the NAS,
+  # other workstations, etc.
+  #
+  # Why pf and not a per-launchd-daemon equivalent: launchd has no
+  # PrivateNetwork/IPAddressDeny analog; the actual filter has to
+  # live at the kernel netfilter layer. macOS's pf can match on
+  # `user <name>` which getpwnam-resolves the username at ruleset
+  # load time — robust against UID reshuffles by nix-darwin.
+  #
+  # Why a full ruleset (not just an anchor): Apple's default
+  # /etc/pf.conf only references com.apple/* anchors. To get OUR
+  # rules to actually evaluate, we'd either have to edit /etc/pf.conf
+  # (fragile — Apple owns that file) or load our own top-level
+  # ruleset. We do the latter. Apple's default anchors are
+  # pass-through'd at the top so anything that legitimately needs
+  # them (Internet Sharing, AirDrop, etc. — none of which run on
+  # this headless box) keeps working.
+  #
+  # Allowed egress for the runner UID:
+  #   - loopback (sccache server lives on lo0)
+  #   - DNS (53/udp+tcp) — github.com, crates.io, registries
+  #   - HTTP/HTTPS (80, 443) to public destinations
+  #   - git+ssh (22) for `cargo install --git` etc.
+  #   - utun* (Tailscale data plane) — tailnet ACLs gate peer access
+  #
+  # Dropped egress for the runner UID:
+  #   - RFC1918 ranges (10/8, 172.16/12, 192.168/16)
+  #   - link-local (169.254/16)
+  #   - CGNAT (100.64/10) on non-utun interfaces — the utun pass
+  #     above covers legitimate tailnet egress; this catches anyone
+  #     trying to route around tailscaled
+  #
+  # The `log` action on the default-deny line writes to pflog0; tail
+  # it with `sudo tcpdump -ni pflog0` to see unexpected blocks
+  # during the first week of operation.
+
+  environment.etc."pf.runner.conf".text = ''
+    # Apple default anchors — pass-through so Internet Sharing /
+    # AirDrop / Apple-internal pf use continues to work if anything
+    # ever needs them on this box.
+    scrub-anchor "com.apple/*"
+    nat-anchor "com.apple/*"
+    rdr-anchor "com.apple/*"
+    anchor "com.apple/*"
+    load anchor "com.apple" from "/etc/pf.anchors/com.apple"
+
+    # ---- LAN destination tables ------------------------------------
+    table <lan_ranges> const { \
+      10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, \
+      169.254.0.0/16, 100.64.0.0/10 \
+    }
+
+    # ---- Runner egress lockdown ------------------------------------
+    # `quick` short-circuits — first match wins, no further
+    # evaluation. Without `quick`, pf evaluates the whole ruleset
+    # and the LAST matching rule wins (BSD pf semantics), which
+    # would let the default-pass rule at the bottom override our
+    # blocks.
+
+    # Allow loopback unconditionally (sccache, localhost services).
+    pass quick on lo0
+
+    # Tailscale data-plane interface. Apple's tailscaled (formula
+    # variant on this host) creates utun* interfaces; the exact
+    # suffix is dynamic across reboots. `utun` matches any of them.
+    pass out quick on utun proto { tcp udp icmp } user _github-runner
+
+    # Allow DNS to any destination.
+    pass out quick proto { tcp udp } from any to any port 53 \
+      user _github-runner
+
+    # Drop LAN-range destinations for the runner UID. Listed BEFORE
+    # the public-internet allow so the runner can't fall through into
+    # a LAN host that happens to be listening on 443.
+    block drop out log quick proto { tcp udp icmp } \
+      from any to <lan_ranges> user _github-runner
+
+    # Allow public HTTP/HTTPS + git+ssh.
+    pass out quick proto tcp from any to any port { 80, 443, 22 } \
+      user _github-runner
+
+    # Default deny — runner UID can't reach anything else. Logged
+    # to pflog0 for forensics.
+    block drop out log quick from any to any user _github-runner
+
+    # Everything else (mattw's shell, system daemons, anyone not
+    # the runner UID) passes unaffected.
+    pass out all
+  '';
+
+  # Loader daemon — runs at boot, calls `pfctl -ef` to enable pf
+  # and load our ruleset. `-E` increments pf's enable refcount;
+  # `-f` loads the ruleset (replacing whatever's active, which
+  # post-bootstrap is either nothing or Apple's empty default).
+  #
+  # Type=oneshot semantics on launchd: `RunAtLoad=true, KeepAlive=false`
+  # means launchd starts the process once at boot, waits for exit,
+  # then leaves pf in the loaded-and-enabled state without keeping
+  # the daemon process around. pf kernel state survives the daemon
+  # exit — the rules stay loaded.
+  #
+  # Ordering: `_github-runner` is created by nix-darwin's
+  # github-runner module activation; that activation runs before
+  # launchd boots our daemons, so getpwnam("_github-runner")
+  # succeeds at pfctl-load time. Worst case if races (it shouldn't):
+  # pfctl -f fails, daemon exits non-zero, the next reboot retries.
+  launchd.daemons.pf-runner-egress = {
+    serviceConfig = {
+      Label = "com.sealedsecurity.pf-runner-egress";
+      ProgramArguments = [
+        "/sbin/pfctl"
+        "-ef"
+        "/etc/pf.runner.conf"
+      ];
+      RunAtLoad = true;
+      KeepAlive = false;
+      StandardOutPath = "/var/log/pf-runner-egress.log";
+      StandardErrorPath = "/var/log/pf-runner-egress.log";
     };
   };
 
