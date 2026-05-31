@@ -28,10 +28,10 @@ Patcher keeps the box inside a supported window through ~late 2026.
 4. `bash <path-to>/nix-config/darwin/scripts/mattmacpro-bootstrap.sh`.
 
 The bootstrap script handles everything else: Xcode CLT, Nix
-(upstream, via the Determinate installer), Homebrew, 1Password CLI + SA token, `gh` + zireael checkout,
-GitHub runner PAT, `darwin-rebuild`, Tailscale auth, inter-server SSH
-key. You'll get four interactive prompts: 1P SA token, `gh auth login`
-flow, GitHub runner PAT, Tailscale pre-auth key. That's it.
+(upstream, via the Determinate installer), Homebrew, `gh` + zireael
+checkout, GitHub runner PAT, `darwin-rebuild`, Tailscale auth. You'll
+get three interactive prompts: `gh auth login` flow, GitHub runner
+PAT, Tailscale pre-auth key. That's it.
 
 ## Pre-install checklist
 
@@ -39,8 +39,6 @@ flow, GitHub runner PAT, Tailscale pre-auth key. That's it.
 - [ ] Tailscale pre-auth key ready at
       <https://login.tailscale.com/admin/settings/keys>. Single-use,
       tagged with `tag:ci-runner`. Paste at the bootstrap prompt.
-- [ ] Personal 1Password service-account token ready (read access to
-      Server vault — specifically the `inter-server/private key` item).
 - [ ] GitHub PAT ready (fine-grained with `manage_runners:org` for
       sealedsecurity org, or classic with `admin:org`). Create at
       <https://github.com/organizations/sealedsecurity/settings/personal-access-tokens>.
@@ -146,23 +144,32 @@ debuggable remotely (no more USB-shuffling to copy errors back):
    flag (their proprietary fork doesn't ship x86_64-darwin). Upstream
    Nix; same installer machinery handles the synthetic-fs dance +
    daemon plist.
-7. **1Password CLI + SA token** — `brew install 1password-cli`,
-   prompts for your SA token, stores it in the macOS login Keychain,
-   verifies via `op whoami`.
-8. **GitHub runner PAT** — prompts for the org-scoped PAT and writes
+7. **GitHub runner PAT** — prompts for the org-scoped PAT and writes
    it to `/etc/github-runner/sealed-token` (mode 600 root:wheel).
-   Must be in place before step 9 since the runners are
+   Must be in place before step 8 since the runners are
    `enable = true` unconditionally.
-9. **darwin-rebuild switch** — enables sshd via `systemsetup`, locks
+8. **darwin-rebuild switch** — enables sshd via `systemsetup`, locks
    pmset, lays down the three runner LaunchDaemons (start
    immediately), and Glances + tailscale-serve-glances.
-10. **Inter-server SSH key** — fetched from 1Password into
-    `~/.ssh/id_ed25519_inter_server`.
-11. **Sanity checks** — confirms sshd, Tailscale, runners, and
-    Glances are all up.
+9. **Sanity checks** — confirms sshd, Tailscale, runners, and
+   Glances are all up.
 
 The script is re-runnable: every step skips if already done. Safe to
 ctrl-C at any point and resume — including via SSH after step 4.
+
+**Security posture:** mattmacpro deliberately keeps no 1Password
+service-account tokens on disk — the host runs untrusted GHA
+workflows via the self-hosted runner pool, so any SA accessible to
+processes here is a credential the runner UID could exfiltrate.
+The runner PAT in step 7 is the only secret, mode-600 root-wheel.
+Earlier bootstrap versions provisioned a personal SA into
+Keychain at step 7 and fetched a shared `inter-server` SSH key —
+both retired. If your host still has either, clean them up:
+
+```bash
+security delete-generic-password -a "$USER" -s OP_SERVICE_ACCOUNT_TOKEN
+rm -f ~/.ssh/id_ed25519_inter_server ~/.ssh/id_ed25519_inter_server.pub
+```
 
 After it completes, you should be able to SSH from your MBP:
 

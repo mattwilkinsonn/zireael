@@ -52,7 +52,14 @@ let
   mkSealedRunner = name: {
     enable = enableRunners;
     url = "https://github.com/sealedsecurity";
-    tokenFile = "/etc/github-runner/sealed-token";
+    # Decrypt-at-boot path — `decrypt-runner-token.service` below
+    # decrypts /etc/github-runner/sealed-token.cred (host-bound via
+    # systemd-creds, plaintext token never touches disk persistently)
+    # into this tmpfs location before any runner unit starts. The
+    # github-runner module's configure script reads the path literally
+    # via `install --mode=…`, so it has to exist at unit start —
+    # ordering enforced by the `Requires=`/`After=` overrides below.
+    tokenFile = "/run/github-runner/sealed-token";
 
     # Pin to a static user so the shared dirs in
     # /var/lib/github-runners/shared/ have a stable owner. The
@@ -500,14 +507,15 @@ in
   # Dedicated backup user. Source hosts SSH in as this user and pipe
   # `zfs send` into `zfs receive`. ZFS delegation (zfs allow, one-time
   # setup in INSTALL.md) grants receive permission without a root shell.
+  #
+  # authorizedKeys intentionally empty: the previous shared
+  # `inter-server` keypair was retired (see `nixos/common.nix` history
+  # for context). The backup path documented in INSTALL.md isn't
+  # currently wired up; if we ever set up syncoid/sanoid pushes we'll
+  # mint a fresh dedicated keypair scoped to the backup user only.
   users.users.backup = {
     isNormalUser = true;
-    openssh.authorizedKeys.keys = [
-      # Inter-server keypair from common.nix — same key that mattw uses for
-      # host-to-host automation. Kept in sync so rpi5/rpi4 can push backups
-      # without a separate key.
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAJ6mvnQYv4B9V7KWo4xt6k5+2fx0Z1e9J384hSkg9Ec inter-server"
-    ];
+    openssh.authorizedKeys.keys = [ ];
   };
 
   # ============================================================
@@ -559,14 +567,93 @@ in
   # (classic). The org-level URL below means runners pick up jobs from any
   # sealedsecurity repo (seal, sealed, etc.) without per-repo registration.
   #
-  # Write token file after first boot (see INSTALL.md):
-  #   sudo install -m 600 -o root -g root \
-  #     /dev/stdin /etc/github-runner/sealed-token <<< 'ghp_...'
+  # Provisioning: encrypt the PAT once on the host (input prompts for
+  # the token, output is host-bound via systemd-creds machine-ID
+  # encryption):
+  #
+  #   sudo bash nixos/scripts/mattserver-encrypt-runner-token.sh
+  #
+  # That writes /etc/github-runner/sealed-token.cred. The
+  # decrypt-runner-token.service oneshot below decrypts it to
+  # /run/github-runner/sealed-token (tmpfs, mode 600, owned by
+  # sealed-runner) before any runner unit starts. Plaintext never
+  # touches persistent storage after the bootstrap step.
   services.github-runners = {
     sealed = mkSealedRunner "sealed";
     sealed-2 = mkSealedRunner "sealed-2";
     sealed-3 = mkSealedRunner "sealed-3";
     sealed-4 = mkSealedRunner "sealed-4";
+  };
+
+  # Decrypt the host-bound encrypted PAT into tmpfs at boot. systemd-creds
+  # decrypt + machine-ID-bound encryption means:
+  #   - The .cred file at rest can't be decrypted off-host (rsync attack).
+  #   - The plaintext lives in /run (tmpfs), so it disappears on shutdown.
+  #   - File mode 0600 owned by the runner user means only that user (and
+  #     root) can read the decrypted token.
+  #
+  # `Type=oneshot, RemainAfterExit=true` so the unit stays "active" after
+  # the decrypt finishes — the runner units' `Requires=` won't fire a
+  # restart of an active unit, and `After=` correctly orders the runners
+  # behind it on every boot.
+  #
+  # `+` prefix on ExecStart runs as root (needed for systemd-creds decrypt
+  # against the host machine-ID key); the install command then chowns the
+  # plaintext to sealed-runner so the runner service can read its
+  # tokenFile.
+  systemd.services.decrypt-runner-token = {
+    description = "Decrypt the GitHub Actions runner PAT into /run";
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      RuntimeDirectory = "github-runner";
+      RuntimeDirectoryMode = "0750";
+      RuntimeDirectoryPreserve = true;
+      ExecStart = [
+        ''
+          +${pkgs.writeShellScript "decrypt-runner-token" ''
+            set -euo pipefail
+            ${pkgs.systemd}/bin/systemd-creds decrypt \
+              --name=sealed-runner-token \
+              /etc/github-runner/sealed-token.cred \
+              /run/github-runner/sealed-token
+            chown ${sealedRunnerUser}:${sealedRunnerUser} \
+              /run/github-runner/sealed-token
+            chmod 600 /run/github-runner/sealed-token
+          ''}
+        ''
+      ];
+    };
+  };
+
+  # Wire each runner unit to wait for the decrypt to land. `Requires=`
+  # alone isn't enough — it only fires the decrypt if the runner unit
+  # starts before it; `After=` enforces ordering both ways. NixOS
+  # merges these lists with the upstream module's own `after`
+  # (`network.target`, `network-online.target`).
+  #
+  # Each unit gets the same override, so we define them by name. Keep
+  # this list in sync with `services.github-runners` above. We declare
+  # by single-key path (`systemd.services.<name>`) rather than
+  # `systemd.services = { … }` so the NixOS module system merges with
+  # `systemd.services.decrypt-runner-token` (above) and
+  # `systemd.services.sccache-server` (below) instead of conflicting.
+  systemd.services.github-runner-sealed = {
+    after = [ "decrypt-runner-token.service" ];
+    requires = [ "decrypt-runner-token.service" ];
+  };
+  systemd.services.github-runner-sealed-2 = {
+    after = [ "decrypt-runner-token.service" ];
+    requires = [ "decrypt-runner-token.service" ];
+  };
+  systemd.services.github-runner-sealed-3 = {
+    after = [ "decrypt-runner-token.service" ];
+    requires = [ "decrypt-runner-token.service" ];
+  };
+  systemd.services.github-runner-sealed-4 = {
+    after = [ "decrypt-runner-token.service" ];
+    requires = [ "decrypt-runner-token.service" ];
   };
 
   # ============================================================
@@ -758,11 +845,132 @@ in
     networkmanager.enable = true;
   };
 
+  # nftables backend (replaces the iptables-based default). Required
+  # for the runner-egress filter below — `networking.firewall` still
+  # works on either backend; nftables gives us the user-matched
+  # output chain we want for the lockdown.
+  networking.nftables.enable = true;
+
   networking.firewall = {
     enable = true;
-    allowedTCPPorts = [ 22 ];
+    # No inbound TCP from the LAN — SSH is Tailscale-only. The
+    # bootstrap-time native sshd is unloaded post-bootstrap via
+    # `disableSshd` activation below. Tailscale SSH (enabled via
+    # `extraUpFlags = [ "--ssh" ]`) handles every interactive
+    # session; the tailscale0 trust below covers tailnet inbound.
+    allowedTCPPorts = [ ];
     trustedInterfaces = [ "tailscale0" ];
   };
+
+  # Egress lockdown for the GitHub Actions runner pool.
+  #
+  # Threat model: a malicious workflow lands code-exec as
+  # `sealed-runner`. Already mitigated upstream by external-PR
+  # workflow approval + dep cooldowns + Tailscale ACLs gating
+  # tailnet peer reachability. This rule is defense-in-depth:
+  # cut the runner UID off from the LAN (router admin, NAS,
+  # other workstations) and from CGNAT-routed paths that bypass
+  # tailscaled.
+  #
+  # Why nftables (kernel, by UID) and not systemd's per-unit
+  # `IPAddressDeny=` / `PrivateNetwork=`: the runner units
+  # deliberately weaken systemd hardening
+  # (`SystemCallFilter = lib.mkForce []`,
+  # `RestrictNamespaces = false`, `PrivateUsers = false`)
+  # because seal's daemon spawns bwrap sandboxes inside the
+  # workflow — those primitives need to remain available. A
+  # per-unit network filter would either need the same unwrap
+  # (defeating the point) or break bwrap. Filtering by UID at
+  # the kernel survives every fork inside the unit, the bwrap
+  # unwrap, and any in-process privilege escalation short of
+  # root.
+  #
+  # `meta skuid` is the source UID for outbound packets. We
+  # match by username — nft resolves `"sealed-runner"` via
+  # `getpwnam` at ruleset load, which is robust against the
+  # auto-allocated system UID (the `users.users.sealed-runner`
+  # block above doesn't pin a numeric uid).
+  #
+  # Allowed egress for the runner UID:
+  #   - loopback (sccache server lives here)
+  #   - DNS (53/udp+tcp, any destination — needed for
+  #     github.com, crates.io, registries)
+  #   - HTTP/HTTPS (80, 443) to public destinations (registries,
+  #     GitHub API, action artifact endpoints)
+  #   - git+ssh egress (22) for `cargo install --git` etc.
+  #   - tailscale0 interface (tailnet ACLs govern peers)
+  #
+  # Dropped egress for the runner UID:
+  #   - any TCP/UDP/ICMP to RFC1918 (10/8, 172.16/12, 192.168/16)
+  #   - link-local (169.254/16)
+  #   - CGNAT (100.64/10) on non-tailscale0 paths — tailscale0
+  #     egress was already passed above; this catches anyone
+  #     trying to route around tailscaled
+  #   - IPv6 ULA + link-local
+  #
+  # The `log prefix "runner-egress-drop: "` action surfaces
+  # blocked attempts in the journal so we can see what
+  # legitimate egress (if any) got caught and tighten the
+  # allowlist. After a week of clean logs, the prefix can be
+  # demoted to bare `drop`.
+  networking.nftables.tables.runner_egress = {
+    family = "inet";
+    content = ''
+      chain output {
+        type filter hook output priority filter; policy accept;
+
+        # Skip the rule for any non-runner UID.
+        meta skuid != "sealed-runner" accept
+
+        # Allow loopback — sccache server, localhost-only services.
+        oifname "lo" accept
+
+        # Allow tailscale0 egress — tailnet ACLs are the policy layer
+        # for peer reachability.
+        oifname "tailscale0" accept
+
+        # Allow DNS to any destination.
+        udp dport 53 accept
+        tcp dport 53 accept
+
+        # Drop RFC1918 / link-local / CGNAT (non-tailscale0) before
+        # the public-internet allow so the runner can't fall through
+        # the 443-allow into a LAN host listening on 443.
+        ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+                   169.254.0.0/16, 100.64.0.0/10 } \
+          log prefix "runner-egress-drop: " level warn drop
+        ip6 daddr { fc00::/7, fe80::/10 } \
+          log prefix "runner-egress-drop: " level warn drop
+
+        # Allow public HTTP/HTTPS + git+ssh.
+        tcp dport { 80, 443, 22 } accept
+
+        # Default deny for anything else this UID tries.
+        log prefix "runner-egress-drop: " level warn drop
+      }
+    '';
+  };
+
+  # Unload the bootstrap-time native sshd. The mattserver-bootstrap
+  # script enables it so the operator can SSH in over the LAN to
+  # finish the first nixos-rebuild, but post-bootstrap Tailscale
+  # SSH is the only access path we need.
+  #
+  # `lib.mkForce false` because `nixos/common.nix` sets
+  # `services.openssh.enable = true` across every NixOS host — the
+  # Pis + mattfw + mattpc-wsl rely on that default for their own
+  # LAN-fallback access. Mattserver opts out per-host.
+  services.openssh.enable = lib.mkForce false;
+
+  # Drop Cockpit. Common.nix turns it on (with `openFirewall = true`
+  # → 9090 inbound) so the Pis + mattfw have a tailnet-served
+  # management UI; mattserver never wired up the matching
+  # tailscale-serve unit, so the only path that ever reached it was
+  # http://<lan-ip>:9090 — i.e. LAN-inbound, defeating the same
+  # lockdown the sshd drop above is closing. Replaced operationally
+  # by Tailscale SSH + `btm` for live monitoring. Same per-host
+  # override pattern as mattpc-wsl. SEA-672 follow-up.
+  services.cockpit.enable = lib.mkForce false;
 
   services.tailscale = {
     enable = true;

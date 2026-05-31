@@ -12,14 +12,18 @@
 # Handles:
 #   1. Tailscale auth (pre-auth key — headless-friendly).
 #   2. Dotfiles repo → colocated git+jj at ~/.git, work-tree at $HOME.
-#   3. 1Password service-account token at ~/.config/op/service-account-token.
-#   4. nixos-rebuild switch (home-manager activations need the user session).
-#   5. Password rotation — replace initialHashedPassword from 1P.
-#   6. Inter-server SSH key from 1Password.
-#   7. Sanity checks — SSH, Tailscale, ZFS pool, runner services.
+#   3. nixos-rebuild switch (home-manager activations need the user session).
+#   4. Password rotation — prompts the operator for new mattw + root
+#      password. (Manual rather than 1P-driven: mattserver is the
+#      runner host; we deliberately keep zero standing 1Password
+#      service-account credentials on this box. See INSTALL.md
+#      "Security posture" for the threat-model rationale.)
+#   5. Sanity checks — SSH, Tailscale, ZFS pool, runner services.
 #
 # GitHub runner token file is NOT written here — do that manually after
 # this script completes (see INSTALL.md "GitHub runner token" section).
+# The runner PAT is encrypted at rest via systemd-creds; the encrypt
+# script is the one-time + per-rotation operator step.
 #
 # Re-runnable: each step skips if already done.
 #
@@ -59,20 +63,7 @@ if [ ! -d "$NIX_CONFIG_DIR" ]; then
 fi
 
 # ---------------------------------------------------------------------
-# 3. 1Password service-account tokens (two accounts: personal + team)
-# ---------------------------------------------------------------------
-# Personal account (mattserver-svc) — reads op://Dev + op://Server.
-TOKEN_FILE="$HOME/.config/op/service-account-token"
-op_token_file_write "$TOKEN_FILE" Personal "read access to personal Dev + Server vaults"
-op_export_and_verify "$TOKEN_FILE"
-
-# Team account (matt-dev-svc at sealedsecurity.1password.com) — reads
-# op://Employee Dev. Used by the user shell only.
-TEAM_TOKEN_FILE="$HOME/.config/op/team-service-account-token"
-op_token_file_write "$TEAM_TOKEN_FILE" Team "read access to Employee Dev vault on sealedsecurity.1password.com"
-
-# ---------------------------------------------------------------------
-# 4. nixos-rebuild switch
+# 3. nixos-rebuild switch
 # ---------------------------------------------------------------------
 step "Running nixos-rebuild switch --flake .#mattserver"
 sudo nixos-rebuild switch \
@@ -80,19 +71,36 @@ sudo nixos-rebuild switch \
 	--show-trace
 
 # ---------------------------------------------------------------------
-# 5. Rotate passwords from 1Password
+# 4. Rotate passwords (manual prompt — see header)
 # ---------------------------------------------------------------------
-# `--soft` so a missing 1P item warns instead of erroring — this host
-# may be bootstrapped before the password item exists.
-op_rotate_user_root_password 'op://Dev/mattserver Password/password' --soft
+# Deliberately not 1P-driven on mattserver: this host runs untrusted
+# GHA workflows via the self-hosted runners, so we minimise standing
+# capability the runner UID can ever reach (zero OP service-account
+# tokens on disk).
+#
+# If the bootstrap is being re-run on an already-configured host and
+# you don't want to rotate, just hit Enter at both prompts to skip.
+step "Password rotation (mattw + root)"
+read -r -s -p "New password for mattw + root (or Enter to skip): " new_password
+echo
+if [ -n "$new_password" ]; then
+	read -r -s -p "Confirm: " confirm_password
+	echo
+	if [ "$new_password" != "$confirm_password" ]; then
+		err "passwords don't match — re-run the script and try again"
+	fi
+	sudo chpasswd <<EOF
+mattw:$new_password
+root:$new_password
+EOF
+	unset new_password confirm_password
+	echo "  mattw + root passwords rotated"
+else
+	echo "  skipped (blank input)"
+fi
 
 # ---------------------------------------------------------------------
-# 6. Inter-server SSH key
-# ---------------------------------------------------------------------
-op_fetch_inter_server_key
-
-# ---------------------------------------------------------------------
-# 7. Sanity checks
+# 5. Sanity checks
 # ---------------------------------------------------------------------
 step "Sanity checks"
 
@@ -119,7 +127,7 @@ for svc in github-runner-sealed \
 		echo "  $svc: not configured (enableRunners=false in system.nix — flip + rebuild to enable)"
 	else
 		STATUS="$(systemctl is-active "$svc" 2>/dev/null || echo 'unknown')"
-		warn "  $svc: $STATUS — write token file per INSTALL.md then: sudo systemctl restart $svc"
+		warn "  $svc: $STATUS — run mattserver-encrypt-runner-token.sh per INSTALL.md then: sudo systemctl restart $svc"
 	fi
 done
 
@@ -147,7 +155,10 @@ Bootstrap complete for $(hostname).
 Tailscale: $(tailscale status --json 2>/dev/null | grep -o '"DNSName":"[^"]*"' | head -1 | sed 's/"DNSName":"\(.*\).$/\1/' || echo "<run 'tailscale status'>")
 
 Next steps:
-  1. Write GitHub runner token file (INSTALL.md "GitHub runner token").
+  1. Encrypt the GitHub runner PAT into systemd-creds at
+     /etc/github-runner/sealed-token.cred (INSTALL.md "GitHub runner token"):
+       sudo bash $HOME/repos/zireael/nix-config/nixos/scripts/mattserver-encrypt-runner-token.sh
+     Then flip enableRunners=true in nixos/mattserver/system.nix and nix-switch.
   2. Create ZFS pool if not done yet (INSTALL.md "SATA SSHD — ZFS backup pool").
   3. Grant ZFS delegation to the backup user (INSTALL.md "ZFS backup receive setup").
   4. Add SSH config entry on your Mac (INSTALL.md "SSH from the Mac").

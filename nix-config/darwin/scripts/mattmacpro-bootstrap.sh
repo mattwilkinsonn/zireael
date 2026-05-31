@@ -4,8 +4,9 @@
 # Pre-reqs (see darwin/mattmacpro/INSTALL.md for the full procedure):
 #   - macOS Sonoma installed via OCLP, root-patched.
 #   - mattw admin user created during macOS setup.
-#   - Remote Login enabled + Energy Saver tuned per the hardening
-#     section of INSTALL.md.
+#   - Energy Saver tuned per the hardening section of INSTALL.md.
+#     (Remote Login is intentionally left OFF — Tailscale SSH is the
+#     only access path; see system.nix "SSH" block.)
 #   - This script is reachable on disk (USB containing nix-config, or
 #     `gh repo clone` from /tmp once you have an SSH path).
 #
@@ -16,15 +17,21 @@
 #   1. Xcode CLT (needed for brew + git)
 #   2. macOS hostname set to `mattmacpro` (must precede tailscale up
 #      or your tailnet hostname will be `mattmacpro-local` or similar)
-#   3. Homebrew (needed for tailscale, gh, op)
+#   3. Homebrew (needed for tailscale, gh)
 #   4. Tailscale install + auth (you can now SSH in and copy-paste)
 #   5. gh install + auth + dotfiles clone
 #   6. Nix
-#   7. 1Password CLI + service-account token → Keychain
-#   8. GitHub runner PAT → /etc/github-runner/sealed-token
-#   9. darwin-rebuild switch (runners start immediately)
-#  10. Inter-server SSH key from 1Password
-#  11. Sanity checks
+#   7. GitHub runner PAT → /etc/github-runner/sealed-token
+#   8. darwin-rebuild switch (runners start immediately)
+#   9. Sanity checks
+#
+# Security posture: zero standing 1Password service-account tokens on
+# this host. mattmacpro runs untrusted GHA workflows via the
+# self-hosted runner pool, so any SA token on disk is a credential
+# the runner UID could exfiltrate. The runner PAT in step 7 is the
+# only secret here, and it's mode-600 root-wheel (consider
+# systemd-creds-equivalent encryption later; macOS has no direct
+# counterpart but Keychain with restricted ACL is closest).
 #
 # Re-runnable: every step skips if already done.
 #
@@ -42,7 +49,6 @@ source "$SCRIPT_DIR/../../shared/scripts/bootstrap-common.sh"
 
 ZIREAEL_REPO_SLUG="mattwilkinsonn/zireael"
 NIX_CONFIG_DIR="$HOME/repos/zireael/nix-config"
-KEYCHAIN_SERVICE="OP_SERVICE_ACCOUNT_TOKEN"
 SEALED_TOKEN_FILE="/etc/github-runner/sealed-token"
 TARGET_HOSTNAME="mattmacpro"
 TS_HOSTNAME="${TARGET_HOSTNAME}.tail08a5c5.ts.net"
@@ -274,88 +280,7 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# 7. 1Password CLI + service-account token → Keychain
-# ---------------------------------------------------------------------
-step "1Password CLI"
-if ! command -v op >/dev/null 2>&1; then
-	echo "  installing via brew (cask, not formula — 1password-cli was retired from homebrew-core)"
-	brew install --cask 1password-cli
-fi
-echo "  $(op --version)"
-
-step "1Password service-account token → Keychain"
-# Always target the login keychain explicitly. SSH sessions on macOS
-# often have either no default keychain set OR a default that points
-# at something the user can't write to (System keychain, a stale
-# session-specific keychain, etc.) — `security add-generic-password`
-# without `-k` then errors with "Write permissions error" even when
-# the login keychain itself is unlocked. Passing the keychain path
-# explicitly sidesteps all that ambiguity.
-KEYCHAIN_PATH="$HOME/Library/Keychains/login.keychain-db"
-
-# Provision the login keychain if it doesn't exist (e.g. a freshly-
-# created user who hasn't graphically logged in yet — the keychain
-# is normally created at first GUI login). Prompt for the macOS
-# account password to use as the keychain password.
-if [ ! -f "$KEYCHAIN_PATH" ]; then
-	echo "  login keychain doesn't exist yet — creating."
-	echo "  Enter your macOS account password (used as the keychain password):"
-	# `security create-keychain -P` prompts on stdin without echoing.
-	security create-keychain -P "$KEYCHAIN_PATH"
-fi
-
-# Ensure the login keychain is in the user search list AND set as
-# default — unconditionally, every run. SSH sessions on macOS often
-# start with only /Library/Keychains/System.keychain in the user
-# search list (which is read-only for non-admin operations) and no
-# default keychain at all, OR default pointed at System.keychain.
-# Without login.keychain-db in the search list, `security
-# add-generic-password -U` falls back to the default keychain and
-# fails to write because System is locked-down.
-#
-# `list-keychains -d user -s ...` REPLACES the list, so we have to
-# include both the login keychain AND whatever was already there
-# (typically System.keychain) to avoid blowing away other entries.
-existing_keychains=$(security list-keychains -d user | sed 's/^[[:space:]]*//;s/"//g' | tr '\n' ' ')
-# shellcheck disable=SC2086  # word-split intentional: -s takes multiple paths
-security list-keychains -d user -s "$KEYCHAIN_PATH" $existing_keychains >/dev/null
-security default-keychain -d user -s "$KEYCHAIN_PATH" >/dev/null
-
-# Ensure it's unlocked. Idempotent — only prompts if locked.
-if ! security show-keychain-info "$KEYCHAIN_PATH" >/dev/null 2>&1; then
-	echo "  login keychain is locked — unlock prompt follows."
-	security unlock-keychain "$KEYCHAIN_PATH"
-fi
-
-if security find-generic-password -a "$USER" -s "$KEYCHAIN_SERVICE" \
-	-w "$KEYCHAIN_PATH" >/dev/null 2>&1; then
-	echo "  Keychain entry '$KEYCHAIN_SERVICE' already present."
-else
-	echo "Paste your personal 1Password service-account token (ops_...)"
-	echo "for this host. Create at 1password.com → Integrations →"
-	echo "Service Accounts → New. Scope: Server vault read access."
-	echo
-	read -rsp "OP token: " OP_TOKEN
-	echo
-	[ -n "$OP_TOKEN" ] || err "empty token"
-	# `-U` updates if the item already exists (race-safe); `-T ""`
-	# leaves the ACL trusted-apps list empty so any process running
-	# as $USER can read it without a per-app trust prompt.
-	security add-generic-password -U -a "$USER" -s "$KEYCHAIN_SERVICE" \
-		-w "$OP_TOKEN" -T "" "$KEYCHAIN_PATH"
-	unset OP_TOKEN
-	echo "  Keychain entry written."
-fi
-
-step "Verifying op auth"
-OP_SERVICE_ACCOUNT_TOKEN=$(security find-generic-password -a "$USER" \
-	-s "$KEYCHAIN_SERVICE" -w "$KEYCHAIN_PATH")
-export OP_SERVICE_ACCOUNT_TOKEN
-op whoami >/dev/null || err "op whoami failed — token invalid?"
-echo "  ok"
-
-# ---------------------------------------------------------------------
-# 8. GitHub runner PAT → /etc/github-runner/sealed-token
+# 7. GitHub runner PAT → /etc/github-runner/sealed-token
 # ---------------------------------------------------------------------
 # Must exist BEFORE darwin-rebuild because the runner services have
 # `enable = true` unconditionally (see darwin/mattmacpro/system.nix).
@@ -388,13 +313,15 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# 9. darwin-rebuild switch
+# 8. darwin-rebuild switch
 # ---------------------------------------------------------------------
 # Lays down:
 #   - Tailscale cask (re-confirmation; already installed in step 4)
 #   - Tailscale CLI symlink at /usr/local/bin/tailscale (re-confirmation)
-#   - Remote Login (sshd) enabled via systemsetup
+#   - Native sshd intentionally unloaded (see system.nix postActivation)
 #   - Strict pmset (sleep 0, autorestart, etc.)
+#   - pf egress filter for the runner UID (see system.nix
+#     pf-runner-egress launchd daemon)
 #   - GitHub runner LaunchDaemons (start immediately — token in place)
 #   - Glances + tailscale-serve-glances LaunchDaemons
 #
@@ -414,26 +341,39 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# 10. Inter-server SSH key from 1Password
-# ---------------------------------------------------------------------
-op_fetch_inter_server_key
-
-# ---------------------------------------------------------------------
-# 11. Sanity checks
+# 9. Sanity checks
 # ---------------------------------------------------------------------
 step "Sanity checks"
 
 echo "[ssh]"
-# `systemsetup -getremotelogin` requires Full Disk Access from the
-# calling process. SSH sessions don't have it, so the command
-# silently returns "Off" instead of erroring — false negative. Probe
-# the launchd plist directly: if com.openssh.sshd is registered with
-# the system domain, sshd is enabled regardless of whether
-# systemsetup can read the state.
+# Native sshd is intentionally unloaded post-bootstrap (see
+# system.nix postActivation). The probe below uses
+# `launchctl print system/com.openssh.sshd` to confirm the unit
+# isn't registered — exit 0 means it IS registered (bad here),
+# non-zero means it isn't (good).
 if sudo launchctl print system/com.openssh.sshd >/dev/null 2>&1; then
-	echo "  Remote Login (sshd): on"
+	warn "  Remote Login (sshd): unexpectedly enabled — re-run nix-switch to unload"
 else
-	warn "  Remote Login (sshd): off — enable via System Settings → General → Sharing"
+	echo "  Remote Login (sshd): off (Tailscale SSH is the access path)"
+fi
+
+echo "[pf]"
+# Egress filter for the _github-runner UID — see system.nix
+# `launchd.daemons.pf-runner-egress`. We load our ruleset
+# top-level (no anchor), so `pfctl -sr` enumerates the active
+# rules; counting "user _github-runner" lines confirms our rules
+# made it in. Apple-default anchors at the top of the ruleset
+# pass through; the runner-scoped rules are the ones we care
+# about for this check.
+if sudo pfctl -s info 2>/dev/null | grep -q "Status: Enabled"; then
+	rule_count=$(sudo pfctl -sr 2>/dev/null | grep -c "user _github-runner")
+	if [ "$rule_count" -gt 0 ]; then
+		echo "  pf enabled, $rule_count runner-egress rules loaded"
+	else
+		warn "  pf enabled but no runner-egress rules found — re-run nix-switch"
+	fi
+else
+	warn "  pf disabled — runner-egress filter not active"
 fi
 
 echo "[tailscale]"
@@ -445,8 +385,7 @@ fi
 
 echo "[runners]"
 for svc in org.nixos.github-runner-sealed-macos \
-	org.nixos.github-runner-sealed-macos-2 \
-	org.nixos.github-runner-sealed-macos-3; do
+	org.nixos.github-runner-sealed-macos-2; do
 	if sudo launchctl list 2>/dev/null | grep -q "$svc"; then
 		echo "  $svc: loaded"
 	else
@@ -459,6 +398,45 @@ if sudo launchctl list 2>/dev/null | grep -q com.sealedsecurity.glances; then
 	echo "  glances: loaded (reachable at https://mattmacpro.tail08a5c5.ts.net:9443/)"
 else
 	warn "  glances launchd daemon not loaded"
+fi
+
+echo "[secrets-hygiene]"
+# Verify no OP service-account credential is reachable from the
+# runner UID. This is a defense-in-depth check on top of the
+# config-side guarantee — the system.nix postActivation +
+# bootstrap script don't write any SA token to disk, but a
+# previous version of either might have left one behind, OR
+# something added later might re-introduce one.
+#
+# Three places a runner-reachable SA could lurk:
+#   1. mattw's Keychain entry "OP_SERVICE_ACCOUNT_TOKEN" — still
+#      under mattw's UID-scoped ACL by default, so the _github-runner
+#      process can't read it, BUT if something ever called
+#      `security add-generic-password -T ""` (empty trusted-apps
+#      list) it'd be world-readable on the user keychain. Probe.
+#   2. /var/lib/github-runners/*/.config/op/ — if some legacy
+#      bootstrap layered an SA token into the runner's HOME.
+#   3. launchctl setenv OP_SERVICE_ACCOUNT_TOKEN — global env
+#      seen by every launchd job including the runner.
+hits=0
+if security find-generic-password -a "$USER" -s OP_SERVICE_ACCOUNT_TOKEN \
+	-w >/dev/null 2>&1; then
+	warn "  mattw keychain still has OP_SERVICE_ACCOUNT_TOKEN — delete with:"
+	warn "    security delete-generic-password -a \"$USER\" -s OP_SERVICE_ACCOUNT_TOKEN"
+	hits=$((hits + 1))
+fi
+if sudo find /var/lib/github-runners -name 'service-account-token*' \
+	-o -name 'team-service-account-token*' 2>/dev/null | grep -q .; then
+	warn "  found leftover OP SA token files under /var/lib/github-runners — remove manually"
+	hits=$((hits + 1))
+fi
+if sudo launchctl getenv OP_SERVICE_ACCOUNT_TOKEN 2>/dev/null | grep -q .; then
+	warn "  global launchctl OP_SERVICE_ACCOUNT_TOKEN set — clear with:"
+	warn "    sudo launchctl unsetenv OP_SERVICE_ACCOUNT_TOKEN"
+	hits=$((hits + 1))
+fi
+if [ "$hits" -eq 0 ]; then
+	echo "  no OP SA credentials reachable from runner UID — good"
 fi
 
 cat <<EOF

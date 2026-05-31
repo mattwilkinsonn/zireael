@@ -3,7 +3,7 @@
 #
 # `source` this from each bootstrap to pick up the common chunks:
 # logging, the EUID guard, --auth-key parsing, dotfiles clone, op token
-# write, op-driven password rotation, and inter-server SSH key fetch.
+# write, and op-driven password rotation.
 # Each function exits non-zero (via `err`) on hard failure; warning-
 # only paths use `warn` and continue so re-runs can self-heal.
 #
@@ -411,32 +411,4 @@ root:$password
 EOF
 	unset password
 	echo "  mattw + root passwords rotated"
-}
-
-# ---- 1Password: inter-server SSH key ---------------------------------
-
-# Fetch the host-to-host automation SSH key from 1P (op://Server/inter-server)
-# into ~/.ssh/id_ed25519_inter_server. Skips with a warning if the 1P
-# item isn't readable — re-run after creating it. The matching public
-# key in nixos/common.nix's authorizedKeys is shared across hosts.
-op_fetch_inter_server_key() {
-	local key_path="$HOME/.ssh/id_ed25519_inter_server"
-	local op_ref="op://Server/inter-server/private key?ssh-format=openssh"
-	if [ -f "$key_path" ]; then
-		step "Inter-server SSH key already at $key_path"
-		return 0
-	fi
-	step "Fetching inter-server SSH key from 1Password"
-	if ! op read "$op_ref" >/dev/null 2>&1; then
-		warn "1P item 'inter-server' not readable (item missing or no service-account access)"
-		echo "  Re-run this script after the item is set up."
-		return 0
-	fi
-	mkdir -p "$HOME/.ssh"
-	# umask-077 subshell so the file is mode 600 at creation rather
-	# than after the fact (no readable-window race).
-	(umask 077 && op read "$op_ref" >"$key_path")
-	chmod 600 "$key_path"
-	[ -s "$key_path" ] || err "inter-server private key file empty"
-	echo "  $key_path written (mode 600)"
 }

@@ -45,11 +45,10 @@
         eval "$(/usr/local/bin/brew shellenv)"
       fi
 
-      # 1Password service-account token from Keychain. Used by `op`
-      # invocations from interactive shells. Bootstrap script writes
-      # the entry via `security add-generic-password`. Silent if not
-      # yet provisioned (during first bootstrap pass).
-      export OP_SERVICE_ACCOUNT_TOKEN=$(security find-generic-password -a "$USER" -s "OP_SERVICE_ACCOUNT_TOKEN" -w 2>/dev/null || true)
+      # No 1Password service-account token exported here. mattmacpro
+      # is a runner host (untrusted GHA workloads); per the bootstrap
+      # script's "Security posture" section we keep zero standing OP
+      # SA credentials accessible to processes on this box.
     '';
   };
 

@@ -172,27 +172,6 @@
       # Personal SSH key — biometric-gated via the 1Password SSH agent on
       # Mac. Used for matt's daily SSH access from his Mac.
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAJ6mvnQYv4B9V7KWo4xt6k5+2fx0Z1e9J384hSkg9Ec"
-
-      # Inter-server SSH key — generic ed25519 keypair for host-to-host
-      # SSH automation between managed NixOS hosts (ad-hoc scp/ssh
-      # between hosts, podman remote between hosts, future automation).
-      # Separate from the personal key in 1P — smaller blast radius, no
-      # shared trust between "personal Mac access" and "server-internal
-      # automation". Same key reused across every NixOS host that
-      # imports this file (rpi4, rpi5, future non-Pi hosts). Setup:
-      #   1. In 1Password, create an SSH-key item named "inter-server"
-      #      inside the "Server" vault. 1P generates an ed25519 keypair
-      #      automatically.
-      #   2. Copy the OpenSSH-format public key from the item ("Public
-      #      Key" field, starts with `ssh-ed25519 AAAA…`).
-      #   3. Replace the placeholder string below with that public key,
-      #      uncommenting the line.
-      #   4. nix-switch on every host that imports common.nix to install
-      #      the new authorizedKeys.
-      #   5. Run the per-host bootstrap (rpi-bootstrap.sh step 8 on Pis;
-      #      equivalent step on future non-Pi hosts) to fetch the
-      #      private key into ~/.ssh/id_ed25519_inter_server.
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAJ6mvnQYv4B9V7KWo4xt6k5+2fx0Z1e9J384hSkg9Ec inter-server"
     ];
   };
   users.users.root.initialHashedPassword = "$6$s5sbuiyTY/LhtPY3$i1/wNklH7HJrP6DYjsUZ.OdULaxFJ6MHfpupdY09yp.Nbkslng93AVXiHxfyoU7xIBhbjH6CdT/IcMsD8INhm0";
