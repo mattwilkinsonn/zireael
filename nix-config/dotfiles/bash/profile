@@ -1,0 +1,4 @@
+# zsh sets these in initContent; bash gets the same via .profile.
+[ -d "$HOME/.local/bin" ] && PATH="$HOME/.local/bin:$PATH"
+[ -d "$HOME/bin" ] && PATH="$HOME/bin:$PATH"
+[ -r "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"

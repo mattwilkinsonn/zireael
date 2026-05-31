@@ -231,4 +231,8 @@
   # 1Password SSH agent config — controls which vaults' keys the
   # agent offers to ssh clients. Personal vault only on this box.
   home.file.".config/1Password/ssh/agent.toml".source = ../dotfiles/onepassword/ssh/agent.toml;
+
+  # Zed editor config — macOS GUI app installed via Homebrew cask in
+  # system.nix. Keep runtime state under ~/.config/zed/prompts unmanaged.
+  xdg.configFile."zed/settings.json".source = ../dotfiles/zed/settings.json;
 }

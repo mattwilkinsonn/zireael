@@ -61,38 +61,11 @@
 
     autocd = true;
 
-    profileExtra = ''
-      export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-    '';
+    profileExtra = builtins.readFile ../dotfiles/zsh/profile.zsh;
 
     sessionVariables = { };
 
-    initContent = ''
-      export PATH="$HOME/.local/bin:$PATH"
-
-      # Directory navigation
-      setopt AUTO_PUSHD
-      setopt PUSHD_IGNORE_DUPS
-
-      # jj (Jujutsu) CLI completion
-      source <(COMPLETE=zsh jj)
-
-      # jj-hp (Jujutsu Hooks) CLI completion — only when installed
-      # (cargo-installed binary; not present on hosts without dev.nix).
-      command -v jj-hp >/dev/null 2>&1 && eval "$(jj-hp completions zsh)"
-
-      # jj-gt CLI completion — only when installed (cargo-installed
-      # binary; not present on hosts without dev.nix).
-      command -v jj-gt >/dev/null 2>&1 && eval "$(jj-gt completions zsh)"
-
-      # gt (Graphite CLI) completion. gt emits yargs-style
-      # completions via `gt completion zsh`. Only wire when
-      # installed (graphite-cli is in dev.nix → not on hosts
-      # without dev tooling). The completion script is dynamic —
-      # the script registers a function that re-invokes `gt
-      # --get-yargs-completions` on TAB to enumerate live values.
-      command -v gt >/dev/null 2>&1 && eval "$(gt completion zsh 2>/dev/null)"
-    '';
+    initContent = builtins.readFile ../dotfiles/zsh/zshrc;
 
     plugins = [
       {
@@ -143,9 +116,7 @@
       }
     ];
 
-    completionInit = ''
-      autoload -U compinit && compinit
-    '';
+    completionInit = builtins.readFile ../dotfiles/zsh/completion.zsh;
   };
 
   # Zsh autosuggestions (built-in home-manager module)
@@ -156,57 +127,7 @@
   programs.starship = {
     enable = true;
     enableZshIntegration = true;
-    # jj (Jujutsu) VCS status via starship-jj (installed by the cargo-install
-    # step in scripts/{linux,mac}-setup.sh — not in nixpkgs).
-    # See https://gitlab.com/lanastara_foss/starship-jj
-    settings = {
-      # Built-in git modules replaced below so they don't double-print with
-      # custom.jj in jj-colocated repos.
-      git_branch.disabled = true;
-      git_commit.disabled = true;
-      git_state.disabled = true;
-      git_metrics.disabled = true;
-      git_status.disabled = true;
-
-      # starship runs `when` through the module's `shell`, so we use
-      # `bash -c` for both modules and invoke starship-jj / git from the
-      # command body. (Using starship-jj as the shell doesn't work because
-      # `when` then gets parsed as an unrecognized starship-jj subcommand.)
-
-      # Shows in jj repos.
-      custom.jj = {
-        shell = [
-          "bash"
-          "--noprofile"
-          "--norc"
-          "-c"
-        ];
-        command = "starship-jj --ignore-working-copy starship prompt";
-        format = "$output";
-        ignore_timeout = true;
-        use_stdin = false;
-        when = "jj root --ignore-working-copy";
-      };
-
-      # Fallback for pure-git repos (no jj). Minimal: branch + dirty mark.
-      custom.git = {
-        shell = [
-          "bash"
-          "--noprofile"
-          "--norc"
-          "-c"
-        ];
-        command = ''branch=$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null); dirty=""; git diff --quiet 2>/dev/null || dirty="*"; echo "$branch$dirty"'';
-        when = "! jj root --ignore-working-copy 2>/dev/null && git rev-parse --git-dir";
-        format = "on [$output](bold purple) ";
-      };
-
-      # Position ${custom} immediately after $directory (where the old
-      # git modules used to sit). Pre-directory modules are listed
-      # explicitly, $all picks up everything after (package, languages,
-      # cloud, etc.), then $line_break + $character on the next line.
-      format = "$username$hostname$localip$shlvl$singularity$kubernetes$directory\${custom}$all$line_break$character";
-    };
+    settings = builtins.fromTOML (builtins.readFile ../dotfiles/starship/starship.toml);
   };
 
   # fzf
@@ -266,66 +187,14 @@
   };
 
   # Ghostty — multiple `font-family` lines build a fallback chain.
-  home.file.".config/ghostty/config".text = ''
-    theme = NightOwlDark
-    font-family = "Berkeley Mono"
-    font-family = "IosevkaTerm Nerd Font"
-    font-family = "Cascadia Code"
-    font-size = 14
-  '';
+  home.file.".config/ghostty/config".source = ../dotfiles/ghostty/config;
 
   # Foot (Wayland-native terminal). Comma-separated family list builds a
   # fallback chain. Only loaded on Linux but harmless to declare cross-platform
   # via home.file.
-  home.file.".config/foot/foot.ini".text = ''
-    font=Berkeley Mono:size=11, IosevkaTerm Nerd Font, Cascadia Code, monospace
-  '';
-  home.file.".config/ghostty/themes/NightOwlDark".text = ''
-    palette = 0=#011627
-    palette = 1=#ef5350
-    palette = 2=#22da6e
-    palette = 3=#addb67
-    palette = 4=#82aaff
-    palette = 5=#c792ea
-    palette = 6=#21c7a8
-    palette = 7=#ffffff
-    palette = 8=#575656
-    palette = 9=#ef5350
-    palette = 10=#22da6e
-    palette = 11=#ffeb95
-    palette = 12=#82aaff
-    palette = 13=#c792ea
-    palette = 14=#7fdbca
-    palette = 15=#ffffff
-    background = 011627
-    foreground = d6deeb
-    cursor-color = 7e57c2
-    selection-background = 5f7e97
-    selection-foreground = dfe5ee
-  '';
-  home.file.".config/ghostty/themes/NightOwlLight".text = ''
-    palette = 0=#403f53
-    palette = 1=#de3d3b
-    palette = 2=#08916a
-    palette = 3=#e0af02
-    palette = 4=#288ed7
-    palette = 5=#d6438a
-    palette = 6=#2aa298
-    palette = 7=#f0f0f0
-    palette = 8=#989fb1
-    palette = 9=#de3d3b
-    palette = 10=#08916a
-    palette = 11=#daaa01
-    palette = 12=#288ed7
-    palette = 13=#d6438a
-    palette = 14=#2aa298
-    palette = 15=#f0f0f0
-    background = fbfbfb
-    foreground = 403f53
-    cursor-color = 403f53
-    selection-background = e0e0e0
-    selection-foreground = 403f53
-  '';
+  home.file.".config/foot/foot.ini".source = ../dotfiles/foot/foot.ini;
+  home.file.".config/ghostty/themes/NightOwlDark".source = ../dotfiles/ghostty/themes/NightOwlDark;
+  home.file.".config/ghostty/themes/NightOwlLight".source = ../dotfiles/ghostty/themes/NightOwlLight;
 
   # ─── Files folded in from the old dotfiles repo ──────────────────────
   #
@@ -344,21 +213,8 @@
     # `initExtra` lands AFTER the Debian default shape home-manager
     # carries; `profileExtra` runs at login. PATH lines mirror the
     # zsh setup so bash-via-SSH gets the same view.
-    initExtra = ''
-      export PATH="$HOME/.local/bin:$PATH"
-      export PATH="$HOME/.npm-global/bin:$PATH"
-      # Linuxbrew on Linux dev hosts. Harmless no-op on Mac (brew lives
-      # at /opt/homebrew there and is loaded by zsh's macOS-specific
-      # initContent) and on servers without brew installed.
-      [ -x /home/linuxbrew/.linuxbrew/bin/brew ] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)"
-      [ -r "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
-    '';
-    profileExtra = ''
-      # zsh sets these in initContent; bash gets the same via .profile.
-      [ -d "$HOME/.local/bin" ] && PATH="$HOME/.local/bin:$PATH"
-      [ -d "$HOME/bin" ] && PATH="$HOME/bin:$PATH"
-      [ -r "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
-    '';
+    initExtra = builtins.readFile ../dotfiles/bash/bashrc;
+    profileExtra = builtins.readFile ../dotfiles/bash/profile;
   };
 
   # Markdownlint config — picked up by markdownlint-cli2 from any cwd

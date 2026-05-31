@@ -173,6 +173,8 @@
       "arc"
       "akiflow"
       "codex-app"
+      "zed"
+      "cmux"
     ];
   };
 
@@ -215,20 +217,20 @@
 
     DUTI=/opt/homebrew/bin/duti
     if [ -x "$DUTI" ]; then
-      VSCODE=com.microsoft.VSCode
+      ZED=dev.zed.Zed
       OBSIDIAN=md.obsidian
 
-      # VS Code for source code + plain text UTIs (covers Dockerfile, Makefile, Justfile, etc.)
-      "$DUTI" -s "$VSCODE" public.source-code all
-      "$DUTI" -s "$VSCODE" public.shell-script all
-      "$DUTI" -s "$VSCODE" public.plain-text all
-      "$DUTI" -s "$VSCODE" public.script all
-      "$DUTI" -s "$VSCODE" com.apple.log all
-      "$DUTI" -s "$VSCODE" public.xml all
-      "$DUTI" -s "$VSCODE" public.json all
-      "$DUTI" -s "$VSCODE" public.yaml all
-      "$DUTI" -s "$VSCODE" public.comma-separated-values-text all
-      "$DUTI" -s "$VSCODE" public.tab-separated-values-text all
+      # Zed for source code + plain text UTIs (covers Dockerfile, Makefile, Justfile, etc.)
+      "$DUTI" -s "$ZED" public.source-code all
+      "$DUTI" -s "$ZED" public.shell-script all
+      "$DUTI" -s "$ZED" public.plain-text all
+      "$DUTI" -s "$ZED" public.script all
+      "$DUTI" -s "$ZED" com.apple.log all
+      "$DUTI" -s "$ZED" public.xml all
+      "$DUTI" -s "$ZED" public.json all
+      "$DUTI" -s "$ZED" public.yaml all
+      "$DUTI" -s "$ZED" public.comma-separated-values-text all
+      "$DUTI" -s "$ZED" public.tab-separated-values-text all
 
       for ext in \
         js jsx ts tsx mjs cjs \
@@ -250,7 +252,7 @@
         nix \
         log txt rst adoc; do
         # Error -50 = dynamic UTI (macOS has no app declaring this extension); benign
-        "$DUTI" -s "$VSCODE" ".$ext" all 2>/dev/null || true
+        "$DUTI" -s "$ZED" ".$ext" all 2>/dev/null || true
       done
 
       # Obsidian for markdown (overrides the plain-text default above)

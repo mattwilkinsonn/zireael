@@ -1,0 +1,6 @@
+theme = NightOwlDark
+font-family = "Berkeley Mono"
+font-family = "IosevkaTerm Nerd Font"
+font-family = "Cascadia Code"
+font-size = 14
+shell-integration-features = "true"
