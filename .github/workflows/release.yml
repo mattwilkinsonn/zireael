@@ -303,12 +303,33 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Mint a short-lived (~1 hour) installation token for the
+      # zireael-release GitHub App. The App is in the bypass actors
+      # list for the main-branch ruleset, so its pushes skip the
+      # PR-required + status-checks-required gates. Default
+      # GITHUB_TOKEN can't push to main (correctly — it's the same
+      # cred every workflow gets, and you don't want every workflow
+      # bypassing branch protection).
+      #
+      # App configuration:
+      #   - App ID:        ${{ vars.RELEASE_BOT_APP_ID }}     (repo variable)
+      #   - Private key:   ${{ secrets.RELEASE_BOT_PRIVATE_KEY }} (repo secret)
+      #   - Permissions:   contents:write + metadata:read (least-privilege)
+      #   - Installed on:  this repo only
+      #   - Bypass actor:  main branch ruleset
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+
       - uses: actions/checkout@v6
         with:
-          # Need a token with `contents: write` on this repo. The
-          # default GITHUB_TOKEN works because the tap lives in the
-          # same repo (unlike the standalone tap which needed a PAT).
-          token: ${{ github.token }}
+          # Checkout with the App token so the local git remote
+          # carries it for the `git push` later. actions/checkout
+          # also writes this token into .git/config's extraheader,
+          # so plain `git push` Just Works without re-auth.
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -358,10 +379,19 @@ jobs:
               echo "nothing to bump"
               exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Author the commit as the App's bot identity. The App
+          # slug is `zireael-release` (visible at
+          # https://github.com/apps/zireael-release), so the noreply
+          # email follows the standard `<id>+<slug>[bot]@...` form.
+          # The numeric ID matches the App ID (vars.RELEASE_BOT_APP_ID)
+          # — every GitHub App gets a bot user with id == app_id.
+          git config user.name "zireael-release[bot]"
+          git config user.email "${{ vars.RELEASE_BOT_APP_ID }}+zireael-release[bot]@users.noreply.github.com"
           git add Formula/
           git commit -m "chore(tap): bump formulae to ${{ needs.meta.outputs.tag }}"
+          # Push uses the App token wired in by actions/checkout's
+          # extraheader. The App is in the main-ruleset bypass list,
+          # so this skips the PR + status-checks requirement.
           git push origin HEAD:main
 
   # ----- Validate the freshly published tap installs end-to-end.
