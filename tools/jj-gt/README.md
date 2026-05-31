@@ -129,10 +129,13 @@ jj-gt submit -b head
 
 To submit a subset, name each bookmark with its own `-b` flag —
 `jj-gt submit -b mid -b head` submits just those two, omitting
-`bottom`. Per-bookmark pre-push hooks run in parallel by default;
-use `--hooks-sequential` for serial execution with live runner
-output, or `--hooks-tip-only` to skip the per-bookmark gate and
-run hooks once against the full `trunk..tip` range.
+`bottom`. Multiple `-b` flags for unrelated tips submit each as
+its own independent stack — `jj-gt submit -b feature-a-tip -b
+feature-b-tip` fans out to two `gt submit --stack` invocations,
+one per stack. Per-bookmark pre-push hooks run in parallel by
+default; use `--hooks-sequential` for serial execution with live
+runner output, or `--hooks-tip-only` to skip the per-bookmark
+gate and run hooks once against the full `trunk..tip` range.
 
 ### Examples
 
@@ -144,6 +147,10 @@ jj-gt submit -b head
 # `top--athena` and anything between `bottom--athena` and trunk
 # that isn't in the selection)
 jj-gt submit -b bottom--athena -b top--athena
+
+# Submit two unrelated stacks in one invocation — fans out to one
+# `gt submit --stack` per tip
+jj-gt submit -b feature-a-tip -b feature-b-tip
 
 # Submit every bookmark on the @-ancestor chain
 jj-gt submit --all

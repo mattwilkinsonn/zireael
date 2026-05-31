@@ -118,6 +118,101 @@ pub fn find_tip(stacked: &[StackedBookmark]) -> Result<String> {
     }
 }
 
+/// Partition a derived bookmark list into independent stacks — one
+/// entry per stack tip, each entry containing the full bottom→top
+/// chain that leads to that tip.
+///
+/// The single-stack `find_tip` rejects multi-tip selections so the
+/// caller (typically `submit_cmd`) can fan out instead. Independent
+/// stacks arise legitimately when the user passes multiple unrelated
+/// `-b` tips: each one's ancestor-expansion produces a disjoint
+/// sub-DAG rooted at trunk.
+///
+/// The output partitions are in the same order their tips were first
+/// discovered in `stacked`; within each partition the chain is
+/// sorted via [`sort_for_tracking`] (bottom→top) so callers can feed
+/// each partition straight into the `gt track` loop.
+///
+/// Returns an error if the union DAG is malformed — e.g. has a cycle
+/// (impossible from `derive_parents` over a real jj graph but
+/// defensive against synthesized inputs in tests).
+pub fn partition_stacks(stacked: &[StackedBookmark]) -> Result<Vec<Vec<StackedBookmark>>> {
+    if stacked.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let by_name: std::collections::BTreeMap<&str, &StackedBookmark> =
+        stacked.iter().map(|s| (s.name.as_str(), s)).collect();
+    let selected: std::collections::BTreeSet<&str> = by_name.keys().copied().collect();
+
+    let parent_names: std::collections::BTreeSet<&str> = stacked
+        .iter()
+        .filter_map(|s| match &s.parent {
+            BookmarkOrTrunk::Bookmark(p) if selected.contains(p.as_str()) => Some(p.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    // Tip set = bookmarks not pointed at by any other selected
+    // bookmark. With one tip, this is the single-stack case; with N
+    // tips, the input encodes N independent stacks rooted at trunk
+    // (or at unselected ancestor bookmarks).
+    let mut tips: Vec<&str> = stacked
+        .iter()
+        .map(|s| s.name.as_str())
+        .filter(|n| !parent_names.contains(n))
+        .collect();
+    // Preserve first-appearance order rather than alphabetical so
+    // the partitions in the output line up with the user's `-b`
+    // ordering.
+    tips.sort_by_key(|t| {
+        stacked
+            .iter()
+            .position(|s| s.name == *t)
+            .unwrap_or(usize::MAX)
+    });
+
+    if tips.is_empty() {
+        return Err(JjGtError::NonLinearStack(
+            "every bookmark is the parent of another — selection has a cycle?".into(),
+        ));
+    }
+
+    let mut partitions: Vec<Vec<StackedBookmark>> = Vec::with_capacity(tips.len());
+    for tip in tips {
+        // Walk back through `selected`-internal parent edges to
+        // gather every ancestor bookmark on this tip's chain. Stop
+        // when the parent is trunk or an unselected name.
+        let mut chain: Vec<StackedBookmark> = Vec::new();
+        let mut cursor: Option<&str> = Some(tip);
+        let mut visited: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        while let Some(name) = cursor {
+            if !visited.insert(name) {
+                return Err(JjGtError::NonLinearStack(format!(
+                    "cycle detected at `{name}` while walking stack"
+                )));
+            }
+            let Some(sb) = by_name.get(name).copied() else {
+                break;
+            };
+            chain.push(sb.clone());
+            cursor = match &sb.parent {
+                BookmarkOrTrunk::Bookmark(p) if selected.contains(p.as_str()) => {
+                    Some(by_name.get(p.as_str()).unwrap().name.as_str())
+                }
+                _ => None,
+            };
+        }
+        // sort_for_tracking expects the bookmarks-list shape and
+        // produces bottom→top. We have top→bottom from the walk;
+        // hand it the same data and let sort_for_tracking do the
+        // canonical ordering.
+        partitions.push(sort_for_tracking(&chain));
+    }
+
+    Ok(partitions)
+}
+
 /// Topologically sort a derived stack so parents come before children.
 /// Required because `gt track <child> --parent <parent>` errors out
 /// if `<parent>` isn't already tracked. The user's bookmark-selection
@@ -294,5 +389,104 @@ mod tests {
     fn sort_for_tracking_empty_input() {
         let sorted = sort_for_tracking(&[]);
         assert!(sorted.is_empty());
+    }
+
+    #[test]
+    fn partition_stacks_empty_input_returns_empty() {
+        let partitions = partition_stacks(&[]).unwrap();
+        assert!(partitions.is_empty());
+    }
+
+    #[test]
+    fn partition_stacks_single_linear_chain_is_one_partition() {
+        // The PR-A common case: one tip, ancestor chain expanded.
+        // Partition output is a single bottom→top sorted partition.
+        let stack = vec![
+            sb("top", BookmarkOrTrunk::Bookmark("mid".into())),
+            sb("bottom", BookmarkOrTrunk::Trunk),
+            sb("mid", BookmarkOrTrunk::Bookmark("bottom".into())),
+        ];
+        let partitions = partition_stacks(&stack).unwrap();
+        assert_eq!(partitions.len(), 1);
+        let names: Vec<&str> = partitions[0].iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["bottom", "mid", "top"]);
+    }
+
+    #[test]
+    fn partition_stacks_two_independent_chains() {
+        // The issue we're fixing: user passes `-b a-tip -b b-tip`
+        // where the two tips sit on unrelated stacks both rooted
+        // at trunk. Each ancestor expansion produces a disjoint
+        // sub-DAG; partition_stacks should produce two
+        // partitions, each its own bottom→top chain.
+        let stack = vec![
+            sb("a-tip", BookmarkOrTrunk::Bookmark("a-mid".into())),
+            sb("a-mid", BookmarkOrTrunk::Bookmark("a-bottom".into())),
+            sb("a-bottom", BookmarkOrTrunk::Trunk),
+            sb("b-tip", BookmarkOrTrunk::Bookmark("b-bottom".into())),
+            sb("b-bottom", BookmarkOrTrunk::Trunk),
+        ];
+        let partitions = partition_stacks(&stack).unwrap();
+        assert_eq!(partitions.len(), 2);
+
+        // First partition contains the a-* chain, second contains
+        // the b-* chain. Within each, the order is bottom→top.
+        let a_names: Vec<&str> = partitions[0].iter().map(|s| s.name.as_str()).collect();
+        let b_names: Vec<&str> = partitions[1].iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(a_names, vec!["a-bottom", "a-mid", "a-tip"]);
+        assert_eq!(b_names, vec!["b-bottom", "b-tip"]);
+    }
+
+    #[test]
+    fn partition_stacks_two_single_bookmarks_on_trunk() {
+        // `jj-gt submit -b feature-x -b feature-y` where both are
+        // single bookmarks sitting directly on trunk. Two
+        // partitions, one bookmark each.
+        let stack = vec![
+            sb("feature-x", BookmarkOrTrunk::Trunk),
+            sb("feature-y", BookmarkOrTrunk::Trunk),
+        ];
+        let partitions = partition_stacks(&stack).unwrap();
+        assert_eq!(partitions.len(), 2);
+        assert_eq!(partitions[0].len(), 1);
+        assert_eq!(partitions[0][0].name, "feature-x");
+        assert_eq!(partitions[1].len(), 1);
+        assert_eq!(partitions[1][0].name, "feature-y");
+    }
+
+    #[test]
+    fn partition_stacks_preserves_first_appearance_order() {
+        // Tip order in the output should match first-appearance
+        // order in the input rather than alphabetical so the
+        // partitions line up with the user's `-b` ordering.
+        let stack = vec![
+            sb("zulu", BookmarkOrTrunk::Trunk),
+            sb("alpha", BookmarkOrTrunk::Trunk),
+        ];
+        let partitions = partition_stacks(&stack).unwrap();
+        assert_eq!(partitions.len(), 2);
+        assert_eq!(partitions[0][0].name, "zulu");
+        assert_eq!(partitions[1][0].name, "alpha");
+    }
+
+    #[test]
+    fn partition_stacks_partial_selection_shared_root() {
+        // Two tips that share an unselected ancestor (root not
+        // included in the selection). Each tip is its own
+        // partition; the shared ancestor isn't in either.
+        let stack = vec![
+            sb(
+                "a-mid",
+                BookmarkOrTrunk::Bookmark("root_not_selected".into()),
+            ),
+            sb(
+                "b-mid",
+                BookmarkOrTrunk::Bookmark("root_not_selected".into()),
+            ),
+        ];
+        let partitions = partition_stacks(&stack).unwrap();
+        assert_eq!(partitions.len(), 2);
+        assert_eq!(partitions[0][0].name, "a-mid");
+        assert_eq!(partitions[1][0].name, "b-mid");
     }
 }
