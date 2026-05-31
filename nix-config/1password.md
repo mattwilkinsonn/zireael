@@ -26,7 +26,7 @@ work around this by swapping the env var per `op inject` call.
 | --- | --- | --- | --- |
 | **Personal** | Identity | GitHub.com login + 2FA codes, email passwords, banking, Netflix, life subscriptions, AWS root account, Cloudflare account login, 1Password master password | Full life — keep nothing automated reading from here |
 | **Dev** | Working | GitHub PAT (single-account, scoped per use), Cloudflare API token, OpenRouter API key, Anthropic API key, Personal Claude Code OAuth token, Neon API key, NPM token, GHCR push token, NixOS initial hashed password, host-rotation passwords | Personal projects + dev tooling |
-| **Server** | Working | Technitium admin password, Cockpit credentials, OpenClaw gateway token, server-side OpenRouter API key (separate from Dev's), container registry tokens used by server services, inter-server SSH key | Server hosts only |
+| **Server** | Working | Technitium admin password, Cockpit credentials, OpenClaw gateway token, server-side OpenRouter API key (separate from Dev's), container registry tokens used by server services | Server hosts only |
 
 ### Sealed Security team (`sealedsecurity.1password.com`)
 

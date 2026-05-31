@@ -21,12 +21,9 @@
 #      everything they need).
 #   5. Password rotation — replace baked-in initialHashedPassword for
 #      `mattw` and `root` with the value from op://Dev/Framework Password.
-#   6. Inter-server SSH key — fetch op://Server/inter-server private key
-#      into ~/.ssh/id_ed25519_inter_server (mode 600) for host-to-host
-#      automation between managed NixOS hosts.
-#   7. linuxbrew — one-time install, idempotent; for tools nixpkgs lags
+#   6. linuxbrew — one-time install, idempotent; for tools nixpkgs lags
 #      or where Mac↔Linux dev parity matters.
-#   8. Sanity checks — services up, GPU detected, ROCm present.
+#   7. Sanity checks — services up, GPU detected, ROCm present.
 #
 # Re-runnable: each step skips if already done. Safe to re-run if
 # something fails partway.
@@ -112,12 +109,7 @@ sudo nixos-rebuild switch \
 op_rotate_user_root_password 'op://Dev/Framework Password/password'
 
 # ---------------------------------------------------------------------
-# 6. Inter-server SSH key
-# ---------------------------------------------------------------------
-op_fetch_inter_server_key
-
-# ---------------------------------------------------------------------
-# 7. linuxbrew (one-time install, for tools NixOS doesn't ship)
+# 6. linuxbrew (one-time install, for tools NixOS doesn't ship)
 # ---------------------------------------------------------------------
 # Parity with the macOS dev workflow — `brew style` on the zireael
 # tap formulae, hk's pkl tooling, or any future tool where nixpkgs
@@ -125,7 +117,7 @@ op_fetch_inter_server_key
 ensure_linuxbrew
 
 # ---------------------------------------------------------------------
-# 8. Sanity checks
+# 7. Sanity checks
 # ---------------------------------------------------------------------
 step "Sanity checks"
 

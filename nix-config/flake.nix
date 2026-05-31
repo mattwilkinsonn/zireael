@@ -339,7 +339,10 @@
               imports = [
                 ./shared/home.nix
                 ./shared/linux.nix
-                ./shared/load-secrets.nix
+                # No ./shared/load-secrets.nix — mattserver runs no
+                # OP service-account tokens (see nixos/mattserver/INSTALL.md
+                # "Security posture"). Secret loading via `op inject` would
+                # have nothing to authenticate with.
                 ./nixos/mattserver/home.nix
               ];
             };

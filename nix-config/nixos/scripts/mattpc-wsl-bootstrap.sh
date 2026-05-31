@@ -21,9 +21,7 @@
 #      phase-1 rebuild because the token wasn't there yet).
 #   4. Rotate `mattw` and `root` passwords from op://Dev/mattpc-wsl
 #      Password.
-#   5. Fetch op://Server/inter-server private key into
-#      ~/.ssh/id_ed25519_inter_server.
-#   6. Sanity checks (sshd on 2222, podman socket, resolv.conf).
+#   5. Sanity checks (sshd on 2222, podman socket, resolv.conf).
 #
 # Both phases are idempotent — re-running picks up where you left off.
 #
@@ -267,12 +265,7 @@ if [ "$PHASE" = "2" ]; then
 	op_rotate_user_root_password 'op://Dev/mattpc-wsl Password/password'
 
 	# -------------------------------------------------------------
-	# 2.5 Inter-server SSH key
-	# -------------------------------------------------------------
-	op_fetch_inter_server_key
-
-	# -------------------------------------------------------------
-	# 2.6 linuxbrew (one-time install, for tools NixOS doesn't ship)
+	# 2.5 linuxbrew (one-time install, for tools NixOS doesn't ship)
 	# -------------------------------------------------------------
 	# Useful for parity with the macOS dev workflow — e.g.
 	# `brew style` on the zireael tap formulae, hk's pkl tooling,
@@ -281,7 +274,7 @@ if [ "$PHASE" = "2" ]; then
 	ensure_linuxbrew
 
 	# -------------------------------------------------------------
-	# 2.7 Sanity checks
+	# 2.6 Sanity checks
 	# -------------------------------------------------------------
 	step "Sanity checks"
 

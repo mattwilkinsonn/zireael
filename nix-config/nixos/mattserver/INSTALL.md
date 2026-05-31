@@ -16,11 +16,9 @@ and on-demand gaming station.
 
 - [ ] `nix-config` repo pushed (run `config status` on the Mac to confirm).
 - [ ] Tailscale pre-auth key ready at <https://login.tailscale.com/admin/settings/keys>.
-- [ ] Personal 1Password service-account token ready (read access to Dev + Server
-      vaults).
-- [ ] Team 1Password service-account token ready (read access to Employee Dev
-      vault on sealedsecurity.1password.com).
 - [ ] GitHub PAT ready for the sealed runner pool (see GitHub runner token section below).
+- [ ] New `mattw` + `root` password ready to type at the bootstrap prompt
+      (manually rotated — see "Security posture" below for why this isn't 1P-driven).
 - [ ] Ventoy stick has the latest **NixOS 25.11 minimal or graphical ISO**
       from <https://nixos.org/download> (x86\_64-linux).
 
@@ -155,6 +153,55 @@ bootstrap from the Ventoy stick (dotfiles haven't been cloned yet):
 ls /run/media/*/Ventoy/home-manager/nixos/scripts/mattserver-bootstrap.sh
 bash /run/media/*/Ventoy/home-manager/nixos/scripts/mattserver-bootstrap.sh
 ```
+
+## Security posture
+
+mattserver runs untrusted GitHub Actions workflows via the
+self-hosted runner pool. The threat model assumes that a malicious
+workflow could land code-exec as the `sealed-runner` user — already
+mitigated upstream by external-PR approval gates + dep-update
+cooldowns, but defense-in-depth on the host shrinks the blast
+radius if those upstream layers fail.
+
+The deliberate posture choices on this host:
+
+- **Zero standing 1Password service-account tokens.** No personal SA,
+  no team SA, no Runners-vault SA. The bootstrap script (step 4)
+  prompts for the user password manually rather than fetching from
+  1P. Any SA token on disk is something the runner UID could
+  exfiltrate; the simplest answer is "have no SA tokens." The
+  documented downside is that password rotation is operator-driven
+  (run the bootstrap script and type the new password); the upside
+  is the runner UID has zero capability against the 1P account.
+- **Runner PAT encrypted at rest** via systemd-creds (host-bound
+  machine-ID encryption). The encrypted file at
+  `/etc/github-runner/sealed-token.cred` can't be decrypted off
+  this box; the plaintext only lives in tmpfs after
+  `decrypt-runner-token.service` runs at boot. See "GitHub runner
+  token" below.
+- **No inter-server SSH keypair.** Earlier configs minted a shared
+  `inter-server` ed25519 key in 1P and provisioned the private half
+  to every NixOS host for cross-host automation. Retired — the only
+  consumer (Pi-to-mattserver ZFS backups) wasn't actually wired up,
+  and the standing private key was a credential the runner UID
+  could reach. The matching `authorizedKeys` line is gone from
+  `nixos/common.nix`. If we ever set up cross-host automation
+  again, mint a fresh per-pair keypair scoped to the specific
+  endpoints.
+- **No native sshd on the LAN side.** `services.openssh.enable =
+  lib.mkForce false` on this host (overrides the common.nix
+  default). Tailscale SSH covers every interactive access path;
+  the LAN-side sshd was unneeded attack surface.
+- **No Cockpit.** `services.cockpit.enable = lib.mkForce false` —
+  mattserver inherits cockpit from common.nix but doesn't
+  tailscale-serve it, so the only path was LAN inbound on :9090.
+  Replaced operationally by Tailscale SSH + `btm` for live
+  monitoring.
+- **nftables egress filter** on the `sealed-runner` UID drops
+  outbound to RFC1918, link-local, and CGNAT destinations that
+  bypass tailscaled. Allows DNS + public HTTP/HTTPS/git+ssh +
+  tailscale0. See `networking.nftables.tables.runner_egress` in
+  `system.nix`.
 
 ## GitHub runner token
 
@@ -296,21 +343,37 @@ sudo zfs allow tank/backups
 
 ### Sending backups from a source host
 
-On the source host (e.g. rpi5), use syncoid with the inter-server SSH key:
+Not currently wired up. The `backup` user exists with the ZFS
+delegation in place, but `authorizedKeys = [ ]` — no source host
+can SSH in to push receives yet.
 
-```bash
-syncoid --sshkey ~/.ssh/id_ed25519_inter_server \
-  tank/data \
-  backup@mattserver:tank/backups/rpi5
-```
+When wiring this back up:
 
-Or via Tailscale hostname:
+1. Generate a dedicated keypair on the source host (don't reuse keys
+   from other automation — minimal blast radius if any one host is
+   compromised):
 
-```bash
-syncoid --sshkey ~/.ssh/id_ed25519_inter_server \
-  tank/data \
-  backup@mattserver.tail08a5c5.ts.net:tank/backups/rpi5
-```
+   ```bash
+   ssh-keygen -t ed25519 -C 'rpi5-to-mattserver-backup' \
+     -f ~/.ssh/id_ed25519_backup_rpi5
+   ```
+
+2. Add the public key to `nixos/mattserver/system.nix` under
+   `users.users.backup.openssh.authorizedKeys.keys`, scoped per
+   source host (one entry per Pi) with a comment naming the source.
+3. `nix-switch` on mattserver to install.
+4. Push via syncoid on the source host:
+
+   ```bash
+   syncoid --sshkey ~/.ssh/id_ed25519_backup_rpi5 \
+     tank/data \
+     backup@mattserver.tail08a5c5.ts.net:tank/backups/rpi5
+   ```
+
+   Tailscale hostname is preferred over the LAN IP — the runner
+   egress lockdown on mattserver doesn't gate the inbound side, but
+   future hardening (e.g. dropping LAN inbound entirely) won't break
+   the path.
 
 ## Gaming
 

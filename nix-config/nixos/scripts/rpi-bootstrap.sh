@@ -23,16 +23,7 @@
 #      `hostname`).
 #   7. Password rotation — replace baked-in initialHashedPassword for
 #      `mattw` and `root` with the value from op://Server/Pi-password.
-#   8. Inter-server SSH key — fetch the dedicated `inter-server`
-#      private key from 1P "Server" vault to
-#      ~/.ssh/id_ed25519_inter_server (mode 600) for host-to-host SSH
-#      automation between managed NixOS hosts (ad-hoc scp/ssh, podman
-#      remote between hosts, future automation). Same key reused on
-#      every NixOS host this script bootstraps; the public key in
-#      nixos/common.nix's authorizedKeys is shared across hosts. Skips
-#      cleanly if the 1P item doesn't exist yet — re-run the script
-#      after creating it.
-#   9. Sanity checks — services up, DNS resolves, secrets in env file.
+#   8. Sanity checks — services up, DNS resolves, secrets in env file.
 #
 # Re-runnable: each step skips if already done. Safe to re-run if
 # something fails partway.
@@ -216,51 +207,7 @@ unset PI_PASSWORD OP_TOKEN
 echo "  mattw + root passwords rotated"
 
 # ---------------------------------------------------------------------
-# 8. Inter-server SSH key
-# ---------------------------------------------------------------------
-# Generic host-to-host SSH key for automation between managed NixOS
-# hosts (ad-hoc scp/ssh, podman remote between hosts, future tooling).
-# Dedicated ed25519 keypair in 1P, separate from matt's personal
-# mattw@1password key — smaller blast radius, no shared trust between
-# "personal Mac access" and "server-internal automation". Same key
-# reused on every NixOS host bootstrapped by this script; the matching
-# public key is in nixos/common.nix's authorizedKeys, so every host
-# that imports common.nix trusts it.
-INTER_SERVER_KEY="$HOME/.ssh/id_ed25519_inter_server"
-if [ -f "$INTER_SERVER_KEY" ]; then
-	step "Inter-server SSH key already at $INTER_SERVER_KEY"
-else
-	step "Fetching inter-server SSH key from 1Password"
-
-	OP_TOKEN="$(sudo systemd-creds decrypt --name=op-pi-svc /etc/op-pi-svc-token.cred -)"
-	[ -n "$OP_TOKEN" ] || err "decrypted op-pi-svc token is empty"
-
-	# Probe-read first so a missing 1P item produces a clean skip rather
-	# than a half-written empty key file. Re-run the script after creating
-	# the item.
-	if ! OP_SERVICE_ACCOUNT_TOKEN="$OP_TOKEN" op read \
-		"op://Server/inter-server/private key?ssh-format=openssh" >/dev/null 2>&1; then
-		warn "1P item 'inter-server' not readable (item missing or no service-account access)"
-		echo "  Create an SSH key item named 'inter-server' in the 'Pi' vault,"
-		echo "  ensure op-pi-svc has read access, then re-run this script."
-		unset OP_TOKEN
-	else
-		mkdir -p "$HOME/.ssh"
-		# umask-077 subshell so the file is mode 600 at creation rather
-		# than after the fact (no readable-window race). Redirection
-		# happens as $USER, so the file lands owned by mattw.
-		(umask 077 && OP_SERVICE_ACCOUNT_TOKEN="$OP_TOKEN" op read \
-			"op://Server/inter-server/private key?ssh-format=openssh" \
-			>"$INTER_SERVER_KEY")
-		chmod 600 "$INTER_SERVER_KEY"
-		[ -s "$INTER_SERVER_KEY" ] || err "inter-server private key file empty"
-		echo "  $INTER_SERVER_KEY written (mode 600)"
-		unset OP_TOKEN
-	fi
-fi
-
-# ---------------------------------------------------------------------
-# 9. Sanity checks
+# 8. Sanity checks
 # ---------------------------------------------------------------------
 step "Sanity checks"
 

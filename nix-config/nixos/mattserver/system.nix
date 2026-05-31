@@ -507,14 +507,15 @@ in
   # Dedicated backup user. Source hosts SSH in as this user and pipe
   # `zfs send` into `zfs receive`. ZFS delegation (zfs allow, one-time
   # setup in INSTALL.md) grants receive permission without a root shell.
+  #
+  # authorizedKeys intentionally empty: the previous shared
+  # `inter-server` keypair was retired (see `nixos/common.nix` history
+  # for context). The backup path documented in INSTALL.md isn't
+  # currently wired up; if we ever set up syncoid/sanoid pushes we'll
+  # mint a fresh dedicated keypair scoped to the backup user only.
   users.users.backup = {
     isNormalUser = true;
-    openssh.authorizedKeys.keys = [
-      # Inter-server keypair from common.nix — same key that mattw uses for
-      # host-to-host automation. Kept in sync so rpi5/rpi4 can push backups
-      # without a separate key.
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAJ6mvnQYv4B9V7KWo4xt6k5+2fx0Z1e9J384hSkg9Ec inter-server"
-    ];
+    openssh.authorizedKeys.keys = [ ];
   };
 
   # ============================================================

@@ -16,15 +16,21 @@
 #   1. Xcode CLT (needed for brew + git)
 #   2. macOS hostname set to `mattmacpro` (must precede tailscale up
 #      or your tailnet hostname will be `mattmacpro-local` or similar)
-#   3. Homebrew (needed for tailscale, gh, op)
+#   3. Homebrew (needed for tailscale, gh)
 #   4. Tailscale install + auth (you can now SSH in and copy-paste)
 #   5. gh install + auth + dotfiles clone
 #   6. Nix
-#   7. 1Password CLI + service-account token → Keychain
-#   8. GitHub runner PAT → /etc/github-runner/sealed-token
-#   9. darwin-rebuild switch (runners start immediately)
-#  10. Inter-server SSH key from 1Password
-#  11. Sanity checks
+#   7. GitHub runner PAT → /etc/github-runner/sealed-token
+#   8. darwin-rebuild switch (runners start immediately)
+#   9. Sanity checks
+#
+# Security posture: zero standing 1Password service-account tokens on
+# this host. mattmacpro runs untrusted GHA workflows via the
+# self-hosted runner pool, so any SA token on disk is a credential
+# the runner UID could exfiltrate. The runner PAT in step 7 is the
+# only secret here, and it's mode-600 root-wheel (consider
+# systemd-creds-equivalent encryption later; macOS has no direct
+# counterpart but Keychain with restricted ACL is closest).
 #
 # Re-runnable: every step skips if already done.
 #
@@ -42,7 +48,6 @@ source "$SCRIPT_DIR/../../shared/scripts/bootstrap-common.sh"
 
 ZIREAEL_REPO_SLUG="mattwilkinsonn/zireael"
 NIX_CONFIG_DIR="$HOME/repos/zireael/nix-config"
-KEYCHAIN_SERVICE="OP_SERVICE_ACCOUNT_TOKEN"
 SEALED_TOKEN_FILE="/etc/github-runner/sealed-token"
 TARGET_HOSTNAME="mattmacpro"
 TS_HOSTNAME="${TARGET_HOSTNAME}.tail08a5c5.ts.net"
@@ -274,88 +279,7 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# 7. 1Password CLI + service-account token → Keychain
-# ---------------------------------------------------------------------
-step "1Password CLI"
-if ! command -v op >/dev/null 2>&1; then
-	echo "  installing via brew (cask, not formula — 1password-cli was retired from homebrew-core)"
-	brew install --cask 1password-cli
-fi
-echo "  $(op --version)"
-
-step "1Password service-account token → Keychain"
-# Always target the login keychain explicitly. SSH sessions on macOS
-# often have either no default keychain set OR a default that points
-# at something the user can't write to (System keychain, a stale
-# session-specific keychain, etc.) — `security add-generic-password`
-# without `-k` then errors with "Write permissions error" even when
-# the login keychain itself is unlocked. Passing the keychain path
-# explicitly sidesteps all that ambiguity.
-KEYCHAIN_PATH="$HOME/Library/Keychains/login.keychain-db"
-
-# Provision the login keychain if it doesn't exist (e.g. a freshly-
-# created user who hasn't graphically logged in yet — the keychain
-# is normally created at first GUI login). Prompt for the macOS
-# account password to use as the keychain password.
-if [ ! -f "$KEYCHAIN_PATH" ]; then
-	echo "  login keychain doesn't exist yet — creating."
-	echo "  Enter your macOS account password (used as the keychain password):"
-	# `security create-keychain -P` prompts on stdin without echoing.
-	security create-keychain -P "$KEYCHAIN_PATH"
-fi
-
-# Ensure the login keychain is in the user search list AND set as
-# default — unconditionally, every run. SSH sessions on macOS often
-# start with only /Library/Keychains/System.keychain in the user
-# search list (which is read-only for non-admin operations) and no
-# default keychain at all, OR default pointed at System.keychain.
-# Without login.keychain-db in the search list, `security
-# add-generic-password -U` falls back to the default keychain and
-# fails to write because System is locked-down.
-#
-# `list-keychains -d user -s ...` REPLACES the list, so we have to
-# include both the login keychain AND whatever was already there
-# (typically System.keychain) to avoid blowing away other entries.
-existing_keychains=$(security list-keychains -d user | sed 's/^[[:space:]]*//;s/"//g' | tr '\n' ' ')
-# shellcheck disable=SC2086  # word-split intentional: -s takes multiple paths
-security list-keychains -d user -s "$KEYCHAIN_PATH" $existing_keychains >/dev/null
-security default-keychain -d user -s "$KEYCHAIN_PATH" >/dev/null
-
-# Ensure it's unlocked. Idempotent — only prompts if locked.
-if ! security show-keychain-info "$KEYCHAIN_PATH" >/dev/null 2>&1; then
-	echo "  login keychain is locked — unlock prompt follows."
-	security unlock-keychain "$KEYCHAIN_PATH"
-fi
-
-if security find-generic-password -a "$USER" -s "$KEYCHAIN_SERVICE" \
-	-w "$KEYCHAIN_PATH" >/dev/null 2>&1; then
-	echo "  Keychain entry '$KEYCHAIN_SERVICE' already present."
-else
-	echo "Paste your personal 1Password service-account token (ops_...)"
-	echo "for this host. Create at 1password.com → Integrations →"
-	echo "Service Accounts → New. Scope: Server vault read access."
-	echo
-	read -rsp "OP token: " OP_TOKEN
-	echo
-	[ -n "$OP_TOKEN" ] || err "empty token"
-	# `-U` updates if the item already exists (race-safe); `-T ""`
-	# leaves the ACL trusted-apps list empty so any process running
-	# as $USER can read it without a per-app trust prompt.
-	security add-generic-password -U -a "$USER" -s "$KEYCHAIN_SERVICE" \
-		-w "$OP_TOKEN" -T "" "$KEYCHAIN_PATH"
-	unset OP_TOKEN
-	echo "  Keychain entry written."
-fi
-
-step "Verifying op auth"
-OP_SERVICE_ACCOUNT_TOKEN=$(security find-generic-password -a "$USER" \
-	-s "$KEYCHAIN_SERVICE" -w "$KEYCHAIN_PATH")
-export OP_SERVICE_ACCOUNT_TOKEN
-op whoami >/dev/null || err "op whoami failed — token invalid?"
-echo "  ok"
-
-# ---------------------------------------------------------------------
-# 8. GitHub runner PAT → /etc/github-runner/sealed-token
+# 7. GitHub runner PAT → /etc/github-runner/sealed-token
 # ---------------------------------------------------------------------
 # Must exist BEFORE darwin-rebuild because the runner services have
 # `enable = true` unconditionally (see darwin/mattmacpro/system.nix).
@@ -388,7 +312,7 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# 9. darwin-rebuild switch
+# 8. darwin-rebuild switch
 # ---------------------------------------------------------------------
 # Lays down:
 #   - Tailscale cask (re-confirmation; already installed in step 4)
@@ -414,12 +338,7 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# 10. Inter-server SSH key from 1Password
-# ---------------------------------------------------------------------
-op_fetch_inter_server_key
-
-# ---------------------------------------------------------------------
-# 11. Sanity checks
+# 9. Sanity checks
 # ---------------------------------------------------------------------
 step "Sanity checks"
 
