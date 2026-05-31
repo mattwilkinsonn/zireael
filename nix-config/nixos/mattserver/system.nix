@@ -758,11 +758,132 @@ in
     networkmanager.enable = true;
   };
 
+  # nftables backend (replaces the iptables-based default). Required
+  # for the runner-egress filter below — `networking.firewall` still
+  # works on either backend; nftables gives us the user-matched
+  # output chain we want for the lockdown.
+  networking.nftables.enable = true;
+
   networking.firewall = {
     enable = true;
-    allowedTCPPorts = [ 22 ];
+    # No inbound TCP from the LAN — SSH is Tailscale-only. The
+    # bootstrap-time native sshd is unloaded post-bootstrap via
+    # `disableSshd` activation below. Tailscale SSH (enabled via
+    # `extraUpFlags = [ "--ssh" ]`) handles every interactive
+    # session; the tailscale0 trust below covers tailnet inbound.
+    allowedTCPPorts = [ ];
     trustedInterfaces = [ "tailscale0" ];
   };
+
+  # Egress lockdown for the GitHub Actions runner pool.
+  #
+  # Threat model: a malicious workflow lands code-exec as
+  # `sealed-runner`. Already mitigated upstream by external-PR
+  # workflow approval + dep cooldowns + Tailscale ACLs gating
+  # tailnet peer reachability. This rule is defense-in-depth:
+  # cut the runner UID off from the LAN (router admin, NAS,
+  # other workstations) and from CGNAT-routed paths that bypass
+  # tailscaled.
+  #
+  # Why nftables (kernel, by UID) and not systemd's per-unit
+  # `IPAddressDeny=` / `PrivateNetwork=`: the runner units
+  # deliberately weaken systemd hardening
+  # (`SystemCallFilter = lib.mkForce []`,
+  # `RestrictNamespaces = false`, `PrivateUsers = false`)
+  # because seal's daemon spawns bwrap sandboxes inside the
+  # workflow — those primitives need to remain available. A
+  # per-unit network filter would either need the same unwrap
+  # (defeating the point) or break bwrap. Filtering by UID at
+  # the kernel survives every fork inside the unit, the bwrap
+  # unwrap, and any in-process privilege escalation short of
+  # root.
+  #
+  # `meta skuid` is the source UID for outbound packets. We
+  # match by username — nft resolves `"sealed-runner"` via
+  # `getpwnam` at ruleset load, which is robust against the
+  # auto-allocated system UID (the `users.users.sealed-runner`
+  # block above doesn't pin a numeric uid).
+  #
+  # Allowed egress for the runner UID:
+  #   - loopback (sccache server lives here)
+  #   - DNS (53/udp+tcp, any destination — needed for
+  #     github.com, crates.io, registries)
+  #   - HTTP/HTTPS (80, 443) to public destinations (registries,
+  #     GitHub API, action artifact endpoints)
+  #   - git+ssh egress (22) for `cargo install --git` etc.
+  #   - tailscale0 interface (tailnet ACLs govern peers)
+  #
+  # Dropped egress for the runner UID:
+  #   - any TCP/UDP/ICMP to RFC1918 (10/8, 172.16/12, 192.168/16)
+  #   - link-local (169.254/16)
+  #   - CGNAT (100.64/10) on non-tailscale0 paths — tailscale0
+  #     egress was already passed above; this catches anyone
+  #     trying to route around tailscaled
+  #   - IPv6 ULA + link-local
+  #
+  # The `log prefix "runner-egress-drop: "` action surfaces
+  # blocked attempts in the journal so we can see what
+  # legitimate egress (if any) got caught and tighten the
+  # allowlist. After a week of clean logs, the prefix can be
+  # demoted to bare `drop`.
+  networking.nftables.tables.runner_egress = {
+    family = "inet";
+    content = ''
+      chain output {
+        type filter hook output priority filter; policy accept;
+
+        # Skip the rule for any non-runner UID.
+        meta skuid != "sealed-runner" accept
+
+        # Allow loopback — sccache server, localhost-only services.
+        oifname "lo" accept
+
+        # Allow tailscale0 egress — tailnet ACLs are the policy layer
+        # for peer reachability.
+        oifname "tailscale0" accept
+
+        # Allow DNS to any destination.
+        udp dport 53 accept
+        tcp dport 53 accept
+
+        # Drop RFC1918 / link-local / CGNAT (non-tailscale0) before
+        # the public-internet allow so the runner can't fall through
+        # the 443-allow into a LAN host listening on 443.
+        ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+                   169.254.0.0/16, 100.64.0.0/10 } \
+          log prefix "runner-egress-drop: " level warn drop
+        ip6 daddr { fc00::/7, fe80::/10 } \
+          log prefix "runner-egress-drop: " level warn drop
+
+        # Allow public HTTP/HTTPS + git+ssh.
+        tcp dport { 80, 443, 22 } accept
+
+        # Default deny for anything else this UID tries.
+        log prefix "runner-egress-drop: " level warn drop
+      }
+    '';
+  };
+
+  # Unload the bootstrap-time native sshd. The mattserver-bootstrap
+  # script enables it so the operator can SSH in over the LAN to
+  # finish the first nixos-rebuild, but post-bootstrap Tailscale
+  # SSH is the only access path we need.
+  #
+  # `lib.mkForce false` because `nixos/common.nix` sets
+  # `services.openssh.enable = true` across every NixOS host — the
+  # Pis + mattfw + mattpc-wsl rely on that default for their own
+  # LAN-fallback access. Mattserver opts out per-host.
+  services.openssh.enable = lib.mkForce false;
+
+  # Drop Cockpit. Common.nix turns it on (with `openFirewall = true`
+  # → 9090 inbound) so the Pis + mattfw have a tailnet-served
+  # management UI; mattserver never wired up the matching
+  # tailscale-serve unit, so the only path that ever reached it was
+  # http://<lan-ip>:9090 — i.e. LAN-inbound, defeating the same
+  # lockdown the sshd drop above is closing. Replaced operationally
+  # by Tailscale SSH + `btm` for live monitoring. Same per-host
+  # override pattern as mattpc-wsl. SEA-672 follow-up.
+  services.cockpit.enable = lib.mkForce false;
 
   services.tailscale = {
     enable = true;
