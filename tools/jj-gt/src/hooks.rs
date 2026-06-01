@@ -161,23 +161,31 @@ pub fn run_pre_push_stack(
     };
 
     let outcomes: Vec<Vec<HookOutcome>> = if parallel {
+        // Live tracker: prints a per-bookmark spinner row while
+        // hooks are running so the user can see motion + elapsed
+        // time during the typical 10-60s hook subprocess window.
+        // Drop it on the way out so the renderer thread exits even
+        // on the error path.
+        let tracker = crate::progress::Tracker::new();
+        let progress_start = |_p_idx: usize, _u_idx: usize, update: &BookmarkUpdate| {
+            tracker.started(&update.bookmark);
+        };
         let progress =
             |_p_idx: usize, _u_idx: usize, update: &BookmarkUpdate, outcome: &HookOutcome| {
-                // One-line live status per completed bookmark so
-                // the user sees progress in completion order. Full
-                // failure detail is deferred to the post-run replay
-                // (see below) so the actionable content lands at
-                // the bottom of the screen — right above the final
-                // error — rather than scrolled away mid-run.
-                if outcome.cancelled {
-                    eprintln!("  cancelled  {} (sibling failed)", update.bookmark);
+                // Map the boolean / cancelled outcome onto the
+                // tracker's status enum so the tracker can clear
+                // the spinner row and print the final line in the
+                // correct color above any still-running rows.
+                let status = if outcome.cancelled {
+                    crate::progress::FinishedStatus::Cancelled
                 } else if outcome.success {
-                    eprintln!("  passed     {}", update.bookmark);
+                    crate::progress::FinishedStatus::Passed
                 } else {
-                    eprintln!("  FAILED     {} (full output below)", update.bookmark);
-                }
+                    crate::progress::FinishedStatus::Failed
+                };
+                tracker.finished(&update.bookmark, status);
             };
-        jj_hooks::hooks::run_for_partitioned_updates_parallel(
+        let outcomes = jj_hooks::hooks::run_for_partitioned_updates_parallel(
             jj,
             &primary_git_dir,
             workspace_root,
@@ -185,9 +193,12 @@ pub fn run_pre_push_stack(
             Stage::PrePush,
             &update_partitions,
             run_opts,
+            progress_start,
             progress,
         )
-        .map_err(JjGtError::Hooks)?
+        .map_err(JjGtError::Hooks);
+        tracker.finish();
+        outcomes?
     } else {
         // Sequential path: no fail-fast (the user opted into
         // serial execution explicitly; aborting a 5-bookmark

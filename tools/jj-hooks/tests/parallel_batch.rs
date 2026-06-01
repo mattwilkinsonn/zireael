@@ -104,6 +104,7 @@ fn run_for_updates_parallel_returns_results_in_input_order() {
         Stage::PrePush,
         &updates,
         opts,
+        |_idx, _update| {},
         |_idx, _update, _outcome| {},
     )
     .unwrap();
@@ -153,6 +154,7 @@ fn run_for_updates_parallel_first_failure_aborts_with_per_bookmark_attribution()
         Stage::PrePush,
         &updates,
         opts,
+        |_idx, _update| {},
         |_idx, _update, _outcome| {},
     )
     .unwrap();
@@ -229,6 +231,7 @@ fn run_for_updates_parallel_progress_callback_fires_per_update() {
         Stage::PrePush,
         &updates,
         opts,
+        |_idx, _update| {},
         |idx, update, outcome| {
             progress_fired
                 .lock()
@@ -328,6 +331,7 @@ fn run_for_updates_parallel_without_capture_panics() {
         Stage::PrePush,
         &updates,
         opts,
+        |_idx, _update| {},
         |_idx, _update, _outcome| {},
     );
 }
@@ -401,6 +405,7 @@ fn run_for_partitioned_updates_parallel_two_independent_stacks() {
         Stage::PrePush,
         &partitions,
         opts,
+        |_p, _u, _update| {},
         |_p, _u, _update, _outcome| {},
     )
     .unwrap();
@@ -475,6 +480,7 @@ fn run_for_partitioned_updates_parallel_failure_in_one_stack_does_not_cancel_the
         Stage::PrePush,
         &partitions,
         opts,
+        |_p, _u, _update| {},
         |_p, _u, _update, _outcome| {},
     )
     .unwrap();
