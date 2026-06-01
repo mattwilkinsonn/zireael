@@ -1,0 +1,24 @@
+export PATH="$HOME/.local/bin:$PATH"
+
+# Directory navigation
+setopt AUTO_PUSHD
+setopt PUSHD_IGNORE_DUPS
+
+# jj (Jujutsu) CLI completion
+source <(COMPLETE=zsh jj)
+
+# jj-hp (Jujutsu Hooks) CLI completion - only when installed
+# (cargo-installed binary; not present on hosts without dev.nix).
+command -v jj-hp >/dev/null 2>&1 && eval "$(jj-hp completions zsh)"
+
+# jj-gt CLI completion - only when installed (cargo-installed
+# binary; not present on hosts without dev.nix).
+command -v jj-gt >/dev/null 2>&1 && eval "$(jj-gt completions zsh)"
+
+# gt (Graphite CLI) completion. gt emits yargs-style
+# completions via `gt completion zsh`. Only wire when
+# installed (graphite-cli is in dev.nix -> not on hosts
+# without dev tooling). The completion script is dynamic -
+# the script registers a function that re-invokes `gt
+# --get-yargs-completions` on TAB to enumerate live values.
+command -v gt >/dev/null 2>&1 && eval "$(gt completion zsh 2>/dev/null)"

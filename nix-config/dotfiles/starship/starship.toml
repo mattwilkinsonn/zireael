@@ -1,0 +1,30 @@
+format = "$username$hostname$localip$shlvl$singularity$kubernetes$directory${custom}$all$line_break$character"
+
+[git_branch]
+disabled = true
+
+[git_commit]
+disabled = true
+
+[git_state]
+disabled = true
+
+[git_metrics]
+disabled = true
+
+[git_status]
+disabled = true
+
+[custom.jj]
+shell = ["bash", "--noprofile", "--norc", "-c"]
+command = "starship-jj --ignore-working-copy starship prompt"
+format = "$output"
+ignore_timeout = true
+use_stdin = false
+when = "jj root --ignore-working-copy"
+
+[custom.git]
+shell = ["bash", "--noprofile", "--norc", "-c"]
+command = 'branch=$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse --short HEAD 2>/dev/null); dirty=""; git diff --quiet 2>/dev/null || dirty="*"; echo "$branch$dirty"'
+when = "! jj root --ignore-working-copy 2>/dev/null && git rev-parse --git-dir"
+format = "on [$output](bold purple) "

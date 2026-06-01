@@ -53,6 +53,8 @@ fi
 # --- G9 -----------------------------------------------------------------
 if [[ -n $g9 ]]; then
 	add_rule code app="^Code$" display="$g9"
+	add_rule zed app="^Zed$" display="$g9"
+	add_rule cmux app="^cmux$" display="$g9"
 fi
 
 # --- Alienware ----------------------------------------------------------

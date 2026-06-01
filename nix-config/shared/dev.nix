@@ -64,6 +64,7 @@
     pkl # Apple Pkl CLI — hk's config language; required for `hk validate` etc.
     llvm # LLVM toolchain
     git-filter-repo # rewrite git history
+    nixd # Nix language server
 
     # AI / LLM tooling
     codexPackage # OpenAI Codex CLI
