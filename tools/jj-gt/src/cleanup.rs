@@ -23,9 +23,6 @@ pub struct FetchOpts {
     pub no_gtmq_prune: bool,
     pub gtmq_prefixes: Vec<String>,
     pub auto: bool,
-    /// Bypass the uncommitted-changes refusal. See
-    /// [`crate::cli::Command::Fetch::force_with_changes`].
-    pub force_with_changes: bool,
     pub dry_run: bool,
 }
 
@@ -39,7 +36,6 @@ impl Default for FetchOpts {
             no_gtmq_prune: false,
             gtmq_prefixes: vec!["gtmq_".into()],
             auto: false,
-            force_with_changes: false,
             dry_run: false,
         }
     }
@@ -276,19 +272,29 @@ pub fn run_fetch(
         Some(crate::lock::PipelineLock::acquire(workspace_root)?)
     };
 
-    // 0b. Refuse to run with uncommitted working-copy edits unless
-    // the user explicitly opted in. Concurrent jj operations during
-    // the pipeline (or the snapshotting jj does as a side effect
-    // of other commands the user runs from another shell) can
-    // produce divergent commits that silently lose those edits.
-    // See issue #1 for the full damage shape.
-    if !opts.force_with_changes && !opts.dry_run && jj::has_uncommitted_changes(jj)? {
-        return Err(crate::error::JjGtError::Invalid(
-            "workspace has uncommitted working-copy edits. \
-             Commit or describe them before running `jj-gt fetch`, \
-             or pass --force-with-changes to proceed anyway."
-                .into(),
-        ));
+    // 0b. Shelter any uncommitted working-copy edits behind a fresh
+    // empty `@`. Concurrent jj operations during the pipeline (or
+    // jj's own snapshotting as a side effect of other commands the
+    // user runs from another shell) can produce divergent commits
+    // that silently lose pending edits. Pre-2026-06 fetch refused
+    // to run when `@` had edits and offered `--force-with-changes`
+    // as a bypass; the new model auto-shelters via `jj new @`
+    // (which snapshots the edits into the old `@` and creates a
+    // fresh empty `@` above) — strictly safer than the bypass and
+    // less friction than the refusal. See issue #1 for the damage
+    // shape this defends against.
+    //
+    // Skip when `@` is already empty (nothing to shelter) and in
+    // dry-run (don't mutate the workspace at all).
+    if !opts.dry_run && jj::has_uncommitted_changes(jj)? {
+        let step = ui::Step::start("Sheltering uncommitted edits (jj new @)", verbosity);
+        match jj::shelter_uncommitted_edits(jj) {
+            Ok(()) => step.success("old @ now holds your edits as a real change", None),
+            Err(e) => {
+                step.fail(&format!("{e}"), None);
+                return Err(e);
+            }
+        }
     }
 
     // 1. Fetch.

@@ -35,6 +35,21 @@ fn jj(cwd: &Path, args: &[&str]) {
     );
 }
 
+fn jj_capture(cwd: &Path, args: &[&str]) -> String {
+    let out = Command::new("jj")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "jj {args:?} failed: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 /// Build a fresh jj workspace with `main` bookmark on the root commit.
 /// Used by every test in this file.
 fn build_workspace() -> tempfile::TempDir {
@@ -176,6 +191,93 @@ fn has_uncommitted_changes_true_after_file_edit() {
 
     let jj_cli = JjCli::new(tmp.path().to_path_buf());
     assert!(jj_gt::jj::has_uncommitted_changes(&jj_cli).unwrap());
+}
+
+#[test]
+fn shelter_uncommitted_edits_moves_them_into_a_committed_change() {
+    // The contract: after `shelter_uncommitted_edits`, the user's
+    // file edits are no longer pending against `@` — they're
+    // committed in what was previously `@`, and the new `@` is an
+    // empty change above that. The file content on disk doesn't
+    // change.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_workspace();
+
+    // Write a file and snapshot it as a pending edit on @.
+    std::fs::write(tmp.path().join("shelter-me.txt"), "edits\n").unwrap();
+    jj(tmp.path(), &["status"]);
+
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+    assert!(
+        jj_gt::jj::has_uncommitted_changes(&jj_cli).unwrap(),
+        "fixture should have set up pending edits before sheltering"
+    );
+
+    // Capture @ before sheltering so we can assert what happened to
+    // the previous change.
+    let before_change_id = jj_gt::jj::current_change_id(&jj_cli).unwrap();
+
+    jj_gt::jj::shelter_uncommitted_edits(&jj_cli).unwrap();
+
+    // The new @ must be empty (no pending file changes).
+    assert!(
+        !jj_gt::jj::has_uncommitted_changes(&jj_cli).unwrap(),
+        "new @ should be empty after sheltering"
+    );
+
+    // The new @ must have a different change_id (jj new @ creates
+    // a fresh child).
+    let after_change_id = jj_gt::jj::current_change_id(&jj_cli).unwrap();
+    assert_ne!(
+        before_change_id, after_change_id,
+        "shelter should have moved @ to a new change",
+    );
+
+    // The previous change must now carry the file content. Cheapest
+    // verification: ask jj for the diff of the old change and
+    // confirm the file path appears.
+    let diff = jj_capture(
+        tmp.path(),
+        &[
+            "log",
+            "-r",
+            &before_change_id,
+            "--no-graph",
+            "-T",
+            r#"self.diff().files().map(|f| f.path()).join(",")"#,
+            "--ignore-working-copy",
+        ],
+    );
+    assert!(
+        diff.contains("shelter-me.txt"),
+        "pre-shelter change should carry the sheltered file, got: {diff:?}",
+    );
+
+    // File on disk must be untouched — sheltering is a metadata
+    // operation, not a checkout.
+    let on_disk = std::fs::read_to_string(tmp.path().join("shelter-me.txt")).unwrap();
+    assert_eq!(on_disk, "edits\n");
+}
+
+#[test]
+fn shelter_uncommitted_edits_is_a_noop_on_clean_workspace() {
+    // When there's nothing to shelter, calling the helper anyway
+    // is still valid — `jj new @` just adds an empty change above
+    // an empty change. Cheap to do, cheaper than branching the
+    // caller on a clean-workspace fast path.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_workspace();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    assert!(!jj_gt::jj::has_uncommitted_changes(&jj_cli).unwrap());
+    jj_gt::jj::shelter_uncommitted_edits(&jj_cli).unwrap();
+    assert!(!jj_gt::jj::has_uncommitted_changes(&jj_cli).unwrap());
 }
 
 #[test]

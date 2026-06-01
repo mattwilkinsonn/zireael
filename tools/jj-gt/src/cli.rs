@@ -154,18 +154,6 @@ pub enum Command {
         #[arg(long)]
         auto: bool,
 
-        /// Bypass the "workspace has uncommitted changes" refusal.
-        ///
-        /// By default `jj-gt fetch` refuses to run when `@` has
-        /// uncommitted file edits — concurrent jj operations (or
-        /// the snapshotting jj does during the fetch pipeline) can
-        /// produce divergent commits that silently lose those
-        /// edits. Pass this flag to acknowledge the risk and
-        /// proceed anyway. See issue #1 in this repo for the
-        /// damage shape.
-        #[arg(long)]
-        force_with_changes: bool,
-
         /// Print what would happen at every step.
         #[arg(long)]
         dry_run: bool,
