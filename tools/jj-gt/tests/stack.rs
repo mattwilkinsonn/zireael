@@ -150,6 +150,138 @@ fn bookmark_on_trunk_resolves_to_trunk_parent() {
 }
 
 #[test]
+fn bookmarks_in_revset_excludes_remote_only_refs() {
+    // Regression: when a remote-tracking ref (e.g. graphite's
+    // `graphite-base/<N>@origin` markers) sits on the same commit
+    // as a real local bookmark, `bookmarks_in_revset` used to
+    // return BOTH because the template iterated the umbrella
+    // `bookmarks` keyword instead of `local_bookmarks`. That
+    // turned downstream `derive_parents` calls into spurious
+    // "multiple parent bookmarks found" errors on every
+    // subsequent `jj-gt submit`.
+    //
+    // This test fabricates the colliding ref by writing directly
+    // into the colocated git remote-ref store, importing it into
+    // jj, then asserting only the local name comes back.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_linear_stack_fixture();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    // Pull the commit id `bottom` resolves to. We'll plant a
+    // remote-tracking ref at that same OID so the revset query
+    // returns both names.
+    let bottom_oid =
+        jj_gt::jj::resolve_commit_id(&jj_cli, "bottom").expect("resolve bottom commit id");
+
+    // Fabricate the remote-tracking ref. `git update-ref` is the
+    // lowest-level way to do this without an actual remote — the
+    // colocated layout puts a `refs/remotes/origin/...` write in
+    // the place `jj git import` then reads from.
+    let git_dir = tmp.path().join(".git");
+    let status = std::process::Command::new("git")
+        .args([
+            "update-ref",
+            "refs/remotes/origin/graphite-base/42",
+            &bottom_oid,
+        ])
+        .env("GIT_DIR", &git_dir)
+        .status()
+        .expect("git update-ref");
+    assert!(status.success(), "git update-ref failed");
+
+    // Make jj see the remote-tracking ref.
+    let status = std::process::Command::new("jj")
+        .args(["git", "import"])
+        .current_dir(tmp.path())
+        .status()
+        .expect("jj git import");
+    assert!(status.success(), "jj git import failed");
+
+    // Sanity check: both names DO show up under the umbrella
+    // `bookmarks` template — i.e. the fixture is actually
+    // reproducing the original bug shape, not just trivially
+    // passing because the remote ref isn't there.
+    let umbrella = jj_capture(
+        tmp.path(),
+        &[
+            "log",
+            "--no-graph",
+            "-r",
+            "bookmarks() & bottom",
+            "-T",
+            r#"bookmarks.map(|b| b.name()).join(",") ++ "\n""#,
+            "--ignore-working-copy",
+        ],
+    );
+    assert!(
+        umbrella.contains("graphite-base/42") && umbrella.contains("bottom"),
+        "fixture didn't reproduce the collision; got: {umbrella:?}",
+    );
+
+    // The actual assertion: our `bookmarks_in_revset` (now using
+    // `local_bookmarks`) MUST NOT return the remote-only ref.
+    let names = jj_gt::jj::bookmarks_in_revset(&jj_cli, "bookmarks() & bottom").unwrap();
+    assert!(
+        names.iter().any(|n| n == "bottom"),
+        "expected `bottom` in {names:?}",
+    );
+    assert!(
+        !names.iter().any(|n| n.starts_with("graphite-base/")),
+        "remote-only ref leaked into bookmarks_in_revset: {names:?}",
+    );
+}
+
+#[test]
+fn derive_parents_skips_remote_only_collider() {
+    // End-to-end version of the regression: plant a
+    // remote-tracking ref on the same commit as a real local
+    // bookmark, then run `derive_parents` against the *next*
+    // bookmark up the stack. Without the local-only filter this
+    // throws "multiple parent bookmarks found (["graphite-base/42",
+    // "bottom"])"; with the fix it cleanly picks `bottom`.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_linear_stack_fixture();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    let bottom_oid =
+        jj_gt::jj::resolve_commit_id(&jj_cli, "bottom").expect("resolve bottom commit id");
+
+    let git_dir = tmp.path().join(".git");
+    let status = std::process::Command::new("git")
+        .args([
+            "update-ref",
+            "refs/remotes/origin/graphite-base/42",
+            &bottom_oid,
+        ])
+        .env("GIT_DIR", &git_dir)
+        .status()
+        .expect("git update-ref");
+    assert!(status.success());
+    let status = std::process::Command::new("jj")
+        .args(["git", "import"])
+        .current_dir(tmp.path())
+        .status()
+        .expect("jj git import");
+    assert!(status.success());
+
+    // `mid` sits directly above `bottom`. Its derived parent must
+    // be `bottom`, not the remote-only `graphite-base/42`.
+    let derived = derive_parents(&jj_cli, &["mid".into()], "main").unwrap();
+    assert_eq!(derived.len(), 1);
+    assert_eq!(derived[0].name, "mid");
+    match &derived[0].parent {
+        BookmarkOrTrunk::Bookmark(name) => assert_eq!(name, "bottom"),
+        other => panic!("expected parent=bottom, got {other:?}"),
+    }
+}
+
+#[test]
 fn bookmarks_in_revset_resolves_names() {
     if !jj_available() {
         eprintln!("skipping: jj not on PATH");
