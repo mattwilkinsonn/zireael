@@ -21,11 +21,21 @@ pub struct LocalBookmark {
     pub commit_id: String,
 }
 
-/// `jj log -r '<revset>' -T 'bookmarks.map(|b| b.name()).join("\n") ++ "\n"'
+/// `jj log -r '<revset>' -T 'local_bookmarks.map(|b| b.name()).join("\n") ++ "\n"'
 ///        --no-graph --ignore-working-copy`
 ///
 /// Returns deduplicated bookmark names. Used for stack-parent derivation
 /// and revset→bookmark expansion in the selection layer.
+///
+/// Uses `local_bookmarks` (not the umbrella `bookmarks` keyword) so
+/// remote-only refs — graphite's `graphite-base/<N>@origin` markers,
+/// stale `<branch>@<remote>` entries that haven't been pruned — don't
+/// leak into the candidate list. A `derive_parents` query that hits
+/// `graphite-base/43@origin` and a real local bookmark sitting on the
+/// same commit was tripping the "multiple parent bookmarks found"
+/// error before this filter; local-only is the right scope for every
+/// caller (stack derivation, selection expansion — none of them care
+/// about remote-only refs).
 pub fn bookmarks_in_revset(jj: &JjCli, revset: &str) -> Result<Vec<String>> {
     let out = jj_run(
         jj,
@@ -35,7 +45,7 @@ pub fn bookmarks_in_revset(jj: &JjCli, revset: &str) -> Result<Vec<String>> {
             "-r",
             revset,
             "-T",
-            r#"bookmarks.map(|b| b.name()).join("\n") ++ "\n""#,
+            r#"local_bookmarks.map(|b| b.name()).join("\n") ++ "\n""#,
             "--ignore-working-copy",
         ],
     )?;
