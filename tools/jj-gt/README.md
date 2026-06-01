@@ -35,6 +35,23 @@ workflows:
 - **Composes `gt sync` + `jj rebase` + local cleanup** (`jj-gt fetch`).
 - **Queries `gh` for stack-wide PR state** (`jj-gt status`).
 
+**The submit promise.** `jj-gt submit`'s goal is *"make Graphite's
+state match what you currently have locally in jj, every time."* That
+means a few opinionated defaults you might want to opt out of:
+
+- `gt submit --always` is on by default — gt re-pushes every PR's
+  base ref even when it thinks nothing changed. The opt-out is
+  `--no-always`. Without this, gt's skip-unchanged heuristic can
+  leave a PR's base on a stale `graphite-base/N` marker from a
+  previous interrupted submit; the next `jj-gt submit` then no-ops
+  and the PR shows as "conflicting" on GitHub even though the
+  local stack is correct.
+- `gt submit --publish` is on by default. Opt-out via `--no-publish`
+  for keeping PRs in draft (or use `--draft` to create as draft).
+- Pre-push hooks run per-bookmark in parallel by default. Opt out
+  with `--hooks-sequential` (one bookmark at a time) or
+  `--hooks-tip-only` (only run hooks for the tip).
+
 **IT ISN'T.**
 
 - Not a stack editor. Use jj directly (`jj split`, `jj rebase -s`,
