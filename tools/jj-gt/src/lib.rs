@@ -14,6 +14,7 @@ pub mod hooks;
 pub mod init;
 pub mod jj;
 pub mod lock;
+pub mod progress;
 pub mod reconcile;
 pub mod select;
 pub mod stack;

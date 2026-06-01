@@ -322,16 +322,18 @@ pub fn run_for_update_with_cancel(
 /// `capture_output: false` is a programmer error.
 ///
 /// Returns results in the same order as `updates` (not completion
-/// order). `progress` is invoked once per update on the thread that
-/// finished it, with the update's index + outcome — the caller uses
-/// this to print captured output in completion order rather than
-/// input order.
+/// order). `progress_start` is invoked once per update on the thread
+/// that picks it up, right before any actual work happens (worktree
+/// creation, setup steps, hook runner); `progress` is invoked once
+/// per update on the thread that finished it. The pair lets the
+/// caller render a live spinner / "running" state per bookmark
+/// instead of just a post-hoc "passed/failed" line.
 ///
 /// First subprocess error (spawn failure, etc.) aborts before
 /// returning; per-update non-zero exits are reported via
 /// [`HookOutcome::success`], not as `Err`.
 #[allow(clippy::too_many_arguments)]
-pub fn run_for_updates_parallel<F>(
+pub fn run_for_updates_parallel<S, F>(
     jj: &JjCli,
     primary_git_dir: &Path,
     workspace_root: &Path,
@@ -339,9 +341,11 @@ pub fn run_for_updates_parallel<F>(
     stage: Stage,
     updates: &[BookmarkUpdate],
     opts: RunOpts,
+    progress_start: S,
     progress: F,
 ) -> Result<Vec<HookOutcome>>
 where
+    S: Fn(usize, &BookmarkUpdate) + Send + Sync,
     F: Fn(usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
 {
     assert!(
@@ -350,6 +354,7 @@ where
     );
 
     use std::sync::Mutex;
+    let progress_start = &progress_start;
     let progress = &progress;
     let results: Vec<Mutex<Option<Result<HookOutcome>>>> =
         (0..updates.len()).map(|_| Mutex::new(None)).collect();
@@ -360,6 +365,16 @@ where
     std::thread::scope(|s| {
         for (idx, update) in updates.iter().enumerate() {
             s.spawn(move || {
+                // Fire `progress_start` before doing any work so the
+                // caller's tracker UI can flip this bookmark from
+                // pending → running while we're still inside
+                // worktree setup / setup-step / hook runner. The
+                // `cancelled` short-circuit inside `run_once` may
+                // mean the bookmark never actually executes a hook,
+                // but the start callback still fires — the tracker
+                // resolves that into a "cancelled" final state via
+                // the completion callback below.
+                progress_start(idx, update);
                 let outcome = run_for_update_with_cancel(
                     jj,
                     primary_git_dir,
@@ -413,10 +428,12 @@ where
 /// Outcomes are returned in the same shape as the input partitions
 /// (`Vec<Vec<HookOutcome>>`), in the same order.
 ///
-/// `progress` is called with `(partition_idx, update_idx_in_partition,
-/// update, outcome)` whenever any thread finishes one update.
+/// `progress_start` is called as `(partition_idx, update_idx_in_partition,
+/// update)` when the thread begins work on a bookmark; `progress` is
+/// called as `(partition_idx, update_idx_in_partition, update, outcome)`
+/// when the thread finishes one update.
 #[allow(clippy::too_many_arguments)]
-pub fn run_for_partitioned_updates_parallel<F>(
+pub fn run_for_partitioned_updates_parallel<S, F>(
     jj: &JjCli,
     primary_git_dir: &Path,
     workspace_root: &Path,
@@ -424,9 +441,11 @@ pub fn run_for_partitioned_updates_parallel<F>(
     stage: Stage,
     partitions: &[Vec<BookmarkUpdate>],
     opts: RunOpts,
+    progress_start: S,
     progress: F,
 ) -> Result<Vec<Vec<HookOutcome>>>
 where
+    S: Fn(usize, usize, &BookmarkUpdate) + Send + Sync,
     F: Fn(usize, usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
 {
     assert!(
@@ -435,6 +454,7 @@ where
     );
 
     use std::sync::Mutex;
+    let progress_start = &progress_start;
     let progress = &progress;
     // Pre-allocate the result shape. Outer index = partition;
     // inner index = position in partition.
@@ -452,6 +472,10 @@ where
             for (u_idx, update) in partition.iter().enumerate() {
                 let cancel = cancel.clone();
                 s.spawn(move || {
+                    // Fire start before any work so the tracker UI
+                    // can render "running" with elapsed time while
+                    // the hook subprocess is still going.
+                    progress_start(p_idx, u_idx, update);
                     let outcome = run_for_update_with_cancel(
                         jj,
                         primary_git_dir,
