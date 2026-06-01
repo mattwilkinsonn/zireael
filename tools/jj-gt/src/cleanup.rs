@@ -480,6 +480,39 @@ fn do_fetch(jj: &JjCli, opts: &FetchOpts, verbosity: crate::ui::Verbosity) -> Re
     }
 }
 
+/// Decide whether a single `StackedBookmark` is eligible for the
+/// backfill phase's `gt track` call. Three conditions:
+///
+///   1. has an open PR (`gh` told us about it),
+///   2. still exists locally after fetch (gt track on a missing
+///      branch errors with "branch not found"),
+///   3. its recorded parent ALSO still exists locally after fetch.
+///      The pre-fetch snapshot intentionally preserves edges to
+///      parents that may disappear during `jj git fetch` (so
+///      `orphan_rebase_phase` can detect and repair them
+///      downstream), but `gt track` fails hard on a missing parent
+///      — and that would abort the whole pipeline before the
+///      repair phase ever runs.
+///
+/// `BookmarkOrTrunk::Trunk` is always satisfiable: trunk by
+/// definition exists locally.
+///
+/// Pure function so unit tests can exhaustively cover the truth
+/// table without spinning up a workspace or stubbing `gt`.
+pub fn is_backfill_target(
+    sb: &StackedBookmark,
+    normal_prs: &[PrInfo],
+    post_names: &BTreeSet<String>,
+) -> bool {
+    let has_pr = normal_prs.iter().any(|p| p.head_ref_name == sb.name);
+    let child_present = post_names.contains(&sb.name);
+    let parent_present = match &sb.parent {
+        BookmarkOrTrunk::Trunk => true,
+        BookmarkOrTrunk::Bookmark(parent) => post_names.contains(parent),
+    };
+    has_pr && child_present && parent_present
+}
+
 /// Backfill gt tracking metadata for bookmarks that have a PR.
 ///
 /// Filters to bookmarks (a) with a PR and (b) still present
@@ -502,10 +535,7 @@ fn backfill_phase(
     let stacked = crate::stack::sort_for_tracking(&pre.stacked);
     let backfill_targets: Vec<_> = stacked
         .iter()
-        .filter(|sb| {
-            pre.normal_prs.iter().any(|p| p.head_ref_name == sb.name)
-                && post_names.contains(&sb.name)
-        })
+        .filter(|sb| is_backfill_target(sb, &pre.normal_prs, &post_names))
         .collect();
     if backfill_targets.is_empty() {
         let step = crate::ui::Step::start("Backfilling gt tracking metadata", verbosity);
@@ -1289,5 +1319,65 @@ mod tests {
         };
         let err = classify_rewind("a", Some("b"), oracle).unwrap_err();
         assert!(format!("{err}").contains("synthetic test error"));
+    }
+
+    #[test]
+    fn is_backfill_target_accepts_intact_chain() {
+        // Baseline: bookmark has a PR, both child and parent are
+        // still present locally → eligible.
+        let target = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
+        let prs = vec![pr_with(1, "mid", "deadbeef", PrState::Open)];
+        let post = names(&["main", "bottom", "mid", "top"]);
+        assert!(is_backfill_target(&target, &prs, &post));
+    }
+
+    #[test]
+    fn is_backfill_target_rejects_child_deleted_during_fetch() {
+        // bookmark's remote was deleted, propagated to local —
+        // `gt track` would fail "branch not found." Skip.
+        let target = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
+        let prs = vec![pr_with(1, "mid", "deadbeef", PrState::Open)];
+        let post = names(&["main", "bottom", "top"]); // mid missing
+        assert!(!is_backfill_target(&target, &prs, &post));
+    }
+
+    #[test]
+    fn is_backfill_target_rejects_parent_deleted_during_fetch() {
+        // Regression for the wild bug: `bottom`'s PR squash-merged
+        // and the post-merge cleanup deleted the remote ref, which
+        // jj git fetch propagated to local. By the time
+        // backfill_phase runs, `bottom` is gone from `post_names`
+        // — calling `gt track mid --parent bottom` would error
+        // "branch not found" and abort the pipeline before
+        // orphan_rebase_phase repairs the stack.
+        //
+        // The pre-fetch snapshot intentionally preserved the
+        // `mid → bottom` edge (so orphan rebase can detect and
+        // fix it), so the orphan signal is downstream. We just
+        // need to NOT run gt track here.
+        let target = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
+        let prs = vec![pr_with(1, "mid", "deadbeef", PrState::Open)];
+        let post = names(&["main", "mid", "top"]); // bottom missing
+        assert!(!is_backfill_target(&target, &prs, &post));
+    }
+
+    #[test]
+    fn is_backfill_target_accepts_trunk_parent_unconditionally() {
+        // A bookmark rooted on trunk has parent=Trunk; trunk is
+        // always present locally so the parent check is satisfied
+        // by definition.
+        let target = sb("bottom", BookmarkOrTrunk::Trunk);
+        let prs = vec![pr_with(2, "bottom", "cafebabe", PrState::Open)];
+        let post = names(&["main", "bottom"]);
+        assert!(is_backfill_target(&target, &prs, &post));
+    }
+
+    #[test]
+    fn is_backfill_target_rejects_bookmark_without_pr() {
+        // No PR → no backfill (gt has nothing to bind to).
+        let target = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
+        let prs: Vec<PrInfo> = Vec::new();
+        let post = names(&["main", "bottom", "mid"]);
+        assert!(!is_backfill_target(&target, &prs, &post));
     }
 }

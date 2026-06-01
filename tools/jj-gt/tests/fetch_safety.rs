@@ -35,6 +35,24 @@ fn jj(cwd: &Path, args: &[&str]) {
     );
 }
 
+/// Shell out to `git`. Mirrors [`jj`] so the test fixtures don't
+/// repeat the `Command::new("git").args(...).output().unwrap()` +
+/// `assert!(status.success(), ...)` boilerplate at every call
+/// site.
+fn git(cwd: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
 fn jj_capture(cwd: &Path, args: &[&str]) -> String {
     let out = Command::new("jj")
         .args(args)
@@ -388,16 +406,7 @@ fn build_tracked_stack_with_bare_remote() -> tempfile::TempDir {
         String::from_utf8_lossy(&add_remote.stderr)
     );
     for bookmark in ["main", "bottom", "mid", "top"] {
-        let push = std::process::Command::new("git")
-            .args(["push", "origin", bookmark])
-            .current_dir(tmp.path())
-            .output()
-            .unwrap();
-        assert!(
-            push.status.success(),
-            "git push {bookmark} failed: {}",
-            String::from_utf8_lossy(&push.stderr)
-        );
+        git(tmp.path(), &["push", "origin", bookmark]);
     }
     // Import so jj's remote-tracking refs are populated.
     jj(tmp.path(), &["git", "import"]);
@@ -497,16 +506,7 @@ fn snapshot_pre_fetch_captures_parent_edges_that_post_fetch_loses() {
 
     // Step 2: delete `bottom` on the bare remote (simulates the
     // post-merge cleanup).
-    let delete = std::process::Command::new("git")
-        .args(["push", "origin", "--delete", "bottom"])
-        .current_dir(tmp.path())
-        .output()
-        .unwrap();
-    assert!(
-        delete.status.success(),
-        "git push --delete bottom failed: {}",
-        String::from_utf8_lossy(&delete.stderr),
-    );
+    git(tmp.path(), &["push", "origin", "--delete", "bottom"]);
 
     // Step 3: `jj git fetch`. Tracked `bottom` should disappear
     // from local.
@@ -560,8 +560,11 @@ fn snapshot_pre_fetch_captures_parent_edges_that_post_fetch_loses() {
 
     // Step 5: regression assertion — the orphan-rebase deleted-set
     // computed from pre vs post correctly identifies `bottom` as
-    // disappeared.
-    let pre_names = pre.normal.iter().map(|b| b.name.clone()).collect();
+    // disappeared. Using `pre.normal_names()` keeps this test aligned
+    // with the helper production callers use; if the encapsulated
+    // "what counts as a normal name" semantics change, the test
+    // tracks it automatically.
+    let pre_names = pre.normal_names();
     let post_names_set: std::collections::BTreeSet<String> =
         post_bookmarks.iter().map(|b| b.name.clone()).collect();
     let deleted = jj_gt::cleanup::compute_deleted_set(&pre_names, &post_names_set);
