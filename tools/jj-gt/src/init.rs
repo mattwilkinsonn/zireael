@@ -219,13 +219,13 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
         .as_array_mut()
         .ok_or_else(|| JjGtError::Invalid("jjui config: `actions` is not an array".into()))?;
 
-    for (idx, spec) in specs.iter().enumerate() {
+    for spec in specs {
         if !actions_has_name(actions_arr, spec.action_name) {
             let mut t = toml::Table::new();
             t.insert("name".into(), toml::Value::String(spec.action_name.into()));
             t.insert("lua".into(), toml::Value::String(spec.lua.into()));
             actions_arr.push(toml::Value::Table(t));
-            set_added_flag(&mut added, idx, true);
+            set_added_action_flag(&mut added, spec.action_name);
         }
     }
 
@@ -237,7 +237,7 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
         .as_array_mut()
         .ok_or_else(|| JjGtError::Invalid("jjui config: `bindings` is not an array".into()))?;
 
-    for (idx, spec) in specs.iter().enumerate() {
+    for spec in specs {
         if !bindings_has_action(bindings_arr, spec.action_name) {
             bindings_arr.push(make_binding(
                 spec.action_name,
@@ -245,7 +245,7 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
                 spec.scope,
                 spec.desc,
             ));
-            set_added_binding_flag(&mut added, idx, true);
+            set_added_binding_flag(&mut added, spec.action_name);
         }
     }
 
@@ -264,16 +264,14 @@ struct ActionSpec {
 }
 
 fn action_specs() -> &'static [ActionSpec] {
-    // Order matters — must match the indices set_added_flag /
-    // set_added_binding_flag use.
+    // Order matters: jjui's `x`-prefix overlay lists candidate
+    // bindings in the order they appear here. Most-frequent
+    // actions first so the menu reads top-down like a usage
+    // frequency curve.
     static SPECS: &[ActionSpec] = &[
-        ActionSpec {
-            action_name: "jj-gt-submit",
-            lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"submit\")\n  revisions.refresh()\n",
-            seq: &["x", "S"],
-            desc: "jj-gt submit (whole stack)",
-            scope: "revisions",
-        },
+        // 1. submit-selected — the daily "ship my current
+        //    bookmark" keystroke; same hand as `x` so it's the
+        //    fastest reach.
         ActionSpec {
             action_name: "jj-gt-submit-selected",
             lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"submit\", \"-r\", context.commit_id())\n  revisions.refresh()\n",
@@ -281,6 +279,8 @@ fn action_specs() -> &'static [ActionSpec] {
             desc: "jj-gt submit selected bookmark(s)",
             scope: "revisions",
         },
+        // 2. fetch — sync trunk + Graphite cleanup, run multiple
+        //    times a day.
         ActionSpec {
             action_name: "jj-gt-fetch",
             lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"fetch\")\n  revisions.refresh()\n",
@@ -288,13 +288,9 @@ fn action_specs() -> &'static [ActionSpec] {
             desc: "jj-gt fetch",
             scope: "revisions",
         },
-        ActionSpec {
-            action_name: "jj-gt-track",
-            lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"track\")\n  revisions.refresh()\n",
-            seq: &["x", "T"],
-            desc: "jj-gt track (whole stack)",
-            scope: "revisions",
-        },
+        // 3. track-selected — manual track invocation when a
+        //    submit ran into trouble and you want to retry the
+        //    track step in isolation.
         ActionSpec {
             action_name: "jj-gt-track-selected",
             lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"track\", \"-r\", context.commit_id())\n  revisions.refresh()\n",
@@ -302,6 +298,28 @@ fn action_specs() -> &'static [ActionSpec] {
             desc: "jj-gt track selected bookmark(s)",
             scope: "revisions",
         },
+        // 4. submit (whole stack) — less frequent than submit-
+        //    selected; usually `jj-gt submit --all` already kicks
+        //    via the shell alias.
+        ActionSpec {
+            action_name: "jj-gt-submit",
+            lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"submit\")\n  revisions.refresh()\n",
+            seq: &["x", "S"],
+            desc: "jj-gt submit (whole stack)",
+            scope: "revisions",
+        },
+        // 5. track (whole stack) — similar but rarer than its
+        //    selected counterpart.
+        ActionSpec {
+            action_name: "jj-gt-track",
+            lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"track\")\n  revisions.refresh()\n",
+            seq: &["x", "T"],
+            desc: "jj-gt track (whole stack)",
+            scope: "revisions",
+        },
+        // 6. reconcile — recovery flow; only reached when
+        //    submit/fetch produced ambiguous state. Last in the
+        //    list because it's the least common.
         ActionSpec {
             action_name: "jj-gt-reconcile",
             lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"reconcile\")\n  revisions.refresh()\n",
@@ -313,27 +331,30 @@ fn action_specs() -> &'static [ActionSpec] {
     SPECS
 }
 
-fn set_added_flag(added: &mut AddedItems, idx: usize, value: bool) {
-    match idx {
-        0 => added.added_submit = value,
-        1 => added.added_submit_selected = value,
-        2 => added.added_fetch = value,
-        3 => added.added_track = value,
-        4 => added.added_track_selected = value,
-        5 => added.added_reconcile = value,
-        _ => unreachable!("action_specs index out of range"),
+/// Look up the right `AddedItems` field for `name` and set it to
+/// `true`. Name-based instead of index-based so reordering
+/// `action_specs()` doesn't silently misroute the flag.
+fn set_added_action_flag(added: &mut AddedItems, name: &str) {
+    match name {
+        "jj-gt-submit" => added.added_submit = true,
+        "jj-gt-submit-selected" => added.added_submit_selected = true,
+        "jj-gt-fetch" => added.added_fetch = true,
+        "jj-gt-track" => added.added_track = true,
+        "jj-gt-track-selected" => added.added_track_selected = true,
+        "jj-gt-reconcile" => added.added_reconcile = true,
+        _ => unreachable!("unexpected action name in action_specs: {name}"),
     }
 }
 
-fn set_added_binding_flag(added: &mut AddedItems, idx: usize, value: bool) {
-    match idx {
-        0 => added.added_binding_submit = value,
-        1 => added.added_binding_submit_selected = value,
-        2 => added.added_binding_fetch = value,
-        3 => added.added_binding_track = value,
-        4 => added.added_binding_track_selected = value,
-        5 => added.added_binding_reconcile = value,
-        _ => unreachable!("action_specs index out of range"),
+fn set_added_binding_flag(added: &mut AddedItems, name: &str) {
+    match name {
+        "jj-gt-submit" => added.added_binding_submit = true,
+        "jj-gt-submit-selected" => added.added_binding_submit_selected = true,
+        "jj-gt-fetch" => added.added_binding_fetch = true,
+        "jj-gt-track" => added.added_binding_track = true,
+        "jj-gt-track-selected" => added.added_binding_track_selected = true,
+        "jj-gt-reconcile" => added.added_binding_reconcile = true,
+        _ => unreachable!("unexpected action name in action_specs: {name}"),
     }
 }
 
