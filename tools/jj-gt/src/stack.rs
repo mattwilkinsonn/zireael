@@ -41,6 +41,14 @@ impl BookmarkOrTrunk {
 
 /// For each input bookmark, derive its parent bookmark (or trunk) by
 /// querying jj's revset graph.
+///
+/// Strict — any per-bookmark revset failure aborts the whole call.
+/// Callers like `submit_cmd` want this because the user explicitly
+/// named the bookmark and "we silently dropped it" would be the
+/// wrong UX. Callers that enumerate every local bookmark
+/// (`cleanup::run_fetch`) should use [`derive_parents_lossy`]
+/// instead so a single zombie bookmark doesn't wedge the whole
+/// pipeline.
 pub fn derive_parents(
     jj: &JjCli,
     bookmarks: &[String],
@@ -51,6 +59,31 @@ pub fn derive_parents(
         out.push(derive_one(jj, b, trunk)?);
     }
     Ok(out)
+}
+
+/// Like [`derive_parents`] but logs and skips per-bookmark failures
+/// instead of aborting. Returns the subset of bookmarks whose parent
+/// resolved cleanly.
+///
+/// Use this when the caller enumerated every local bookmark and
+/// wants the pipeline to make progress on the ones that ARE in good
+/// shape — typically `cleanup::run_fetch` after a merged PR's
+/// bookmark has been marked-deleted-on-remote but not yet exported
+/// to git refs (so the name doesn't resolve to a commit, and the
+/// revset for it fails with "Revision X doesn't exist").
+pub fn derive_parents_lossy(jj: &JjCli, bookmarks: &[String], trunk: &str) -> Vec<StackedBookmark> {
+    let mut out = Vec::with_capacity(bookmarks.len());
+    for b in bookmarks {
+        match derive_one(jj, b, trunk) {
+            Ok(sb) => out.push(sb),
+            Err(e) => {
+                tracing::warn!(
+                    "derive_parents_lossy: skipping `{b}` — could not resolve parent: {e}"
+                );
+            }
+        }
+    }
+    out
 }
 
 fn derive_one(jj: &JjCli, bookmark: &str, trunk: &str) -> Result<StackedBookmark> {
