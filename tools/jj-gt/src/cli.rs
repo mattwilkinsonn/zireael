@@ -219,8 +219,16 @@ pub enum Command {
         dry_run: bool,
     },
 
-    /// Print suggested aliases + setup reminders.
-    Init,
+    /// Interactive setup: prints suggested aliases + setup
+    /// reminders, then optionally installs jjui actions/bindings so
+    /// `jj-gt submit / fetch / track / reconcile` are reachable
+    /// from inside [jjui](https://github.com/idursun/jjui).
+    Init {
+        /// Skip the prompts; only print the setup reminders.
+        /// Useful in scripts and one-shot runs.
+        #[arg(long)]
+        print_only: bool,
+    },
 
     /// Print a shell completion script.
     Completions {

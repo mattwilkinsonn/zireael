@@ -298,11 +298,32 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
         }
     }
 
+    // Migrate `seq` for managed bindings whose key sequence matches
+    // a previous value we installed but not the current one. The
+    // 2026-05 swap moved `jj-hp-push` to `x P` and `jj-hp-push-
+    // selected` to `x p`; older configs need updating.
+    //
+    // Detection key: action name is ours AND `seq` is in our
+    // installed-history. Custom keys the user picked are left alone
+    // because they're not in our history list.
+    migrate_seq_for_managed_binding(
+        bindings_arr,
+        NEW_PUSH_NAME,
+        &push_seq_history(),
+        NEW_PUSH_DESC,
+    );
+    migrate_seq_for_managed_binding(
+        bindings_arr,
+        NEW_PUSH_SELECTED_NAME,
+        &push_selected_seq_history(),
+        NEW_PUSH_SELECTED_DESC,
+    );
+
     // Add any missing bindings (idempotent).
     if !bindings_has_action(bindings_arr, NEW_PUSH_NAME) {
         bindings_arr.push(make_binding(
             NEW_PUSH_NAME,
-            &["x", "p"],
+            &push_seq_history()[0],
             "revisions",
             NEW_PUSH_DESC,
         ));
@@ -311,7 +332,7 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
     if !bindings_has_action(bindings_arr, NEW_PUSH_SELECTED_NAME) {
         bindings_arr.push(make_binding(
             NEW_PUSH_SELECTED_NAME,
-            &["x", "P"],
+            &push_selected_seq_history()[0],
             "revisions",
             NEW_PUSH_SELECTED_DESC,
         ));
@@ -330,6 +351,31 @@ const OLD_PUSH_NAME: &str = "jj-push";
 const OLD_PUSH_SELECTED_NAME: &str = "jj-push-selected";
 const NEW_PUSH_DESC: &str = "jj-hp push";
 const NEW_PUSH_SELECTED_DESC: &str = "jj-hp push selected bookmark(s)";
+
+/// Every key sequence we have ever installed for `jj-hp-push`,
+/// most-recent first. The current value is index 0.
+///
+/// The 2026-05 swap moved the "push everything" action from
+/// `x p` (lowercase) to `x P` (uppercase) so that the more
+/// commonly-used `jj-hp-push-selected` could take the easier
+/// keypress. `apply_jjui_config`'s migration pass detects the
+/// previous sequence and updates it in place when the binding's
+/// name is ours and its lua body is still managed.
+fn push_seq_history() -> Vec<Vec<&'static str>> {
+    vec![
+        vec!["x", "P"], // current — push entire @-ancestor stack
+        vec!["x", "p"], // pre-2026-05 swap
+    ]
+}
+
+/// Every key sequence we have ever installed for
+/// `jj-hp-push-selected`, most-recent first.
+fn push_selected_seq_history() -> Vec<Vec<&'static str>> {
+    vec![
+        vec!["x", "p"], // current — push just the focused bookmark
+        vec!["x", "P"], // pre-2026-05 swap
+    ]
+}
 
 /// Known lua bodies we have auto-installed for `jj-hp-push` historically.
 /// Index 0 is the current form; later indices are older forms we still
@@ -446,6 +492,56 @@ fn apply_action(
 fn bindings_has_action(arr: &[toml::Value], action: &str) -> bool {
     arr.iter()
         .any(|v| v.get("action").and_then(|n| n.as_str()) == Some(action))
+}
+
+/// In-place migration: when a binding's `action` matches `name` and
+/// its `seq` is a sequence we previously installed for that action
+/// (anything in `seq_history` past index 0), rewrite the `seq` to
+/// the current value (index 0) and refresh `desc`.
+///
+/// User-customized sequences are NOT migrated — they're not in
+/// `seq_history`, so the detection falls through. Idempotent: a
+/// binding whose seq is already the current value is left alone.
+fn migrate_seq_for_managed_binding(
+    bindings: &mut [toml::Value],
+    name: &str,
+    seq_history: &[Vec<&'static str>],
+    desc: &str,
+) {
+    if seq_history.len() < 2 {
+        return; // No prior versions to migrate from.
+    }
+    let current = &seq_history[0];
+    let prior: std::collections::HashSet<&[&str]> =
+        seq_history[1..].iter().map(|s| s.as_slice()).collect();
+    for b in bindings.iter_mut() {
+        let Some(action) = b.get("action").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if action != name {
+            continue;
+        }
+        let Some(existing_seq) = b.get("seq").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        let as_strs: Vec<&str> = existing_seq.iter().filter_map(|v| v.as_str()).collect();
+        if !prior.contains(as_strs.as_slice()) {
+            // Either the seq is already current, or the user
+            // picked a custom key. Either way, no migration.
+            continue;
+        }
+        let table = b.as_table_mut().unwrap();
+        table.insert(
+            "seq".into(),
+            toml::Value::Array(
+                current
+                    .iter()
+                    .map(|s| toml::Value::String((*s).into()))
+                    .collect(),
+            ),
+        );
+        table.insert("desc".into(), toml::Value::String(desc.into()));
+    }
 }
 
 fn make_binding(action: &str, seq: &[&str], scope: &str, desc: &str) -> toml::Value {
