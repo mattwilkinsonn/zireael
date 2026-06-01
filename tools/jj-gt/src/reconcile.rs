@@ -40,8 +40,7 @@ pub struct ReconcileOpts {
 pub struct ReconcileReport {
     pub adjacent_retracked: usize,
     pub adjacent_errors: Vec<String>,
-    pub bookmarks_pushed: usize,
-    pub push_errors: Vec<String>,
+    pub push_summary: PushSummary,
 }
 
 /// Filter the tracked-bookmark set down to "adjacent bookmarks
@@ -122,36 +121,104 @@ pub fn retrack_adjacent_diverged(
     Ok((count, errors))
 }
 
+/// Per-bookmark counts produced by [`push_rebased_tips`]. Each
+/// bookmark falls into exactly one bucket per `jj git push`
+/// classification.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PushSummary {
+    /// `jj git push --bookmark <name>` exited 0 and jj reported
+    /// "Add bookmark" — bookmark was new on the remote.
+    pub added: usize,
+    /// Existing remote bookmark moved (force-with-lease covered it).
+    pub moved: usize,
+    /// jj reported the bookmark was already in sync — no work to
+    /// do. This is the signal that often hints at a stale local
+    /// bookmark (user forgot `jj bookmark set -r @` after editing).
+    pub already_in_sync: usize,
+    /// Per-bookmark `jj git push` errors (`name: <stderr text>`).
+    pub errors: Vec<String>,
+}
+
+impl PushSummary {
+    /// Total number of bookmarks that produced real remote-side
+    /// work (added + moved). Used to decide whether to show the
+    /// "all already in sync" hint.
+    pub fn newly_pushed_count(&self) -> usize {
+        self.added + self.moved
+    }
+
+    /// Total number of bookmarks processed without error
+    /// (newly-pushed + already-in-sync).
+    pub fn processed_count(&self) -> usize {
+        self.newly_pushed_count() + self.already_in_sync
+    }
+
+    /// One-line summary suitable for the `Syncing rebased
+    /// bookmarks` step row. Shape changes based on the bucket
+    /// counts so the message is always self-explanatory:
+    ///
+    ///   "2 pushed, 1 already in sync"
+    ///   "3 already in sync"           // all no-ops
+    ///   "1 added, 2 moved"            // no in-sync
+    ///   "1 added"                     // just one new
+    pub fn summary_line(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if self.added > 0 {
+            parts.push(format!("{} added", self.added));
+        }
+        if self.moved > 0 {
+            parts.push(format!("{} moved", self.moved));
+        }
+        if self.already_in_sync > 0 {
+            parts.push(format!("{} already in sync", self.already_in_sync));
+        }
+        if !self.errors.is_empty() {
+            parts.push(format!("{} error(s)", self.errors.len()));
+        }
+        if parts.is_empty() {
+            "no bookmarks pushed".to_owned()
+        } else {
+            parts.join(", ")
+        }
+    }
+}
+
 /// `jj git push --bookmark` over each entry in `bookmarks`. Closes
 /// #5. Uses jj's default force-with-lease semantics so locally-
 /// rebased bookmarks land on the remote without bypassing legitimate
 /// collaborator-race detection.
 ///
 /// Per-bookmark failures are non-fatal: collected into the returned
-/// error list, the count still reflects successful pushes. Callers
-/// that need fail-fast semantics can check `errors.is_empty()` after.
+/// summary's `errors` list. The counts in `PushSummary` distinguish
+/// "real work happened" (added/moved) from "already in sync" so the
+/// summary row tells the user what actually changed on the remote.
 pub fn push_rebased_tips(
     jj: &jj::JjCli,
     bookmarks: &[String],
     opts: &ReconcileOpts,
-) -> Result<(usize, Vec<String>)> {
+) -> Result<PushSummary> {
+    let mut summary = PushSummary::default();
     if bookmarks.is_empty() {
-        return Ok((0, Vec::new()));
+        return Ok(summary);
     }
-    let mut pushed = 0usize;
-    let mut errors: Vec<String> = Vec::new();
     for name in bookmarks {
         if opts.dry_run {
             tracing::info!("dry-run: would jj git push --bookmark {name}");
-            pushed += 1;
+            // Dry-run can't classify what real jj would do
+            // without actually invoking it. Count as `moved` so
+            // the summary doesn't claim "already in sync" for a
+            // case we don't actually know.
+            summary.moved += 1;
             continue;
         }
         match jj::git_push_bookmark(jj, &opts.remote, name) {
-            Ok(()) => pushed += 1,
-            Err(e) => errors.push(format!("{name}: {e}")),
+            Ok(jj::PushOutcome::Added) => summary.added += 1,
+            Ok(jj::PushOutcome::Moved) => summary.moved += 1,
+            Ok(jj::PushOutcome::AlreadyInSync) => summary.already_in_sync += 1,
+            Err(e) => summary.errors.push(format!("{name}: {e}")),
         }
     }
-    Ok((pushed, errors))
+    Ok(summary)
 }
 
 /// Run the full reconciliation: adjacent re-track + push rebased
@@ -202,30 +269,46 @@ pub fn reconcile(
         &format!("Syncing rebased bookmarks to {}", opts.remote),
         verbosity,
     );
-    let (bookmarks_pushed, push_errors) = match push_rebased_tips(jj, push_bookmarks, opts) {
+    let push_summary = match push_rebased_tips(jj, push_bookmarks, opts) {
         Ok(out) => out,
         Err(e) => {
             push_step.fail(&format!("{e}"), None);
             return Err(e);
         }
     };
-    let push_summary = match (bookmarks_pushed, push_errors.is_empty()) {
-        (0, true) if push_bookmarks.is_empty() => "no bookmarks to push".to_owned(),
-        (0, true) => "all bookmarks already in sync".to_owned(),
-        (n, true) => format!("{n} pushed"),
-        (n, false) => format!("{n} pushed, {} error(s)", push_errors.len()),
-    };
-    if push_errors.is_empty() {
-        push_step.success(&push_summary, None);
+    let push_line = if push_bookmarks.is_empty() {
+        "no bookmarks to push".to_owned()
     } else {
-        push_step.warn(&push_summary, Some(&push_errors.join("\n")));
+        push_summary.summary_line()
+    };
+    if push_summary.errors.is_empty() {
+        push_step.success(&push_line, None);
+    } else {
+        push_step.warn(&push_line, Some(&push_summary.errors.join("\n")));
+    }
+
+    // Hint when ALL bookmarks the caller asked us to push came back
+    // already-in-sync — this is the "did you forget `jj bookmark
+    // set <name> -r @` after amending?" trap. Skip the hint when
+    // the push set was empty (nothing meaningful to say) or when
+    // it was a single bookmark (the user can see the no-op for
+    // themselves; the hint reads as preachy).
+    if !push_bookmarks.is_empty()
+        && push_bookmarks.len() > 1
+        && push_summary.errors.is_empty()
+        && push_summary.newly_pushed_count() == 0
+        && push_summary.already_in_sync == push_bookmarks.len()
+    {
+        eprintln!(
+            "  hint: all local bookmarks already match remote — did you forget \
+             `jj bookmark set <name> -r @` after amending?"
+        );
     }
 
     Ok(ReconcileReport {
         adjacent_retracked,
         adjacent_errors,
-        bookmarks_pushed,
-        push_errors,
+        push_summary,
     })
 }
 
@@ -335,5 +418,61 @@ mod tests {
     fn filter_adjacent_empty_input_returns_empty() {
         let out = filter_adjacent_targets(&names(&[]), "main", &names(&[]));
         assert!(out.is_empty());
+    }
+
+    fn summary(added: usize, moved: usize, in_sync: usize, errs: usize) -> PushSummary {
+        PushSummary {
+            added,
+            moved,
+            already_in_sync: in_sync,
+            errors: (0..errs).map(|i| format!("err{i}")).collect(),
+        }
+    }
+
+    #[test]
+    fn push_summary_line_all_categories() {
+        let s = summary(1, 2, 3, 0);
+        assert_eq!(s.summary_line(), "1 added, 2 moved, 3 already in sync");
+    }
+
+    #[test]
+    fn push_summary_line_added_only() {
+        let s = summary(2, 0, 0, 0);
+        assert_eq!(s.summary_line(), "2 added");
+    }
+
+    #[test]
+    fn push_summary_line_moved_only() {
+        let s = summary(0, 3, 0, 0);
+        assert_eq!(s.summary_line(), "3 moved");
+    }
+
+    #[test]
+    fn push_summary_line_all_in_sync() {
+        // The case that triggered this PR: every bookmark was
+        // already in sync. The summary makes that obvious instead
+        // of saying "1 pushed".
+        let s = summary(0, 0, 3, 0);
+        assert_eq!(s.summary_line(), "3 already in sync");
+    }
+
+    #[test]
+    fn push_summary_line_with_errors() {
+        let s = summary(1, 0, 0, 2);
+        assert_eq!(s.summary_line(), "1 added, 2 error(s)");
+    }
+
+    #[test]
+    fn push_summary_line_empty_fallback() {
+        let s = summary(0, 0, 0, 0);
+        assert_eq!(s.summary_line(), "no bookmarks pushed");
+    }
+
+    #[test]
+    fn push_summary_newly_pushed_excludes_in_sync_and_errors() {
+        let s = summary(2, 3, 5, 1);
+        assert_eq!(s.newly_pushed_count(), 5);
+        // processed_count is newly-pushed + in-sync (excludes errors).
+        assert_eq!(s.processed_count(), 10);
     }
 }
