@@ -51,6 +51,17 @@ means a few opinionated defaults you might want to opt out of:
 - Pre-push hooks run per-bookmark in parallel by default. Opt out
   with `--hooks-sequential` (one bookmark at a time) or
   `--hooks-tip-only` (only run hooks for the tip).
+- Both `jj-gt submit` and `jj-gt fetch` auto-shelter any pending
+  working-copy edits via `jj new @` before doing anything. After
+  the shelter, the user's edits are committed against the *old*
+  `@` and the new `@` is a fresh empty change above them — the
+  pipeline operates on the empty `@`, so concurrent jj snapshots
+  (typically from another shell) can't disturb the sheltered
+  edits. There is no opt-out: the previous "refuse to run when
+  edits exist + `--force-with-changes` to bypass" model has been
+  removed; the shelter step is strictly safer and works the same
+  way. The step shows up in the per-step list (`Sheltering
+  uncommitted edits (jj new @)`) so you see what happened.
 
 **IT ISN'T.**
 

@@ -105,7 +105,6 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
             no_gtmq_prune,
             gtmq_prefix,
             auto,
-            force_with_changes,
             dry_run,
         } => fetch_cmd(
             &jj,
@@ -116,7 +115,6 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
             no_gtmq_prune,
             gtmq_prefix,
             auto,
-            force_with_changes,
             dry_run,
             verbosity,
         ),
@@ -228,6 +226,31 @@ fn submit_cmd(
             bookmarks.remote,
             tips.join(", "),
         ));
+    }
+
+    // 0. Shelter any pending working-copy edits behind a fresh
+    // empty `@` before we start mutating refs. Same hazard model as
+    // fetch (issue #1): the upcoming `jj git export` + downstream
+    // `gt submit --stack` can race with the user's concurrent jj
+    // operations in another shell, and a pending working-copy edit
+    // is the easiest thing to silently lose. `jj new @` snapshots
+    // those edits into the (now-frozen) old `@` and leaves us
+    // operating on a clean empty `@` above them.
+    //
+    // Skip when `@` is already empty (nothing to shelter) and in
+    // dry-run mode (dry-run promises zero workspace mutations — a
+    // `jj new @` would create a fresh change-id even if it's
+    // semantically harmless, breaking that promise and surprising
+    // anyone using `--dry-run` to preview state).
+    if !submit.dry_run && jj::has_uncommitted_changes(jj)? {
+        let step = ui::Step::start("Sheltering uncommitted edits (jj new @)", verbosity);
+        match jj::shelter_uncommitted_edits(jj) {
+            Ok(()) => step.success("old @ now holds your edits as a real change", None),
+            Err(e) => {
+                step.fail(&format!("{e}"), None);
+                return Err(e);
+            }
+        }
     }
 
     // 1. Export jj bookmarks → git refs (idempotent, shared).
@@ -583,7 +606,6 @@ fn fetch_cmd(
     no_gtmq_prune: bool,
     gtmq_prefix: Vec<String>,
     auto: bool,
-    force_with_changes: bool,
     dry_run: bool,
     verbosity: ui::Verbosity,
 ) -> Result<ExitCode, JjGtError> {
@@ -604,7 +626,6 @@ fn fetch_cmd(
         no_gtmq_prune,
         gtmq_prefixes: prefixes,
         auto,
-        force_with_changes,
         dry_run,
     };
 

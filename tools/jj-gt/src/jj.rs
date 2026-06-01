@@ -144,6 +144,38 @@ pub fn git_fetch(jj: &JjCli, remote: &str) -> Result<()> {
     Ok(())
 }
 
+/// Shelter pending working-copy edits by creating a fresh empty
+/// change on top of `@`. After this, the previous `@` carries the
+/// user's edits as a real committed change and the new `@` is an
+/// empty sibling above it — concurrent jj snapshots can't disturb
+/// the sheltered edits because future operations target the new
+/// (empty) `@`.
+///
+/// Mechanism: plain `jj new @`. jj snapshots the working copy into
+/// the old `@` first (default behavior), creates a new empty child,
+/// and switches `@` to that child. The working-copy *files* don't
+/// change on disk; what changes is which change_id those files are
+/// associated with — and that's exactly the safety property we
+/// want.
+///
+/// We intentionally do NOT pass `--ignore-working-copy`: the
+/// snapshot-before-new is the load-bearing step that converts the
+/// edits from "pending against `@`" to "committed in `@`."
+///
+/// Closes part of issue #1 — pairs with `lock::PipelineLock` and
+/// supersedes the older `--force-with-changes` refusal flag (which
+/// only let the user bypass detection, doing nothing about the
+/// underlying hazard).
+///
+/// The function is silent on its own; user-facing output is the
+/// caller's responsibility (typically via the `ui::Step` machinery
+/// so the action shows up in the per-step list alongside Fetch /
+/// Submit).
+pub fn shelter_uncommitted_edits(jj: &JjCli) -> Result<()> {
+    let _ = jj_run(jj, &["new", "@"])?;
+    Ok(())
+}
+
 /// `jj git import --ignore-working-copy`. Run after external tooling
 /// (gt sync) mutates refs on the git side so jj's view catches up.
 pub fn git_import(jj: &JjCli) -> Result<()> {
