@@ -139,6 +139,19 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjHooksError> {
             for (update, outcome) in &report.per_bookmark {
                 if !outcome.success {
                     eprintln!("jj-hooks: {update}: hook failed");
+                    // Setup-step failures synthesize a `captured_output`
+                    // buffer (the captured stdout/stderr plus a
+                    // trailing line naming the failing step) so the
+                    // user has the context they need to fix it.
+                    // Regular hook failures in live (non-capture) mode
+                    // have already streamed their output to the
+                    // terminal, so they have `captured_output: None`
+                    // here. Either way: dump the buffer when present.
+                    if let Some(captured) = &outcome.captured_output {
+                        for line in captured.lines() {
+                            eprintln!("│ {line}");
+                        }
+                    }
                 }
                 if let Some(commit) = &outcome.fixup_commit {
                     if outcome.success && outcome.retried {

@@ -113,7 +113,24 @@ pub fn load_steps(jj: &JjCli) -> Result<Vec<SetupStep>> {
 /// the user's invocation workspace (e.g. `cp -al
 /// "$JJ_HOOKS_WORKSPACE/node_modules" .` to hardlink-copy the
 /// already-installed deps instead of running a full install).
-pub fn run_steps(steps: &[SetupStep], worktree: &Path, workspace_root: &Path) -> Result<()> {
+/// Run each `[[jj-hooks.setup]]` step inside `worktree` in order.
+///
+/// **Always captures** stdout+stderr of every step regardless of any
+/// caller-side capture preference. The motivation is the daily noise
+/// problem: a successful `bun install` dumps eight lines of "+
+/// package@x" that drown out the hook progress underneath. Surfacing
+/// that output unconditionally was the original behavior; we now hide
+/// it on success and only show it when something the user actually
+/// needs to see happened (a failure, or `--verbose`).
+///
+/// Returns the concatenated captured output across all steps so the
+/// caller can either drop it (success path) or fold it into the
+/// per-bookmark captured buffer (verbose / failure path). On a
+/// non-zero exit the captured bytes are bundled into the
+/// [`JjHooksError::SetupFailed`] variant so the failure message has
+/// real context attached instead of just "exited with status 1".
+pub fn run_steps(steps: &[SetupStep], worktree: &Path, workspace_root: &Path) -> Result<String> {
+    let mut captured = String::new();
     for step in steps {
         if step.run.is_empty() {
             return Err(JjHooksError::Parse(format!(
@@ -124,20 +141,41 @@ pub fn run_steps(steps: &[SetupStep], worktree: &Path, workspace_root: &Path) ->
 
         tracing::info!("setup step `{}`: running {:?}", step.label(), step.run);
 
-        let status = Command::new(&step.run[0])
+        // Always capture: success output is dropped, failure output
+        // attaches to the error. Using `output()` (one combined read
+        // after the child exits) is simpler than streaming and fine
+        // here — setup steps are typically short (seconds-scale
+        // package installs); there's no progress signal we'd lose
+        // by waiting on `wait_with_output()`.
+        let output = Command::new(&step.run[0])
             .args(&step.run[1..])
             .current_dir(worktree)
             .env("JJ_HOOKS_WORKSPACE", workspace_root)
-            .status()?;
+            .output()?;
 
-        if !status.success() {
+        // Header line so the caller can tell which step produced
+        // which captured output when there are multiple steps. Cheap
+        // and the visual cost is one line per step in the eventual
+        // dump — a fair price for being able to debug a multi-step
+        // failure.
+        captured.push_str(&format!("--- setup step `{}` ---\n", step.label()));
+        captured.push_str(&String::from_utf8_lossy(&output.stdout));
+        if !output.stderr.is_empty() {
+            captured.push_str(&String::from_utf8_lossy(&output.stderr));
+        }
+        if !captured.ends_with('\n') {
+            captured.push('\n');
+        }
+
+        if !output.status.success() {
             return Err(JjHooksError::SetupFailed {
                 name: step.label().to_owned(),
-                status: status.code().unwrap_or(-1),
+                status: output.status.code().unwrap_or(-1),
+                captured,
             });
         }
     }
-    Ok(())
+    Ok(captured)
 }
 
 #[cfg(test)]
@@ -303,5 +341,90 @@ mod tests {
             std::env::temp_dir().as_path(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn run_steps_captures_stdout_and_stderr_on_failure() {
+        // Step writes a marker line on stdout AND stderr, then exits
+        // non-zero. The captured field on the error must contain both
+        // so the caller can show real context — not just "exited 1".
+        let tmp = tempfile::TempDir::new().unwrap();
+        let step = SetupStep {
+            name: Some("loud-fail".into()),
+            run: vec![
+                "sh".into(),
+                "-c".into(),
+                "echo stdout-line; echo stderr-line >&2; exit 7".into(),
+            ],
+        };
+        let err = run_steps(&[step], tmp.path(), tmp.path()).unwrap_err();
+        let JjHooksError::SetupFailed {
+            name,
+            status,
+            captured,
+        } = err
+        else {
+            panic!("expected SetupFailed, got {err:?}");
+        };
+        assert_eq!(name, "loud-fail");
+        assert_eq!(status, 7);
+        assert!(
+            captured.contains("stdout-line"),
+            "captured should include stdout: {captured:?}",
+        );
+        assert!(
+            captured.contains("stderr-line"),
+            "captured should include stderr: {captured:?}",
+        );
+        // The header line names the step so the caller can tell which
+        // step in a multi-step pipeline produced which output.
+        assert!(
+            captured.contains("loud-fail"),
+            "captured should include step header: {captured:?}",
+        );
+    }
+
+    #[test]
+    fn run_steps_returns_captured_output_on_success() {
+        // Success path should still return the captured bytes so the
+        // caller can fold them into the per-bookmark buffer when
+        // `--verbose` is on. Default callers throw the return value
+        // away.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let step = SetupStep {
+            name: Some("chatty".into()),
+            run: vec![
+                "sh".into(),
+                "-c".into(),
+                "echo hello-world; echo on-stderr >&2".into(),
+            ],
+        };
+        let captured = run_steps(&[step], tmp.path(), tmp.path()).unwrap();
+        assert!(
+            captured.contains("hello-world"),
+            "stdout missing: {captured:?}",
+        );
+        assert!(
+            captured.contains("on-stderr"),
+            "stderr missing: {captured:?}",
+        );
+    }
+
+    #[test]
+    fn run_steps_silences_chatty_success_from_terminal() {
+        // Regression guard: a successful step must NOT write to the
+        // parent's stdout/stderr. We can't easily intercept the
+        // parent's terminal in a unit test, but we can verify the
+        // child was spawned with captured pipes by checking the
+        // captured buffer holds the output that would otherwise have
+        // gone to the terminal. (Before this change, `bun install`
+        // would dump its banner to the user's screen on every push.)
+        let tmp = tempfile::TempDir::new().unwrap();
+        let step = SetupStep {
+            name: None,
+            run: vec!["echo".into(), "this-must-not-leak-to-terminal".into()],
+        };
+        let captured = run_steps(&[step], tmp.path(), tmp.path()).unwrap();
+        assert!(captured.contains("this-must-not-leak-to-terminal"));
     }
 }

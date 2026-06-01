@@ -285,3 +285,68 @@ fn no_setup_config_is_a_silent_no_op() {
     assert!(out.status.success(), "{}", show(&out));
     assert_eq!(repo.remote_commit("main").as_deref(), Some(head.as_str()));
 }
+
+/// BDD: a chatty-but-successful setup step (e.g. `bun install`
+/// dumping its "+ pkg@x" banner) must not leak its output to the
+/// user's terminal. The user-visible noise was the impetus for the
+/// always-capture change; this test pins it.
+#[test]
+fn successful_setup_step_output_is_suppressed() {
+    let repo = TestRepo::new();
+    repo.write_pre_commit_config(harness::PRE_PUSH_PASSING);
+
+    // We need to distinguish "subprocess wrote NOISE to its stdout"
+    // from "we logged the argv that includes NOISE". jj-hooks emits a
+    // tracing INFO line containing the argv when it spawns a setup
+    // step (see `setup::run_steps`), so if NOISE appears verbatim in
+    // the argv it shows up in the captured INFO stream and the test
+    // can't tell whether the subprocess actually leaked.
+    //
+    // Solution: have the subprocess assemble the marker from two
+    // halves so the argv contains the halves but neither contains
+    // the joined marker. The marker only appears in the
+    // subprocess's stdout/stderr — exactly what we want to assert
+    // absence of.
+    const NOISE_LEFT: &str = "==CHATTY_BANNER_LEFT_HALF";
+    const NOISE_RIGHT: &str = "_AND_RIGHT_HALF_DO_NOT_LEAK==";
+    const NOISE_JOINED: &str = "==CHATTY_BANNER_LEFT_HALF_AND_RIGHT_HALF_DO_NOT_LEAK==";
+    const STDERR_LEFT: &str = "==STDERR_BANNER_";
+    const STDERR_RIGHT: &str = "PART_DO_NOT_LEAK==";
+    const STDERR_JOINED: &str = "==STDERR_BANNER_PART_DO_NOT_LEAK==";
+
+    let setup_cmd = format!(
+        r#"printf '%s%s\n' '{NOISE_LEFT}' '{NOISE_RIGHT}'; printf '%s%s\n' '{STDERR_LEFT}' '{STDERR_RIGHT}' >&2"#
+    );
+    let out = repo.jj(&[
+        "config",
+        "set",
+        "--repo",
+        "jj-hooks.setup",
+        &format!(r#"[{{ name = "loud", run = ["sh", "-c", "{setup_cmd}"] }}]"#),
+    ]);
+    assert!(out.status.success(), "{}", show(&out));
+
+    repo.write("new.txt", "x\n");
+    let out = repo.jj(&["commit", "-m", "second"]);
+    assert!(out.status.success(), "{}", show(&out));
+    let out = repo.jj(&["bookmark", "set", "main", "-r", "@-"]);
+    assert!(out.status.success(), "{}", show(&out));
+
+    let out = repo.jj_hooks(&["--runner", "pre-commit", "push", "-b", "main"]);
+    assert!(
+        out.status.success(),
+        "push should succeed with a passing hook:\n{}",
+        show(&out)
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stdout.contains(NOISE_JOINED) && !stderr.contains(NOISE_JOINED),
+        "setup step stdout banner leaked to user terminal:\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert!(
+        !stdout.contains(STDERR_JOINED) && !stderr.contains(STDERR_JOINED),
+        "setup step stderr banner leaked to user terminal:\nstdout: {stdout}\nstderr: {stderr}",
+    );
+}
