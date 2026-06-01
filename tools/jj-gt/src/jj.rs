@@ -387,10 +387,53 @@ pub fn is_ancestor(workspace_root: &Path, ancestor: &str, descendant: &str) -> R
 ///
 /// `--ignore-working-copy` matches the rest of this module — the
 /// push is a refs-only operation and we don't want it to snapshot.
-pub fn git_push_bookmark(jj: &JjCli, remote: &str, bookmark: &str) -> Result<()> {
-    let _ = jj_run(
-        jj,
-        &[
+/// Classification of a single `jj git push --bookmark <name>` result.
+/// Used by `reconcile::push_rebased_tips` to surface a per-bookmark
+/// breakdown ("2 newly pushed, 1 moved, 3 already in sync") rather
+/// than just a "1 pushed" count that conflates real work with
+/// already-synced bookmarks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PushOutcome {
+    /// `Add bookmark <name> to <oid>` — bookmark didn't exist on
+    /// the remote before this push.
+    Added,
+    /// `Move forward|backward|sideways bookmark <name> from <a> to <b>` —
+    /// bookmark existed but its commit changed (the typical "I
+    /// rebased my own PR" shape).
+    Moved,
+    /// jj reported nothing to do for this bookmark (local already
+    /// matches remote). gt submit would then see No-op too — this
+    /// is the signal worth surfacing because it usually means the
+    /// user forgot `jj bookmark set <name> -r @` after amending.
+    AlreadyInSync,
+}
+
+/// `jj git push --remote <remote> --bookmark <bookmark>
+///  --ignore-working-copy`. Used by `submit_cmd` to bring the remote
+/// in sync with a locally-rebased stack BEFORE handing off to
+/// `gt submit` — gt's "branch updated remotely" check would otherwise
+/// abort on the first bookmark whose local SHA differs from remote.
+///
+/// jj's `git push` is force-with-lease by default: it pushes when the
+/// local bookmark has diverged from what jj last fetched, but ONLY if
+/// the remote's current state still matches what jj last saw
+/// (preventing the "collaborator pushed something I haven't fetched"
+/// race). The natural shape we want.
+///
+/// `--ignore-working-copy` matches the rest of this module — the
+/// push is a refs-only operation and we don't want it to snapshot.
+///
+/// Returns a [`PushOutcome`] classifying the result against jj's
+/// stderr output. jj writes its decisions to stderr (not stdout)
+/// regardless of exit code, so we read both via
+/// [`jj_hooks::jj::JjCli::run_capture_stderr`] and pattern-match the
+/// distinguishing lines. When the output doesn't match any known
+/// shape, we conservatively report `AlreadyInSync` — the
+/// alternative (returning Moved on every unrecognized line) would
+/// over-claim work that didn't happen.
+pub fn git_push_bookmark(jj: &JjCli, remote: &str, bookmark: &str) -> Result<PushOutcome> {
+    let combined = jj
+        .run_capture_stderr(&[
             "git",
             "push",
             "--remote",
@@ -398,9 +441,49 @@ pub fn git_push_bookmark(jj: &JjCli, remote: &str, bookmark: &str) -> Result<()>
             "--bookmark",
             bookmark,
             "--ignore-working-copy",
-        ],
-    )?;
-    Ok(())
+        ])
+        .map_err(JjGtError::Hooks)?;
+    Ok(classify_push_output(&combined))
+}
+
+/// Pure classifier for `jj git push` output. Pulled out so the test
+/// suite can pin every branch without spinning up real subprocesses.
+///
+/// `jj git push`'s known shapes (post jj 0.34, which renamed the
+/// verbs from `Push bookmark` to `Add bookmark` / `Move bookmark`):
+///
+///   "Add bookmark <name> to <oid>"
+///   "Move forward bookmark <name> from <a> to <b>"
+///   "Move backward bookmark <name> from <a> to <b>"
+///   "Move sideways bookmark <name> from <a> to <b>"
+///   "Force-pushed bookmark <name>" (rare; gt-submit-style force path)
+///   "Nothing changed."  // or no output at all when there's nothing
+///   "Warning: ..."      // various non-fatal warnings
+///
+/// We match on the action verbs anywhere in the combined output
+/// because jj precedes them with `Changes to push to origin:` and
+/// other context lines; the verb is what we care about.
+pub fn classify_push_output(combined: &str) -> PushOutcome {
+    // Order matters: "Add" wins over "Move" if both somehow appear
+    // (multi-bookmark push wouldn't happen since we pass one
+    // --bookmark, but defensive). "Force-pushed" is treated as a
+    // move because the bookmark did move from the remote's
+    // perspective.
+    let lower = combined.to_lowercase();
+    if lower.contains("add bookmark ") {
+        return PushOutcome::Added;
+    }
+    if lower.contains("move forward bookmark ")
+        || lower.contains("move backward bookmark ")
+        || lower.contains("move sideways bookmark ")
+        || lower.contains("force-pushed bookmark ")
+    {
+        return PushOutcome::Moved;
+    }
+    // Default: nothing changed, or the output doesn't match any
+    // known verb. Treat as in-sync; the user gets a "no-op" signal
+    // for the bookmark.
+    PushOutcome::AlreadyInSync
 }
 
 /// Outcome of a `jj rebase` invocation that exits 0 — broken out
@@ -549,7 +632,7 @@ fn unique_lines(s: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::unique_lines;
+    use super::{PushOutcome, classify_push_output, unique_lines};
 
     #[test]
     fn unique_lines_dedups_in_order() {
@@ -561,5 +644,73 @@ mod tests {
     fn unique_lines_skips_blanks_and_trims() {
         let input = "  a  \n\n  b\n\n a\n";
         assert_eq!(unique_lines(input), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn classify_added_bookmark() {
+        // Real `jj git push --bookmark` output for a brand-new
+        // bookmark, captured 2026-05 against jj 0.40.
+        let out = "\
+Changes to push to origin:
+  Add bookmark feature-x to 75897050816e
+";
+        assert_eq!(classify_push_output(out), PushOutcome::Added);
+    }
+
+    #[test]
+    fn classify_moved_forward_bookmark() {
+        let out = "\
+Changes to push to origin:
+  Move forward bookmark feature-x from abc12345 to def67890
+";
+        assert_eq!(classify_push_output(out), PushOutcome::Moved);
+    }
+
+    #[test]
+    fn classify_moved_sideways_bookmark() {
+        // The rebase-style move: SHA changed but it's neither
+        // strictly forward nor strictly backward.
+        let out = "\
+Changes to push to origin:
+  Move sideways bookmark feature-x from abc12345 to def67890
+";
+        assert_eq!(classify_push_output(out), PushOutcome::Moved);
+    }
+
+    #[test]
+    fn classify_moved_backward_bookmark() {
+        let out = "\
+Changes to push to origin:
+  Move backward bookmark feature-x from def67890 to abc12345
+";
+        assert_eq!(classify_push_output(out), PushOutcome::Moved);
+    }
+
+    #[test]
+    fn classify_force_pushed_bookmark() {
+        let out = "Force-pushed bookmark feature-x";
+        assert_eq!(classify_push_output(out), PushOutcome::Moved);
+    }
+
+    #[test]
+    fn classify_nothing_changed() {
+        // "Nothing changed." is the canonical no-op shape.
+        let out = "Nothing changed.";
+        assert_eq!(classify_push_output(out), PushOutcome::AlreadyInSync);
+    }
+
+    #[test]
+    fn classify_empty_output_treated_as_in_sync() {
+        // Some jj versions print nothing at all when there's
+        // nothing to push. Don't over-claim work.
+        assert_eq!(classify_push_output(""), PushOutcome::AlreadyInSync);
+    }
+
+    #[test]
+    fn classify_warning_only_is_in_sync() {
+        // Warnings without any action verb shouldn't be
+        // classified as a move.
+        let out = "Warning: some non-fatal thing happened\n";
+        assert_eq!(classify_push_output(out), PushOutcome::AlreadyInSync);
     }
 }
