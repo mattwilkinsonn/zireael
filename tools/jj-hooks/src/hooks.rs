@@ -608,7 +608,46 @@ fn run_once(
     // non-zero exit aborts before the runner is invoked — the
     // worktree is unhealthy and there's no point asking the
     // runner to grade it.
-    setup::run_steps(setup_steps, wt.path(), workspace_root)?;
+    //
+    // Output is always captured: silent on success (the daily
+    // case: `bun install` chattering about which packages it
+    // installed is noise nobody wants), included in the captured
+    // buffer on failure or when `capture_output` is on for the
+    // whole pass.
+    //
+    // A failure is converted into a `success: false` OnceOutcome
+    // rather than propagated as a hard error so the parallel
+    // runner can still classify other bookmarks per-partition.
+    // The captured setup output rides along on the `captured_output`
+    // field so it shows up in the same dump the user already sees
+    // for a hook failure.
+    let setup_captured = match setup::run_steps(setup_steps, wt.path(), workspace_root) {
+        Ok(captured) => captured,
+        Err(JjHooksError::SetupFailed {
+            name,
+            status,
+            captured,
+        }) => {
+            // Same buffer shape the hook-failure path produces: the
+            // captured stdout/stderr plus a trailing line explaining
+            // *why* the buffer ends here.
+            let mut buf = captured;
+            if !buf.ends_with('\n') {
+                buf.push('\n');
+            }
+            buf.push_str(&format!(
+                "setup step `{name}` exited with status {status}; \
+                 skipping hook runner for this bookmark\n",
+            ));
+            return Ok(OnceOutcome {
+                success: false,
+                fixup_commit: None,
+                captured_output: Some(buf),
+                cancelled: false,
+            });
+        }
+        Err(other) => return Err(other),
+    };
 
     // Resolve the runner from the target commit's tree, not the primary
     // workspace. `--runner` overrides; otherwise autodetect against the
@@ -675,8 +714,14 @@ fn run_once(
     // shared worktree, mirroring how the standard pre-push pipeline
     // builds up its fixup.
     let mut success = true;
+    // Seed the captured buffer with the setup-step output when the
+    // caller asked us to capture. Setup output is always captured
+    // inside `run_steps` (it has to be, to attach it to a
+    // `SetupFailed` error), so it's already in hand here — we just
+    // decide whether to fold it into the per-bookmark buffer the
+    // caller will see on `--verbose` / failure.
     let mut captured = if capture_output {
-        Some(String::new())
+        Some(setup_captured)
     } else {
         None
     };

@@ -5,8 +5,16 @@ pub enum JjHooksError {
     #[error("jj exited with status {status}: {stderr}")]
     JjFailed { status: i32, stderr: String },
 
+    /// A setup step (`[[jj-hooks.setup]]`) exited non-zero. The captured
+    /// stdout+stderr of the failing step is attached so the caller can
+    /// surface it — without this, the user sees only "setup step `bun`
+    /// exited with status 1" and has nothing to debug.
     #[error("setup step `{name}` exited with status {status}")]
-    SetupFailed { name: String, status: i32 },
+    SetupFailed {
+        name: String,
+        status: i32,
+        captured: String,
+    },
 
     #[error("could not parse `jj git push --dry-run` output: {0}")]
     Parse(String),
