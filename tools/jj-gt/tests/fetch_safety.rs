@@ -333,11 +333,11 @@ fn is_ancestor_recognizes_linear_ancestry() {
     assert!(jj_gt::jj::is_ancestor(tmp.path(), &main_oid, &main_oid).unwrap());
 }
 
-/// Build a 3-stack workspace + bare remote, push everything, track
-/// all three bookmarks on the remote. Returns the workspace TempDir
-/// (caller manages lifetime); the bare remote lives inside the
-/// workspace tmp dir (sibling to `.jj/.git`) so it cleans up
-/// together.
+/// Build a `main → bottom → mid → top` stack + bare remote, push
+/// everything, track all four bookmarks on the remote. Returns the
+/// workspace TempDir (caller manages lifetime); the bare remote
+/// lives inside the workspace tmp dir (sibling to `.jj/.git`) so it
+/// cleans up together.
 fn build_tracked_stack_with_bare_remote() -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     jj(tmp.path(), &["git", "init", "--colocate"]);

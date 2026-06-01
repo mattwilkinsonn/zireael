@@ -760,9 +760,35 @@ fn gtmq_prune_phase(
             if opts.dry_run {
                 step.skip("dry-run", None);
             } else {
-                let _ = jj::delete_bookmark(jj, &branch.name);
-                let _ = jj::delete_remote_branch(workspace_root, &opts.remote, &branch.name);
-                step.success("deleted local + remote", None);
+                // Capture both delete results so a partial failure
+                // (local deleted, remote refused — or vice versa)
+                // surfaces as a warn-level step instead of a
+                // success message claiming "deleted local + remote"
+                // when only one side actually moved. We do NOT
+                // `?`-propagate either error: a gtmq branch
+                // failing to delete shouldn't abort the whole
+                // fetch pipeline. The user gets the warning, the
+                // pipeline continues, and the action is still
+                // recorded as `GtmqPruned` (the decision was
+                // correct; only the execution was partial).
+                let local_err = jj::delete_bookmark(jj, &branch.name).err();
+                let remote_err =
+                    jj::delete_remote_branch(workspace_root, &opts.remote, &branch.name).err();
+                match (local_err, remote_err) {
+                    (None, None) => step.success("deleted local + remote", None),
+                    (Some(le), None) => step.warn(
+                        "remote deleted, local delete failed",
+                        Some(&format!("{le}")),
+                    ),
+                    (None, Some(re)) => step.warn(
+                        "local deleted, remote delete failed",
+                        Some(&format!("{re}")),
+                    ),
+                    (Some(le), Some(re)) => step.warn(
+                        "both local + remote delete failed",
+                        Some(&format!("local: {le}\nremote: {re}")),
+                    ),
+                }
             }
         }
         actions.push((branch.clone(), action));
