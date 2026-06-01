@@ -237,11 +237,12 @@ fn submit_cmd(
     // those edits into the (now-frozen) old `@` and leaves us
     // operating on a clean empty `@` above them.
     //
-    // Skip when `@` is already empty (nothing to shelter) — the
-    // common case for "I just pushed and want to re-submit." The
-    // step shows up in the per-step list when it fires so the user
-    // sees what we did.
-    if jj::has_uncommitted_changes(jj)? {
+    // Skip when `@` is already empty (nothing to shelter) and in
+    // dry-run mode (dry-run promises zero workspace mutations — a
+    // `jj new @` would create a fresh change-id even if it's
+    // semantically harmless, breaking that promise and surprising
+    // anyone using `--dry-run` to preview state).
+    if !submit.dry_run && jj::has_uncommitted_changes(jj)? {
         let step = ui::Step::start("Sheltering uncommitted edits (jj new @)", verbosity);
         match jj::shelter_uncommitted_edits(jj) {
             Ok(()) => step.success("old @ now holds your edits as a real change", None),
