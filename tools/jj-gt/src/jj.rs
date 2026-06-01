@@ -43,17 +43,30 @@ pub fn bookmarks_in_revset(jj: &JjCli, revset: &str) -> Result<Vec<String>> {
 }
 
 /// `jj bookmark list --ignore-working-copy
-///   -T 'name ++ " " ++ if(self.normal_target(),
-///                          self.normal_target().commit_id().short(12),
-///                          "") ++ "\n"'`
+///   -T 'if(self.present(),
+///          name ++ " " ++ if(self.normal_target(),
+///                            self.normal_target().commit_id().short(12),
+///                            ""),
+///          "") ++ "\n"'`
 ///
-/// Why the if-guard: bookmark templates expose `normal_target()` as
-/// an `Option<Commit>` — `None` for conflicted or pure-deletion
-/// entries. Unwrapping it directly would template-error on the
-/// conflict case, so we fall through to an empty commit-id string
-/// and skip the entry below in the parser. There's no top-level
-/// `commit_id` keyword in the bookmark scope (that exists on the
-/// commit scope used by `jj log` templates).
+/// Why the `present()` guard: a bookmark whose remote ref has been
+/// deleted (a merged PR + post-merge cleanup, say) still appears in
+/// `jj bookmark list` until the next `jj git export` writes the
+/// deletion to the underlying git refs, but its target is a
+/// "pending-deletion" sentinel. Any revset that names it
+/// (`heads(::sea-559 & ...)`) fails with
+/// "Revision `sea-559` doesn't exist" because the name no longer
+/// resolves to a commit. We pre-filter via `present()` so the
+/// fetch pipeline's `derive_parents` call never sees these zombie
+/// names.
+///
+/// Why the inner `normal_target()` guard: bookmark templates expose
+/// `normal_target()` as an `Option<Commit>` — `None` for conflicted
+/// or pure-deletion entries. Unwrapping it directly would
+/// template-error on the conflict case, so we fall through to an
+/// empty commit-id string and skip the entry below in the parser.
+/// There's no top-level `commit_id` keyword in the bookmark scope
+/// (that exists on the commit scope used by `jj log` templates).
 pub fn list_local_bookmarks(jj: &JjCli) -> Result<Vec<LocalBookmark>> {
     let out = jj_run(
         jj,
@@ -61,7 +74,7 @@ pub fn list_local_bookmarks(jj: &JjCli) -> Result<Vec<LocalBookmark>> {
             "bookmark",
             "list",
             "-T",
-            r#"name ++ " " ++ if(self.normal_target(), self.normal_target().commit_id().short(12), "") ++ "\n""#,
+            r#"if(self.present(), name ++ " " ++ if(self.normal_target(), self.normal_target().commit_id().short(12), ""), "") ++ "\n""#,
             "--ignore-working-copy",
         ],
     )?;

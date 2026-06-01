@@ -97,7 +97,12 @@ pub fn retrack_adjacent_diverged(
         return Ok((0, Vec::new()));
     }
 
-    let derived = stack::derive_parents(jj, &adjacent, &opts.trunk)?;
+    // Lossy: we enumerated every tracked bookmark on the remote.
+    // If one of them is mid-deletion (merged-PR cleanup not yet
+    // exported), don't abort the whole reconcile — the user wants
+    // their actual submit-stack tracked, not blocked by an
+    // unrelated zombie.
+    let derived = stack::derive_parents_lossy(jj, &adjacent, &opts.trunk);
     let sorted = stack::sort_for_tracking(&derived);
 
     let mut count = 0usize;

@@ -12,7 +12,7 @@ use crate::error::Result;
 use crate::gh::{self, PrInfo, PrState};
 use crate::gt;
 use crate::jj::{self, JjCli, LocalBookmark, list_local_bookmarks};
-use crate::stack::{BookmarkOrTrunk, StackedBookmark, derive_parents};
+use crate::stack::{BookmarkOrTrunk, StackedBookmark, derive_parents_lossy};
 
 #[derive(Debug, Clone)]
 pub struct FetchOpts {
@@ -328,11 +328,11 @@ pub fn run_fetch(
     // we re-derived after gt sync ran, we'd lose the parent edges
     // for any bookmark sync deleted, which is exactly the signal
     // step 7 needs.
-    let pre_sync_stacked = derive_parents(
+    let pre_sync_stacked = derive_parents_lossy(
         jj,
         &normal.iter().map(|b| b.name.clone()).collect::<Vec<_>>(),
         &opts.trunk,
-    )?;
+    );
     let bookmarks_before_sync = normal.clone();
 
     // 2. Backfill metadata refs for bookmarks that have a PR. Sort

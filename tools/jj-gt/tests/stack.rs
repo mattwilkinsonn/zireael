@@ -561,3 +561,89 @@ fn expand_ancestors_for_submit_single_on_trunk_keeps_just_tip() {
         jj_gt::select::expand_ancestors_for_submit(&jj_cli, &["feature".into()], "main").unwrap();
     assert_eq!(expanded, vec!["feature".to_owned()]);
 }
+
+#[test]
+fn list_local_bookmarks_skips_pending_deletion_bookmark() {
+    // Regression for the "Revision X doesn't exist" abort in
+    // `jj-gt fetch`: after a remote-deleted bookmark is imported,
+    // jj keeps the local entry in `bookmark list` until the next
+    // `jj git export`, but its target is a pending-deletion
+    // sentinel. The previous template (`name ++ " " ++
+    // if(normal_target, ..., "")`) printed the name with an empty
+    // commit-id; the parser dropped those by the second-token
+    // check, but `derive_parents` was then called with the empty
+    // name and the revset failed. The fix uses `self.present()`
+    // at the template's outer level so deleted-but-not-exported
+    // bookmarks don't even emit a line.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_linear_stack_fixture();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    // Sanity: all 4 bookmarks present initially.
+    let pre = jj_gt::jj::list_local_bookmarks(&jj_cli).unwrap();
+    assert_eq!(pre.len(), 4, "expected 4 bookmarks, got {pre:?}");
+
+    // Delete one (creates the pending-deletion sentinel that
+    // would survive until the next `jj git export`).
+    jj(tmp.path(), &["bookmark", "delete", "mid"]);
+
+    let post = jj_gt::jj::list_local_bookmarks(&jj_cli).unwrap();
+    let names: std::collections::HashSet<String> = post.into_iter().map(|b| b.name).collect();
+    assert!(
+        !names.contains("mid"),
+        "pending-deletion bookmark `mid` should be filtered, got {names:?}",
+    );
+    // The other three should still show up.
+    for n in ["bottom", "top", "main"] {
+        assert!(names.contains(n), "expected `{n}` to remain, got {names:?}");
+    }
+}
+
+#[test]
+fn derive_parents_lossy_skips_unresolved_bookmark_names() {
+    // PR-D2 / "Revision X doesn't exist" fix: when the caller
+    // enumerated a bookmark that no longer resolves to a commit
+    // (deleted-but-not-exported zombie, conflict, etc.),
+    // derive_parents_lossy logs+skips it rather than aborting.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_linear_stack_fixture();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    // Mix a real bookmark name with a clearly-bogus one. The
+    // bogus revset fails; lossy should return just the real one.
+    let names = vec!["bottom".to_owned(), "does-not-exist".to_owned()];
+    let out = jj_gt::stack::derive_parents_lossy(&jj_cli, &names, "main");
+    assert_eq!(
+        out.len(),
+        1,
+        "expected only the real bookmark to survive, got {out:?}",
+    );
+    assert_eq!(out[0].name, "bottom");
+}
+
+#[test]
+fn derive_parents_strict_propagates_revset_error_for_missing_bookmark() {
+    // Counterpart: strict mode must still abort the call on a
+    // failed revset so `submit_cmd` users get a real error rather
+    // than a silent drop.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_linear_stack_fixture();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    let names = vec!["bottom".to_owned(), "does-not-exist".to_owned()];
+    let err = jj_gt::stack::derive_parents(&jj_cli, &names, "main").unwrap_err();
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("does-not-exist") || msg.contains("doesn't exist"),
+        "expected error to mention the missing bookmark, got: {msg}",
+    );
+}
