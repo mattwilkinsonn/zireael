@@ -98,7 +98,19 @@ pub fn build_submit_argv(tip: &str, submit: &SubmitArgs) -> Vec<String> {
     if submit.rerequest_review {
         argv.push("--rerequest-review".into());
     }
-    if submit.always {
+    // Default-on: `gt submit --always` so gt re-evaluates every PR
+    // even when it thinks nothing changed. The motivation is the
+    // "no-op recovery" trap — gt's diff heuristic decides a PR is
+    // up-to-date based on the local branch head, but doesn't notice
+    // that GitHub's PR base ref still points at a stale
+    // `graphite-base/N` marker from a previous interrupted submit.
+    // Forcing `--always` makes gt re-push the base ref alongside
+    // the head ref. The cost is one extra round-trip per branch
+    // when nothing genuinely changed — acceptable for a tool whose
+    // job is "make Graphite's state match jj's state, every time."
+    // Opt-out via `--no-always` for users who specifically want
+    // gt's skip-unchanged heuristic.
+    if !submit.no_always {
         argv.push("--always".into());
     }
     if submit.force {
@@ -204,11 +216,32 @@ mod tests {
         let out = argv(args());
         assert!(out.contains(&"--publish".to_owned()), "got: {out:?}");
         assert!(out.contains(&"--no-verify".to_owned()), "got: {out:?}");
+        // Default-on `--always` so gt re-pushes base refs even when
+        // it thinks the branch is unchanged. The pre-2026-06 default
+        // was opt-in `--always`; flipping it changed how gt
+        // recovers from stale PR base refs after an interrupted
+        // submit.
+        assert!(out.contains(&"--always".to_owned()), "got: {out:?}");
         assert!(!out.contains(&"--draft".to_owned()), "got: {out:?}");
         assert_eq!(out[0], "submit");
         assert_eq!(out[1], "--stack");
         assert_eq!(out[2], "--branch");
         assert_eq!(out[3], "top--athena");
+    }
+
+    #[test]
+    fn no_always_opts_out_of_default_always_flag() {
+        // The user wants gt's skip-unchanged heuristic — typically
+        // for repeated submits during PR review where the stack
+        // hasn't moved.
+        let out = argv(SubmitArgs {
+            no_always: true,
+            ..args()
+        });
+        assert!(
+            !out.contains(&"--always".to_owned()),
+            "expected --always to be absent when no_always=true, got: {out:?}",
+        );
     }
 
     #[test]

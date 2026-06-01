@@ -349,9 +349,16 @@ pub struct SubmitArgs {
     #[arg(long)]
     pub rerequest_review: bool,
 
-    /// Push even if the branch hasn't changed (recovery flag).
+    /// Skip the default `--always` flag passed to `gt submit`. By
+    /// default jj-gt invokes `gt submit --always` so Graphite's
+    /// view (PR base refs, stack metadata on web) always reflects
+    /// the current jj state, even when gt would otherwise think no
+    /// branch has changed. Set this flag to opt out — useful when
+    /// you specifically want gt's "skip unchanged" heuristic, e.g.
+    /// repeated submits during PR review where the local stack
+    /// hasn't moved.
     #[arg(long)]
-    pub always: bool,
+    pub no_always: bool,
 
     /// True force-push (overrides force-with-lease default).
     #[arg(short = 'f', long)]
