@@ -297,6 +297,48 @@ pub fn run_fetch(
         }
     }
 
+    // 0c. Snapshot the bookmark graph BEFORE `jj git fetch` runs.
+    // jj's fetch propagates remote-side `[deleted]` refs to local
+    // tracked bookmarks — so any merged-PR bookmark whose remote
+    // ref was just deleted by the GitHub-side squash-merge will be
+    // gone from the local list by the time we get to step 3 / 7.
+    // Capturing the pre-fetch state lets us still:
+    //
+    //   - derive each bookmark's parent (in-stack-relationship)
+    //     while the parent bookmark still exists locally;
+    //   - report "what happened to your N bookmarks" with full
+    //     coverage in the per-bookmark actions output;
+    //   - feed the orphan-rebase logic the full pre-fetch name set
+    //     so a fetch-deleted parent counts as a deletion just like
+    //     a sync-deleted one.
+    //
+    // PR info lookup goes here too so we batch all the gh queries
+    // against a stable name set.
+    let bookmarks_pre_fetch = list_local_bookmarks(jj)?;
+    let (gtmq, normal): (Vec<_>, Vec<_>) = bookmarks_pre_fetch
+        .iter()
+        .cloned()
+        .partition(|b| is_gtmq_branch(&b.name, &opts.gtmq_prefixes));
+
+    let normal_prs = if normal.is_empty() {
+        Vec::new()
+    } else {
+        let names: Vec<String> = normal.iter().map(|b| b.name.clone()).collect();
+        gh::find_prs_for_branches(workspace_root, &names, 200)?
+    };
+
+    // Derive stack structure on the pre-fetch graph. The orphan
+    // detection at step 7 needs (child → parent) edges that include
+    // soon-to-be-deleted parents; if we derived post-fetch (or
+    // post-sync) we'd lose any edge whose parent bookmark was
+    // removed in the meantime — silently dropping the orphan signal
+    // and leaving the stack tip floating on a stale base.
+    let pre_sync_stacked = derive_parents_lossy(
+        jj,
+        &normal.iter().map(|b| b.name.clone()).collect::<Vec<_>>(),
+        &opts.trunk,
+    );
+
     // 1. Fetch.
     let fetch_step = ui::Step::start(&format!("Fetching from {}", opts.remote), verbosity);
     if opts.dry_run {
@@ -311,43 +353,50 @@ pub fn run_fetch(
         }
     }
 
-    // Snapshot the current bookmark list once for the cleanup phase.
-    let mut bookmarks = list_local_bookmarks(jj)?;
+    // Post-fetch bookmark snapshot. Used by the backfill step (skip
+    // bookmarks fetch already removed — gt track would fail on a
+    // missing local branch) and as one of the inputs to the
+    // orphan-rebase deleted-set calculation.
+    let post_fetch_bookmarks = list_local_bookmarks(jj)?;
+    let post_fetch_names: std::collections::BTreeSet<String> = post_fetch_bookmarks
+        .iter()
+        .map(|b| b.name.clone())
+        .collect();
 
-    // Partition gtmq_* vs everything else.
-    let (gtmq, normal): (Vec<_>, Vec<_>) = bookmarks
-        .drain(..)
-        .partition(|b| is_gtmq_branch(&b.name, &opts.gtmq_prefixes));
-
-    // Look up PR info for all branches in one batched call each. The
-    // gh CLI search syntax accepts repeated `head:` clauses.
-    let normal_prs = if normal.is_empty() {
-        Vec::new()
-    } else {
-        let names: Vec<String> = normal.iter().map(|b| b.name.clone()).collect();
-        gh::find_prs_for_branches(workspace_root, &names, 200)?
-    };
-
-    // Derive stack structure once — both the backfill step (step 2)
-    // and the orphan-detection step (step 7) need to know
-    // (bookmark → parent) pairs derived from the pre-sync world. If
-    // we re-derived after gt sync ran, we'd lose the parent edges
-    // for any bookmark sync deleted, which is exactly the signal
-    // step 7 needs.
-    let pre_sync_stacked = derive_parents_lossy(
-        jj,
-        &normal.iter().map(|b| b.name.clone()).collect::<Vec<_>>(),
-        &opts.trunk,
-    );
+    // Keep an alias under the original variable name so downstream
+    // code continues to compile unchanged.
+    //
+    // The orphan-rebase (step 7) uses this directly: `before_names`
+    // and the parent_commit lookup both need pre-fetch coverage so
+    // fetch-deleted parents appear in the "disappeared" set.
+    //
+    // The rewind-detector (steps 3-5) does NOT use this as its
+    // commit-ID baseline — that role is filled by `pre_snapshot`,
+    // which is intentionally derived from `post_fetch_bookmarks`
+    // (a legitimate fetch-side move of a tracked bookmark must
+    // not get reverted as a "silent rewind"; the detector's scope
+    // is strictly "what changed during gt sync"). The rewind arms
+    // do consult `bookmarks_before_sync` for the `LocalBookmark`
+    // struct used in the per-bookmark actions display, but that's
+    // a display-only lookup — not the baseline comparison.
     let bookmarks_before_sync = normal.clone();
 
     // 2. Backfill metadata refs for bookmarks that have a PR. Sort
     // bottom→top so gt accepts each parent reference.
     if !opts.no_backfill {
         let stacked = crate::stack::sort_for_tracking(&pre_sync_stacked);
+        // Filter to bookmarks (a) with a PR and (b) still present
+        // locally after fetch. A bookmark whose remote was just
+        // deleted by the post-merge cleanup is gone from local; gt
+        // track against a missing branch errors with "branch not
+        // found." Skipping those here is a no-op anyway — sync /
+        // orphan-rebase will handle the cleanup.
         let backfill_targets: Vec<_> = stacked
             .iter()
-            .filter(|sb| normal_prs.iter().any(|p| p.head_ref_name == sb.name))
+            .filter(|sb| {
+                normal_prs.iter().any(|p| p.head_ref_name == sb.name)
+                    && post_fetch_names.contains(&sb.name)
+            })
             .collect();
         if backfill_targets.is_empty() {
             let step = ui::Step::start("Backfilling gt tracking metadata", verbosity);
@@ -397,11 +446,20 @@ pub fn run_fetch(
         sync_step.skip("dry-run", None);
     } else {
         // PR-D / issue #2: snapshot every local bookmark's commit id
-        // before gt sync mutates refs. Compared post-import below to
-        // detect silent rewinds (gt sync with --force resets a local
-        // ref to remote when local was ahead — no prompt, no warning).
-        let pre_snapshot: std::collections::BTreeMap<String, String> = bookmarks_before_sync
+        // AFTER jj git fetch but before gt sync mutates refs.
+        // Compared post-import below to detect silent rewinds (gt
+        // sync with --force resets a local ref to remote when local
+        // was ahead — no prompt, no warning).
+        //
+        // The baseline is intentionally post-fetch, not pre-fetch:
+        // a legitimate `jj git fetch` of an updated remote moves
+        // the tracked local bookmark to match the new remote head.
+        // Treating that as "silent rewind" would revert genuine
+        // remote progress. The detector's scope is strictly
+        // "what changed during gt sync."
+        let pre_snapshot: std::collections::BTreeMap<String, String> = post_fetch_bookmarks
             .iter()
+            .filter(|b| !is_gtmq_branch(&b.name, &opts.gtmq_prefixes))
             .map(|b| (b.name.clone(), b.commit_id.clone()))
             .collect();
 
@@ -556,16 +614,25 @@ pub fn run_fetch(
     }
 
     // 7. Orphan-restack via `jj rebase` ONLY for bookmarks whose
-    // tracked parent disappeared during step 4 (`gt sync` deleted
-    // it because its PR landed). The naive "rebase every remaining
-    // bookmark" approach we used to do here rebases unrelated
-    // bookmarks (any time they happened to live on a non-trunk
-    // commit) and is the source of the bug where `jj-gt fetch`
-    // would surprise-rebase an in-flight unrelated stack entry and
-    // sometimes introduce conflicts.
+    // tracked parent disappeared between the pre-fetch snapshot and
+    // now. The "disappeared" set covers both:
     //
-    // The orphan signal is: bookmark existed in `bookmarks_before_sync`
-    // with parent X, X no longer exists locally after sync+import.
+    //   - Fetch-deletions: jj git fetch propagates remote-side
+    //     deletions (post-merge cleanup) to tracked local
+    //     bookmarks. By the time we get here those bookmarks are
+    //     already gone from the local list.
+    //   - Sync-deletions: gt sync --force deletes any merged-PR
+    //     bookmarks the fetch missed.
+    //
+    // We capture pre_sync_stacked + bookmarks_before_sync BEFORE
+    // jj git fetch (see step 0c) precisely so both deletion
+    // categories show up in `before - remaining` as one set.
+    //
+    // The naive "rebase every remaining bookmark" approach we used
+    // to do here rebases unrelated bookmarks (any time they happened
+    // to live on a non-trunk commit) and was the source of the bug
+    // where `jj-gt fetch` would surprise-rebase an in-flight
+    // unrelated stack entry and sometimes introduce conflicts.
     if !opts.no_rebase && !opts.dry_run {
         let remaining = list_local_bookmarks(jj)?;
         let remaining_names: std::collections::BTreeSet<String> =
@@ -574,6 +641,11 @@ pub fn run_fetch(
             .iter()
             .map(|b| b.name.clone())
             .collect();
+        // "Disappeared from local bookmarks during the pipeline" —
+        // fetch OR sync, doesn't matter which step deleted them.
+        // The variable retains the historical name because all the
+        // downstream functions (`plan_orphan_rebase`,
+        // `build_orphan_rebase_revset`) accept it under that name.
         let deleted_during_sync: std::collections::BTreeSet<String> =
             before_names.difference(&remaining_names).cloned().collect();
 
@@ -882,6 +954,41 @@ mod tests {
         assert_eq!(
             plan_orphan_rebase(&s, &remaining, &deleted),
             Some("bottom".into())
+        );
+    }
+
+    #[test]
+    fn plan_orphan_rebase_fires_when_parent_was_fetch_deleted_not_sync_deleted() {
+        // Regression for the wild bug:
+        //
+        //   - All but the topmost bookmark in a 10-commit stack had
+        //     their PRs squash-merged into main.
+        //   - `jj git fetch` propagated the remote-side deletions to
+        //     LOCAL tracked bookmarks before our cleanup code looked
+        //     at them.
+        //   - `derive_parents` was running post-fetch, so by the time
+        //     it ran, the parent bookmarks were already gone; the
+        //     orphan signal evaporated and the stack tip was left
+        //     floating on a stale base.
+        //
+        // The fix is to snapshot bookmark state PRE-fetch (so the
+        // parent edges exist in `pre_sync_stacked`) and feed the
+        // orphan-rebase logic a deleted set that covers fetch-
+        // deletions AND sync-deletions uniformly. From
+        // `plan_orphan_rebase`'s perspective, the input is the same
+        // — it doesn't care WHO deleted the parent, only that it's
+        // in the deleted set. This test pins that semantics.
+        let s = sb("top", BookmarkOrTrunk::Bookmark("merged-parent".into()));
+        let remaining = names(&["top"]);
+        // `merged-parent` was deleted by `jj git fetch` (its remote
+        // ref was deleted by the post-merge cleanup; the local
+        // bookmark followed because it was tracked). Even though
+        // the deletion happened earlier in the pipeline than sync,
+        // the orphan-rebase rule fires.
+        let deleted_by_fetch_or_sync = names(&["merged-parent"]);
+        assert_eq!(
+            plan_orphan_rebase(&s, &remaining, &deleted_by_fetch_or_sync),
+            Some("merged-parent".into())
         );
     }
 
