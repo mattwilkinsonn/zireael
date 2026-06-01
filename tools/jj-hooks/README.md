@@ -103,30 +103,30 @@ running `jj-hp init`, append:
 
 ```toml
 [[actions]]
-name = "jj-hp-push"
-lua = """
-  jj_async("util", "exec", "--", "jj-hp", "push")
-  revisions.refresh()
-"""
-
-[[actions]]
 name = "jj-hp-push-selected"
 lua = """
   jj_async("util", "exec", "--", "jj-hp", "push", "-r", context.commit_id())
   revisions.refresh()
 """
 
-[[bindings]]
-action = "jj-hp-push"
-seq = ["x", "P"]
-scope = "revisions"
-desc = "jj-hp push"
+[[actions]]
+name = "jj-hp-push"
+lua = """
+  jj_async("util", "exec", "--", "jj-hp", "push")
+  revisions.refresh()
+"""
 
 [[bindings]]
 action = "jj-hp-push-selected"
 seq = ["x", "p"]
 scope = "revisions"
 desc = "jj-hp push selected bookmark(s)"
+
+[[bindings]]
+action = "jj-hp-push"
+seq = ["x", "P"]
+scope = "revisions"
+desc = "jj-hp push"
 ```
 
 The `revisions.refresh()` after each `jj_async` repaints jjui's
