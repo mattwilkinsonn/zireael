@@ -39,6 +39,7 @@ path = "src/lib.rs"
 anyhow = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }
+dialoguer = { workspace = true }
 # jj-hooks lives in this same workspace at tools/jj-hooks. The
 # workspace entry declares both `version = "0.3.0"` and
 # `path = "tools/jj-hooks"`, so `cargo publish -p jj-gt` auto-

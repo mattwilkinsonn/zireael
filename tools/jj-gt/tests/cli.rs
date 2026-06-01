@@ -184,8 +184,18 @@ fn completions_bash_emits_script() {
 
 #[test]
 fn init_prints_reminders() {
-    let out = Command::new(bin()).arg("init").output().unwrap();
-    assert!(out.status.success());
+    // `init --print-only` skips the interactive prompt and just
+    // dumps the setup reminders (preserves the pre-2026-05 default
+    // for tests / scripts).
+    let out = Command::new(bin())
+        .args(["init", "--print-only"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("jj-gt"));
     assert!(stdout.contains("completions"));

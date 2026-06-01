@@ -305,6 +305,7 @@ dependencies = [
  "anyhow",
  "clap",
  "clap_complete",
+ "dialoguer",
  "indoc",
  "jj-hooks",
  "owo-colors",

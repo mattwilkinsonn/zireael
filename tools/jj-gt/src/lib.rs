@@ -138,8 +138,29 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Command::Init => {
-            init::print_init();
+        Command::Init { print_only } => {
+            init::print_setup_reminders();
+            if !print_only {
+                let mut prompter = init::InteractivePrompter;
+                let plan = init::plan(&mut prompter)?;
+                let outcome = init::apply(&plan, None)?;
+                let jjui = outcome.jjui_actions_added;
+                if jjui.added_submit
+                    || jjui.added_submit_selected
+                    || jjui.added_fetch
+                    || jjui.added_track
+                    || jjui.added_track_selected
+                    || jjui.added_reconcile
+                    || jjui.added_binding_submit
+                    || jjui.added_binding_submit_selected
+                    || jjui.added_binding_fetch
+                    || jjui.added_binding_track
+                    || jjui.added_binding_track_selected
+                    || jjui.added_binding_reconcile
+                {
+                    eprintln!("jj-gt: merged jjui actions/bindings into jjui config");
+                }
+            }
             Ok(ExitCode::SUCCESS)
         }
 
