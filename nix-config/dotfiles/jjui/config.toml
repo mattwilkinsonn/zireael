@@ -1,6 +1,8 @@
 [revisions]
 template = "builtin_log_compact"
-revset = """present(@) | bookmarks("main") | (bookmarks() & (author("matt@sealedsecurity.com") | author("mattwilki17@gmail.com"))) | parents(roots(bookmarks("main")..(bookmarks() & (author("matt@sealedsecurity.com") | author("mattwilki17@gmail.com")))))"""
+# Single line: jjui's TOML reader doesn't strip leading whitespace from
+# triple-quoted strings, so a multi-line revset breaks parsing.
+revset = """present(@) | bookmarks("main") | ((bookmarks("main")..(bookmarks() | @)) & (author("matt@sealedsecurity.com") | author("mattwilki17@gmail.com"))) | parents(roots((bookmarks("main")..(bookmarks() | @)) & (author("matt@sealedsecurity.com") | author("mattwilki17@gmail.com"))))"""
 
 [[actions]]
 name = "jj-gt-submit-selected"
