@@ -3,9 +3,10 @@
   ...
 }:
 
-# rpi5 — server-only config. Runs Cockpit + Tailscale. No desktop by
-# default. To temporarily enable KDE for debug, add `./desktop.nix` to
-# the rpi5 modules list in flake.nix and nix-switch.
+# rpi5 — server-only config. Runs Cockpit + Tailscale exit node; Kimai
+# for hours.sealedsecurity.com lives in ./kimai.nix. No desktop by default.
+# To temporarily enable KDE for debug, add `./desktop.nix` to the rpi5
+# modules list in flake.nix and nix-switch.
 
 {
   # Migrate off deprecated "kernelboot" (the upstream default for raspberry-pi-5.base).

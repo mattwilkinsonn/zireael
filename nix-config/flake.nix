@@ -220,8 +220,8 @@
           ];
         };
 
-      # Raspberry Pi 5 (headless, role TBD — OpenClaw moved to mattfw).
-      # Technitium DNS on rpi4. Cockpit web UI still served from this Pi.
+      # Raspberry Pi 5 (headless): Tailscale exit node + Kimai for
+      # hours.sealedsecurity.com. Technitium DNS lives on rpi4.
       # Add ./nixos/rpi5/desktop.nix to modules to re-enable KDE for debug.
       # nix-flatpak module included so re-enabling desktop.nix's services.flatpak
       # block resolves; harmless when desktop.nix isn't imported (nothing
@@ -243,6 +243,7 @@
           ./shared/overlays.nix
           ./nixos/common.nix
           ./nixos/rpi5/system.nix
+          ./nixos/rpi5/kimai.nix
           # ./nixos/rpi5/desktop.nix  # uncomment to re-enable KDE Plasma + GUI flatpaks for debug
           home-manager.nixosModules.home-manager
           hmModule
