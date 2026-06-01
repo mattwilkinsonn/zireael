@@ -249,19 +249,24 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
         &push_selected_lua_forms(),
     );
 
-    apply_action(
-        actions_arr,
-        push_state,
-        NEW_PUSH_NAME,
-        push_lua_forms()[0].to_owned(),
-        &mut added.added_jj_push,
-    );
+    // Selected first: same frequency-ordering rationale as jj-gt's
+    // SPECS array. jjui's `x`-prefix overlay surfaces candidates
+    // top-down in config order, so the daily "ship the focused
+    // bookmark" keystroke should land at index 0. Whole-stack
+    // push (`x P`) is the less-common operation and sits below.
     apply_action(
         actions_arr,
         push_selected_state,
         NEW_PUSH_SELECTED_NAME,
         push_selected_lua_forms()[0].to_owned(),
         &mut added.added_jj_push_selected,
+    );
+    apply_action(
+        actions_arr,
+        push_state,
+        NEW_PUSH_NAME,
+        push_lua_forms()[0].to_owned(),
+        &mut added.added_jj_push,
     );
 
     // -- Bindings -----------------------------------------------------------
@@ -319,16 +324,10 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
         NEW_PUSH_SELECTED_DESC,
     );
 
-    // Add any missing bindings (idempotent).
-    if !bindings_has_action(bindings_arr, NEW_PUSH_NAME) {
-        bindings_arr.push(make_binding(
-            NEW_PUSH_NAME,
-            &push_seq_history()[0],
-            "revisions",
-            NEW_PUSH_DESC,
-        ));
-        added.added_binding_x_p = true;
-    }
+    // Add any missing bindings (idempotent). Selected-bookmark
+    // binding comes first to match the action ordering — keeps
+    // jjui's `x`-prefix overlay listing daily-use keys at the top
+    // and whole-stack/recovery flows below.
     if !bindings_has_action(bindings_arr, NEW_PUSH_SELECTED_NAME) {
         bindings_arr.push(make_binding(
             NEW_PUSH_SELECTED_NAME,
@@ -337,6 +336,15 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
             NEW_PUSH_SELECTED_DESC,
         ));
         added.added_binding_x_p_caps = true;
+    }
+    if !bindings_has_action(bindings_arr, NEW_PUSH_NAME) {
+        bindings_arr.push(make_binding(
+            NEW_PUSH_NAME,
+            &push_seq_history()[0],
+            "revisions",
+            NEW_PUSH_DESC,
+        ));
+        added.added_binding_x_p = true;
     }
 
     let serialized = toml::to_string_pretty(&doc)
