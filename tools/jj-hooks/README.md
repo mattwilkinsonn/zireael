@@ -83,6 +83,55 @@ This prompts to:
 
 All three can be reconfigured by running `jj-hp init` again.
 
+## jjui integration
+
+`jj-hp init` (and the standalone TOML below) installs two
+[jjui](https://github.com/idursun/jjui) actions and keybindings so
+`jj-hp push` is one keypress away from inside the TUI.
+
+| Action | Default key | What it does |
+| --- | --- | --- |
+| `jj-hp-push-selected` | `x p` | Push the bookmark at the focused commit (`jj-hp push -r context.commit_id()`) |
+| `jj-hp-push` | `x P` | Push every local bookmark (`jj-hp push`) |
+
+Lowercase is the more-frequent case (selected). The 2026-05 swap moved
+the keys to this layout; `jj-hp init` migrates pre-swap configs in
+place — user-customized key sequences are left alone.
+
+If you'd rather hand-edit `~/.config/jjui/config.toml` instead of
+running `jj-hp init`, append:
+
+```toml
+[[actions]]
+name = "jj-hp-push"
+lua = """
+  jj_async("util", "exec", "--", "jj-hp", "push")
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-hp-push-selected"
+lua = """
+  jj_async("util", "exec", "--", "jj-hp", "push", "-r", context.commit_id())
+  revisions.refresh()
+"""
+
+[[bindings]]
+action = "jj-hp-push"
+seq = ["x", "P"]
+scope = "revisions"
+desc = "jj-hp push"
+
+[[bindings]]
+action = "jj-hp-push-selected"
+seq = ["x", "p"]
+scope = "revisions"
+desc = "jj-hp push selected bookmark(s)"
+```
+
+The `revisions.refresh()` after each `jj_async` repaints jjui's
+revisions pane so the bookmark moves are visible immediately.
+
 ## Shell completion
 
 `jj-hp completions <shell>` emits a clap-generated completion script. The
