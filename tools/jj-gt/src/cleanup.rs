@@ -1,11 +1,20 @@
 //! `jj-gt fetch` pipeline + the testable per-bookmark classifier
 //! decisions.
 //!
+//! The pipeline is split into named phase functions whose contracts
+//! are individually testable; `run_fetch` is a thin orchestrator on
+//! top. The motivation is to make the timing-sensitive bits (in
+//! particular [`snapshot_pre_fetch`]) catchable by unit tests so a
+//! future refactor can't re-introduce the "derive_parents ran after
+//! fetch already deleted the parent bookmarks" bug that prompted
+//! this split.
+//!
 //! Most of the file is the [`classify_local_bookmark`] /
 //! [`classify_gtmq_branch`] functions — pure decision logic kept
 //! separate from the orchestration so the test suite can exercise
 //! every branch without spinning up real `gh` / `gt` / `jj` invocations.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::error::Result;
@@ -256,68 +265,144 @@ pub fn run_fetch(
     opts: &FetchOpts,
     verbosity: crate::ui::Verbosity,
 ) -> Result<Vec<(LocalBookmark, CleanupAction)>> {
-    use crate::ui;
+    let _lock = acquire_pipeline_lock(workspace_root, opts)?;
+    maybe_shelter(jj, opts, verbosity)?;
 
-    // 0a. Acquire the cooperative pipeline lock. Blocks other
-    // `jj-gt fetch` / `jj-gt submit` invocations from racing this
-    // one's gt-sync → jj-import → rebase pipeline. The lock is
-    // released on function exit (or panic). Does not block plain
-    // `jj` operations in other shells — see crate::lock for the
-    // scope rationale.
-    let _lock = if opts.dry_run {
-        // Dry-run doesn't mutate refs; no need to fight other
-        // invocations for the lock.
-        None
+    // Snapshot the bookmark graph BEFORE `jj git fetch` runs. See
+    // `snapshot_pre_fetch` for the timing rationale.
+    let pre = snapshot_pre_fetch(jj, workspace_root, opts)?;
+
+    do_fetch(jj, opts, verbosity)?;
+
+    let post = snapshot_post_fetch(jj)?;
+
+    backfill_phase(workspace_root, &pre, &post, opts, verbosity)?;
+
+    let mut actions: Vec<(LocalBookmark, CleanupAction)> = Vec::new();
+    classify_phase(jj, &pre, opts, &mut actions)?;
+    sync_and_rewind_phase(
+        jj,
+        workspace_root,
+        &pre,
+        &post,
+        opts,
+        verbosity,
+        &mut actions,
+    )?;
+    gtmq_prune_phase(jj, workspace_root, &pre, opts, verbosity, &mut actions)?;
+    orphan_rebase_phase(jj, &pre, opts, &mut actions)?;
+
+    Ok(actions)
+}
+
+/// 0a. Acquire the cooperative pipeline lock. Blocks other
+/// `jj-gt fetch` / `jj-gt submit` invocations from racing this
+/// one's gt-sync → jj-import → rebase pipeline. The lock is
+/// released on function exit (or panic). Does not block plain
+/// `jj` operations in other shells — see crate::lock for the
+/// scope rationale.
+///
+/// Dry-run doesn't mutate refs; no need to fight other invocations
+/// for the lock.
+fn acquire_pipeline_lock(
+    workspace_root: &Path,
+    opts: &FetchOpts,
+) -> Result<Option<crate::lock::PipelineLock>> {
+    if opts.dry_run {
+        Ok(None)
     } else {
-        Some(crate::lock::PipelineLock::acquire(workspace_root)?)
-    };
+        Ok(Some(crate::lock::PipelineLock::acquire(workspace_root)?))
+    }
+}
 
-    // 0b. Shelter any uncommitted working-copy edits behind a fresh
-    // empty `@`. Concurrent jj operations during the pipeline (or
-    // jj's own snapshotting as a side effect of other commands the
-    // user runs from another shell) can produce divergent commits
-    // that silently lose pending edits. Pre-2026-06 fetch refused
-    // to run when `@` had edits and offered `--force-with-changes`
-    // as a bypass; the new model auto-shelters via `jj new @`
-    // (which snapshots the edits into the old `@` and creates a
-    // fresh empty `@` above) — strictly safer than the bypass and
-    // less friction than the refusal. See issue #1 for the damage
-    // shape this defends against.
-    //
-    // Skip when `@` is already empty (nothing to shelter) and in
-    // dry-run (don't mutate the workspace at all).
-    if !opts.dry_run && jj::has_uncommitted_changes(jj)? {
-        let step = ui::Step::start("Sheltering uncommitted edits (jj new @)", verbosity);
-        match jj::shelter_uncommitted_edits(jj) {
-            Ok(()) => step.success("old @ now holds your edits as a real change", None),
-            Err(e) => {
-                step.fail(&format!("{e}"), None);
-                return Err(e);
-            }
+/// 0b. Shelter any uncommitted working-copy edits behind a fresh
+/// empty `@`. Concurrent jj operations during the pipeline (or
+/// jj's own snapshotting as a side effect of other commands the
+/// user runs from another shell) can produce divergent commits
+/// that silently lose pending edits. Pre-2026-06 fetch refused
+/// to run when `@` had edits and offered `--force-with-changes`
+/// as a bypass; the new model auto-shelters via `jj new @`
+/// (which snapshots the edits into the old `@` and creates a
+/// fresh empty `@` above) — strictly safer than the bypass and
+/// less friction than the refusal. See issue #1 for the damage
+/// shape this defends against.
+///
+/// Skip when `@` is already empty (nothing to shelter) and in
+/// dry-run (don't mutate the workspace at all).
+fn maybe_shelter(jj: &JjCli, opts: &FetchOpts, verbosity: crate::ui::Verbosity) -> Result<()> {
+    if opts.dry_run || !jj::has_uncommitted_changes(jj)? {
+        return Ok(());
+    }
+    let step = crate::ui::Step::start("Sheltering uncommitted edits (jj new @)", verbosity);
+    match jj::shelter_uncommitted_edits(jj) {
+        Ok(()) => {
+            step.success("old @ now holds your edits as a real change", None);
+            Ok(())
+        }
+        Err(e) => {
+            step.fail(&format!("{e}"), None);
+            Err(e)
         }
     }
+}
 
-    // 0c. Snapshot the bookmark graph BEFORE `jj git fetch` runs.
-    // jj's fetch propagates remote-side `[deleted]` refs to local
-    // tracked bookmarks — so any merged-PR bookmark whose remote
-    // ref was just deleted by the GitHub-side squash-merge will be
-    // gone from the local list by the time we get to step 3 / 7.
-    // Capturing the pre-fetch state lets us still:
-    //
-    //   - derive each bookmark's parent (in-stack-relationship)
-    //     while the parent bookmark still exists locally;
-    //   - report "what happened to your N bookmarks" with full
-    //     coverage in the per-bookmark actions output;
-    //   - feed the orphan-rebase logic the full pre-fetch name set
-    //     so a fetch-deleted parent counts as a deletion just like
-    //     a sync-deleted one.
-    //
-    // PR info lookup goes here too so we batch all the gh queries
-    // against a stable name set.
-    let bookmarks_pre_fetch = list_local_bookmarks(jj)?;
-    let (gtmq, normal): (Vec<_>, Vec<_>) = bookmarks_pre_fetch
-        .iter()
-        .cloned()
+/// Snapshot of the bookmark graph captured BEFORE `jj git fetch`
+/// runs. Pre-fetch timing is load-bearing: jj's fetch propagates
+/// remote-side `[deleted]` refs to local tracked bookmarks — so
+/// any merged-PR bookmark whose remote ref was just deleted by the
+/// GitHub-side squash-merge will be gone from the local list by
+/// the time we'd otherwise compute the cleanup state.
+///
+/// Capturing the pre-fetch state lets us still:
+///
+///   - derive each bookmark's parent (in-stack relationship)
+///     while the parent bookmark still exists locally;
+///   - report "what happened to your N bookmarks" with full
+///     coverage in the per-bookmark actions output;
+///   - feed the orphan-rebase logic the full pre-fetch name set so
+///     a fetch-deleted parent counts as a deletion just like a
+///     sync-deleted one.
+#[derive(Debug, Clone)]
+pub struct PreFetchSnapshot {
+    /// `gtmq_*`-shaped bookmarks (filtered out of the normal flow).
+    pub gtmq: Vec<LocalBookmark>,
+    /// Non-gtmq bookmarks; the set the rest of the pipeline
+    /// operates on.
+    pub normal: Vec<LocalBookmark>,
+    /// PR info batched for the normal set. `find_prs_for_branches`
+    /// returns an empty vec for an empty input, so this is empty
+    /// when `normal` is empty.
+    pub normal_prs: Vec<PrInfo>,
+    /// `(child → parent)` edges derived against the pre-fetch
+    /// graph. Critical: derive_parents MUST run while the parent
+    /// bookmarks are still local; computing this post-fetch loses
+    /// any edge whose parent bookmark was deleted in the
+    /// meantime.
+    pub stacked: Vec<StackedBookmark>,
+}
+
+impl PreFetchSnapshot {
+    /// Set of normal bookmark names — convenience for the
+    /// orphan-rebase phase that compares before-vs-after for
+    /// deleted-during-pipeline detection.
+    pub fn normal_names(&self) -> BTreeSet<String> {
+        self.normal.iter().map(|b| b.name.clone()).collect()
+    }
+}
+
+/// 0c. Capture the pre-fetch bookmark graph + PR lookup.
+///
+/// Calls `gh` once to batch all PR lookups. Tests that want to
+/// exercise the rest of the pipeline without `gh` use
+/// [`snapshot_pre_fetch_with_prs`] to bypass the lookup.
+pub fn snapshot_pre_fetch(
+    jj: &JjCli,
+    workspace_root: &Path,
+    opts: &FetchOpts,
+) -> Result<PreFetchSnapshot> {
+    let all = list_local_bookmarks(jj)?;
+    let (gtmq, normal): (Vec<_>, Vec<_>) = all
+        .into_iter()
         .partition(|b| is_gtmq_branch(&b.name, &opts.gtmq_prefixes));
 
     let normal_prs = if normal.is_empty() {
@@ -327,110 +412,146 @@ pub fn run_fetch(
         gh::find_prs_for_branches(workspace_root, &names, 200)?
     };
 
-    // Derive stack structure on the pre-fetch graph. The orphan
-    // detection at step 7 needs (child → parent) edges that include
-    // soon-to-be-deleted parents; if we derived post-fetch (or
-    // post-sync) we'd lose any edge whose parent bookmark was
-    // removed in the meantime — silently dropping the orphan signal
-    // and leaving the stack tip floating on a stale base.
-    let pre_sync_stacked = derive_parents_lossy(
+    snapshot_pre_fetch_with_prs(jj, opts, gtmq, normal, normal_prs)
+}
+
+/// `gh`-free variant of [`snapshot_pre_fetch`] — used by unit
+/// tests that want to pin the snapshot's derive_parents output
+/// without standing up a fake GitHub. Production code goes
+/// through [`snapshot_pre_fetch`].
+pub fn snapshot_pre_fetch_with_prs(
+    jj: &JjCli,
+    opts: &FetchOpts,
+    gtmq: Vec<LocalBookmark>,
+    normal: Vec<LocalBookmark>,
+    normal_prs: Vec<PrInfo>,
+) -> Result<PreFetchSnapshot> {
+    let stacked = derive_parents_lossy(
         jj,
         &normal.iter().map(|b| b.name.clone()).collect::<Vec<_>>(),
         &opts.trunk,
     );
+    Ok(PreFetchSnapshot {
+        gtmq,
+        normal,
+        normal_prs,
+        stacked,
+    })
+}
 
-    // 1. Fetch.
-    let fetch_step = ui::Step::start(&format!("Fetching from {}", opts.remote), verbosity);
+/// Snapshot of the bookmark graph after `jj git fetch`. The
+/// rewind detector uses this as its "before sync" baseline so a
+/// legitimate fetch-side move of a tracked bookmark (someone else
+/// pushed) doesn't get reverted; the backfill phase uses it to
+/// skip `gt track` calls for bookmarks fetch already deleted.
+#[derive(Debug, Clone)]
+pub struct PostFetchSnapshot {
+    pub all: Vec<LocalBookmark>,
+}
+
+impl PostFetchSnapshot {
+    pub fn names(&self) -> BTreeSet<String> {
+        self.all.iter().map(|b| b.name.clone()).collect()
+    }
+}
+
+pub fn snapshot_post_fetch(jj: &JjCli) -> Result<PostFetchSnapshot> {
+    Ok(PostFetchSnapshot {
+        all: list_local_bookmarks(jj)?,
+    })
+}
+
+/// `jj git fetch`.
+fn do_fetch(jj: &JjCli, opts: &FetchOpts, verbosity: crate::ui::Verbosity) -> Result<()> {
+    let step = crate::ui::Step::start(&format!("Fetching from {}", opts.remote), verbosity);
     if opts.dry_run {
-        fetch_step.skip("dry-run", None);
-    } else {
-        match jj::git_fetch(jj, &opts.remote) {
-            Ok(()) => fetch_step.success("", None),
-            Err(e) => {
-                fetch_step.fail(&format!("{e}"), None);
-                return Err(e);
-            }
+        step.skip("dry-run", None);
+        return Ok(());
+    }
+    match jj::git_fetch(jj, &opts.remote) {
+        Ok(()) => {
+            step.success("", None);
+            Ok(())
+        }
+        Err(e) => {
+            step.fail(&format!("{e}"), None);
+            Err(e)
         }
     }
+}
 
-    // Post-fetch bookmark snapshot. Used by the backfill step (skip
-    // bookmarks fetch already removed — gt track would fail on a
-    // missing local branch) and as one of the inputs to the
-    // orphan-rebase deleted-set calculation.
-    let post_fetch_bookmarks = list_local_bookmarks(jj)?;
-    let post_fetch_names: std::collections::BTreeSet<String> = post_fetch_bookmarks
+/// Backfill gt tracking metadata for bookmarks that have a PR.
+///
+/// Filters to bookmarks (a) with a PR and (b) still present
+/// locally after fetch. A bookmark whose remote was just deleted
+/// by the post-merge cleanup is gone from local; gt track against
+/// a missing branch errors with "branch not found." Skipping
+/// those here is a no-op anyway — sync / orphan-rebase will
+/// handle the cleanup.
+fn backfill_phase(
+    workspace_root: &Path,
+    pre: &PreFetchSnapshot,
+    post: &PostFetchSnapshot,
+    opts: &FetchOpts,
+    verbosity: crate::ui::Verbosity,
+) -> Result<()> {
+    if opts.no_backfill {
+        return Ok(());
+    }
+    let post_names = post.names();
+    let stacked = crate::stack::sort_for_tracking(&pre.stacked);
+    let backfill_targets: Vec<_> = stacked
         .iter()
-        .map(|b| b.name.clone())
+        .filter(|sb| {
+            pre.normal_prs.iter().any(|p| p.head_ref_name == sb.name)
+                && post_names.contains(&sb.name)
+        })
         .collect();
-
-    // Keep an alias under the original variable name so downstream
-    // code continues to compile unchanged.
-    //
-    // The orphan-rebase (step 7) uses this directly: `before_names`
-    // and the parent_commit lookup both need pre-fetch coverage so
-    // fetch-deleted parents appear in the "disappeared" set.
-    //
-    // The rewind-detector (steps 3-5) does NOT use this as its
-    // commit-ID baseline — that role is filled by `pre_snapshot`,
-    // which is intentionally derived from `post_fetch_bookmarks`
-    // (a legitimate fetch-side move of a tracked bookmark must
-    // not get reverted as a "silent rewind"; the detector's scope
-    // is strictly "what changed during gt sync"). The rewind arms
-    // do consult `bookmarks_before_sync` for the `LocalBookmark`
-    // struct used in the per-bookmark actions display, but that's
-    // a display-only lookup — not the baseline comparison.
-    let bookmarks_before_sync = normal.clone();
-
-    // 2. Backfill metadata refs for bookmarks that have a PR. Sort
-    // bottom→top so gt accepts each parent reference.
-    if !opts.no_backfill {
-        let stacked = crate::stack::sort_for_tracking(&pre_sync_stacked);
-        // Filter to bookmarks (a) with a PR and (b) still present
-        // locally after fetch. A bookmark whose remote was just
-        // deleted by the post-merge cleanup is gone from local; gt
-        // track against a missing branch errors with "branch not
-        // found." Skipping those here is a no-op anyway — sync /
-        // orphan-rebase will handle the cleanup.
-        let backfill_targets: Vec<_> = stacked
-            .iter()
-            .filter(|sb| {
-                normal_prs.iter().any(|p| p.head_ref_name == sb.name)
-                    && post_fetch_names.contains(&sb.name)
-            })
-            .collect();
-        if backfill_targets.is_empty() {
-            let step = ui::Step::start("Backfilling gt tracking metadata", verbosity);
-            step.skip("no bookmarks with PRs", None);
+    if backfill_targets.is_empty() {
+        let step = crate::ui::Step::start("Backfilling gt tracking metadata", verbosity);
+        step.skip("no bookmarks with PRs", None);
+        return Ok(());
+    }
+    for sb in backfill_targets {
+        let parent = match &sb.parent {
+            BookmarkOrTrunk::Bookmark(p) => p.clone(),
+            BookmarkOrTrunk::Trunk => opts.trunk.clone(),
+        };
+        let step = crate::ui::Step::start(
+            &format!("Backfilling gt track for {} (parent: {parent})", sb.name),
+            verbosity,
+        );
+        if opts.dry_run {
+            step.skip("dry-run", None);
         } else {
-            for sb in backfill_targets {
-                let parent = match &sb.parent {
-                    BookmarkOrTrunk::Bookmark(p) => p.clone(),
-                    BookmarkOrTrunk::Trunk => opts.trunk.clone(),
-                };
-                let step = ui::Step::start(
-                    &format!("Backfilling gt track for {} (parent: {parent})", sb.name),
-                    verbosity,
-                );
-                if opts.dry_run {
-                    step.skip("dry-run", None);
-                } else {
-                    match gt::track(workspace_root, &sb.name, &parent) {
-                        Ok(()) => step.success("", None),
-                        Err(e) => {
-                            step.fail(&format!("{e}"), None);
-                            return Err(e);
-                        }
-                    }
+            match gt::track(workspace_root, &sb.name, &parent) {
+                Ok(()) => step.success("", None),
+                Err(e) => {
+                    step.fail(&format!("{e}"), None);
+                    return Err(e);
                 }
             }
         }
     }
+    Ok(())
+}
 
-    // 3 + 4 + 5: classify normal bookmarks (drift / cleanup decisions),
-    // run gt sync, then re-import.
-    let mut actions: Vec<(LocalBookmark, CleanupAction)> = Vec::new();
-    for local in &normal {
-        let pr = normal_prs.iter().find(|p| p.head_ref_name == local.name);
+/// Classify each normal bookmark (drift / cleanup decision).
+///
+/// Pre-PR classification happens against the pre-fetch snapshot so
+/// merged-PR bookmarks that fetch will-or-already-has deleted still
+/// show up in the per-bookmark actions output.
+fn classify_phase(
+    jj: &JjCli,
+    pre: &PreFetchSnapshot,
+    opts: &FetchOpts,
+    actions: &mut Vec<(LocalBookmark, CleanupAction)>,
+) -> Result<()> {
+    for local in &pre.normal {
+        let pr = pre
+            .normal_prs
+            .iter()
+            .find(|p| p.head_ref_name == local.name);
         let marker = match pr {
             Some(pr) if pr.state.is_terminal() => {
                 jj::find_pr_merge_marker_on_trunk(jj, pr.number, &opts.trunk)?
@@ -440,290 +561,335 @@ pub fn run_fetch(
         let action = classify_local_bookmark(local, pr, marker.as_deref());
         actions.push((local.clone(), action));
     }
+    Ok(())
+}
 
-    let sync_step = ui::Step::start("Running gt sync --no-restack", verbosity);
+/// Run `gt sync --no-restack`, re-import, and run the
+/// rewind detector against a post-fetch baseline so a legitimate
+/// fetch-side move of a tracked bookmark isn't classified as
+/// "silent rewind" (the detector's scope is strictly "what
+/// changed during gt sync").
+///
+/// Dry-run short-circuits the whole block — no sync, no import,
+/// no detection.
+fn sync_and_rewind_phase(
+    jj: &JjCli,
+    workspace_root: &Path,
+    pre: &PreFetchSnapshot,
+    post: &PostFetchSnapshot,
+    opts: &FetchOpts,
+    verbosity: crate::ui::Verbosity,
+    actions: &mut Vec<(LocalBookmark, CleanupAction)>,
+) -> Result<()> {
+    use std::collections::BTreeMap;
+
+    let sync_step = crate::ui::Step::start("Running gt sync --no-restack", verbosity);
     if opts.dry_run {
         sync_step.skip("dry-run", None);
-    } else {
-        // PR-D / issue #2: snapshot every local bookmark's commit id
-        // AFTER jj git fetch but before gt sync mutates refs.
-        // Compared post-import below to detect silent rewinds (gt
-        // sync with --force resets a local ref to remote when local
-        // was ahead — no prompt, no warning).
-        //
-        // The baseline is intentionally post-fetch, not pre-fetch:
-        // a legitimate `jj git fetch` of an updated remote moves
-        // the tracked local bookmark to match the new remote head.
-        // Treating that as "silent rewind" would revert genuine
-        // remote progress. The detector's scope is strictly
-        // "what changed during gt sync."
-        let pre_snapshot: std::collections::BTreeMap<String, String> = post_fetch_bookmarks
-            .iter()
-            .filter(|b| !is_gtmq_branch(&b.name, &opts.gtmq_prefixes))
-            .map(|b| (b.name.clone(), b.commit_id.clone()))
-            .collect();
+        return Ok(());
+    }
 
-        match gt::sync_no_restack(workspace_root) {
-            Ok(()) => sync_step.success("", None),
-            Err(e) => {
-                sync_step.fail(&format!("{e}"), None);
-                return Err(e);
-            }
+    // PR-D / issue #2: snapshot every local bookmark's commit id
+    // AFTER jj git fetch but before gt sync mutates refs.
+    // Compared post-import below to detect silent rewinds (gt
+    // sync with --force resets a local ref to remote when local
+    // was ahead — no prompt, no warning).
+    //
+    // The baseline is intentionally post-fetch, not pre-fetch:
+    // a legitimate `jj git fetch` of an updated remote moves
+    // the tracked local bookmark to match the new remote head.
+    // Treating that as "silent rewind" would revert genuine
+    // remote progress.
+    let pre_snapshot: BTreeMap<String, String> = post
+        .all
+        .iter()
+        .filter(|b| !is_gtmq_branch(&b.name, &opts.gtmq_prefixes))
+        .map(|b| (b.name.clone(), b.commit_id.clone()))
+        .collect();
+
+    match gt::sync_no_restack(workspace_root) {
+        Ok(()) => sync_step.success("", None),
+        Err(e) => {
+            sync_step.fail(&format!("{e}"), None);
+            return Err(e);
         }
-        let import_step = ui::Step::start("Importing remote refs into jj", verbosity);
-        match jj::git_import(jj) {
-            Ok(()) => import_step.success("", None),
-            Err(e) => {
-                import_step.fail(&format!("{e}"), None);
-                return Err(e);
-            }
+    }
+    let import_step = crate::ui::Step::start("Importing remote refs into jj", verbosity);
+    match jj::git_import(jj) {
+        Ok(()) => import_step.success("", None),
+        Err(e) => {
+            import_step.fail(&format!("{e}"), None);
+            return Err(e);
         }
+    }
 
-        // Post-snapshot + rewind detection. Only act on bookmarks
-        // present in pre_snapshot — anything new in post is a
-        // remote-side branch we don't want to touch.
-        let post_bookmarks = list_local_bookmarks(jj)?;
-        let post_by_name: std::collections::BTreeMap<String, String> = post_bookmarks
-            .iter()
-            .map(|b| (b.name.clone(), b.commit_id.clone()))
-            .collect();
+    // Post-snapshot + rewind detection. Only act on bookmarks
+    // present in pre_snapshot — anything new in post is a
+    // remote-side branch we don't want to touch.
+    let post_bookmarks = list_local_bookmarks(jj)?;
+    let post_by_name: BTreeMap<String, String> = post_bookmarks
+        .iter()
+        .map(|b| (b.name.clone(), b.commit_id.clone()))
+        .collect();
 
-        let rewind_step = ui::Step::start("Checking for silent rewinds from gt sync", verbosity);
-        let mut restored = 0usize;
-        let mut diverged = 0usize;
-        let mut rewind_errors: Vec<String> = Vec::new();
-        for (name, pre_id) in &pre_snapshot {
-            let post_id = post_by_name.get(name).map(|s| s.as_str());
-            let classification = match classify_rewind(pre_id, post_id, |a, b| {
-                jj::is_ancestor(workspace_root, a, b)
-            }) {
-                Ok(c) => c,
-                Err(e) => {
-                    rewind_errors.push(format!("{name}: {e}"));
+    let rewind_step = crate::ui::Step::start("Checking for silent rewinds from gt sync", verbosity);
+    let mut restored = 0usize;
+    let mut diverged = 0usize;
+    let mut rewind_errors: Vec<String> = Vec::new();
+    for (name, pre_id) in &pre_snapshot {
+        let post_id = post_by_name.get(name).map(|s| s.as_str());
+        let classification = match classify_rewind(pre_id, post_id, |a, b| {
+            jj::is_ancestor(workspace_root, a, b)
+        }) {
+            Ok(c) => c,
+            Err(e) => {
+                rewind_errors.push(format!("{name}: {e}"));
+                continue;
+            }
+        };
+        match classification {
+            RewindClassification::Unchanged | RewindClassification::FastForward => {}
+            RewindClassification::Rewound => {
+                if let Err(e) = jj::bookmark_set(jj, name, pre_id) {
+                    rewind_errors.push(format!("{name}: restore failed: {e}"));
                     continue;
                 }
-            };
-            match classification {
-                RewindClassification::Unchanged | RewindClassification::FastForward => {}
-                RewindClassification::Rewound => {
-                    if let Err(e) = jj::bookmark_set(jj, name, pre_id) {
-                        rewind_errors.push(format!("{name}: restore failed: {e}"));
-                        continue;
-                    }
-                    restored += 1;
-                    let local = bookmarks_before_sync
-                        .iter()
-                        .find(|b| &b.name == name)
-                        .cloned()
-                        .unwrap_or_else(|| LocalBookmark {
-                            name: name.clone(),
-                            commit_id: pre_id.clone(),
-                        });
-                    actions.push((
-                        local,
-                        CleanupAction::RestoredAfterRewind {
-                            pre: pre_id.clone(),
-                            post: post_id.unwrap_or("").to_owned(),
-                        },
-                    ));
+                restored += 1;
+                let local = pre
+                    .normal
+                    .iter()
+                    .find(|b| &b.name == name)
+                    .cloned()
+                    .unwrap_or_else(|| LocalBookmark {
+                        name: name.clone(),
+                        commit_id: pre_id.clone(),
+                    });
+                actions.push((
+                    local,
+                    CleanupAction::RestoredAfterRewind {
+                        pre: pre_id.clone(),
+                        post: post_id.unwrap_or("").to_owned(),
+                    },
+                ));
+            }
+            RewindClassification::Diverged => {
+                if let Err(e) = jj::bookmark_set(jj, name, pre_id) {
+                    rewind_errors.push(format!("{name}: restore failed: {e}"));
+                    continue;
                 }
-                RewindClassification::Diverged => {
-                    if let Err(e) = jj::bookmark_set(jj, name, pre_id) {
-                        rewind_errors.push(format!("{name}: restore failed: {e}"));
-                        continue;
-                    }
-                    diverged += 1;
-                    let local = bookmarks_before_sync
-                        .iter()
-                        .find(|b| &b.name == name)
-                        .cloned()
-                        .unwrap_or_else(|| LocalBookmark {
-                            name: name.clone(),
-                            commit_id: pre_id.clone(),
-                        });
-                    actions.push((
-                        local,
-                        CleanupAction::DivergedFromRemote {
-                            pre: pre_id.clone(),
-                            post: post_id.unwrap_or("").to_owned(),
-                        },
-                    ));
-                }
-                RewindClassification::Disappeared => {
-                    // gt sync deleted the bookmark. Two sub-cases:
-                    //
-                    //   - Intentional cleanup (merged PR): the
-                    //     orphan-detection step (6/7 below) will
-                    //     either rebase descendants or leave them
-                    //     alone via its own classifier. Don't
-                    //     resurrect the bookmark here — that would
-                    //     undo gt sync's legitimate work.
-                    //
-                    //   - Unintentional (local-only commits ahead of
-                    //     remote): we can't tell from pre/post alone
-                    //     without consulting the original remote
-                    //     ref. The most common shape — local + remote
-                    //     both at the merge commit pre-sync, gt sync
-                    //     removes both — is benign; the rare bad
-                    //     case (local ahead with un-pushed work)
-                    //     would show up as orphan descendants if
-                    //     any exist, which step 7 handles.
-                    //
-                    // Leaving Disappeared as a no-op here is the
-                    // conservative choice; it matches the behavior
-                    // before PR-D landed and is fixed forward by
-                    // step 7's orphan rebase.
-                }
+                diverged += 1;
+                let local = pre
+                    .normal
+                    .iter()
+                    .find(|b| &b.name == name)
+                    .cloned()
+                    .unwrap_or_else(|| LocalBookmark {
+                        name: name.clone(),
+                        commit_id: pre_id.clone(),
+                    });
+                actions.push((
+                    local,
+                    CleanupAction::DivergedFromRemote {
+                        pre: pre_id.clone(),
+                        post: post_id.unwrap_or("").to_owned(),
+                    },
+                ));
+            }
+            RewindClassification::Disappeared => {
+                // gt sync deleted the bookmark. Two sub-cases:
+                //
+                //   - Intentional cleanup (merged PR): the
+                //     orphan-detection phase will either rebase
+                //     descendants or leave them alone via its own
+                //     classifier. Don't resurrect the bookmark
+                //     here — that would undo gt sync's legitimate
+                //     work.
+                //
+                //   - Unintentional (local-only commits ahead of
+                //     remote): we can't tell from pre/post alone
+                //     without consulting the original remote
+                //     ref. The most common shape — local + remote
+                //     both at the merge commit pre-sync, gt sync
+                //     removes both — is benign; the rare bad
+                //     case (local ahead with un-pushed work)
+                //     would show up as orphan descendants if any
+                //     exist, which the orphan-rebase phase
+                //     handles.
+                //
+                // Leaving Disappeared as a no-op here is the
+                // conservative choice; it matches the behavior
+                // before PR-D landed and is fixed forward by the
+                // orphan-rebase phase.
             }
         }
-        let summary = match (restored, diverged, rewind_errors.is_empty()) {
-            (0, 0, true) => "no rewinds detected".to_owned(),
-            (r, 0, true) => format!("{r} bookmark(s) restored from rewind"),
-            (0, d, true) => format!("{d} bookmark(s) diverged; local restored"),
-            (r, d, true) => {
-                format!("{r} restored from rewind, {d} diverged; local restored")
+    }
+    let summary = match (restored, diverged, rewind_errors.is_empty()) {
+        (0, 0, true) => "no rewinds detected".to_owned(),
+        (r, 0, true) => format!("{r} bookmark(s) restored from rewind"),
+        (0, d, true) => format!("{d} bookmark(s) diverged; local restored"),
+        (r, d, true) => format!("{r} restored from rewind, {d} diverged; local restored"),
+        (_, _, false) => format!("{} error(s)", rewind_errors.len()),
+    };
+    if rewind_errors.is_empty() {
+        rewind_step.success(&summary, None);
+    } else {
+        rewind_step.warn(&summary, Some(&rewind_errors.join("\n")));
+    }
+    Ok(())
+}
+
+/// gtmq_* pruning.
+fn gtmq_prune_phase(
+    jj: &JjCli,
+    workspace_root: &Path,
+    pre: &PreFetchSnapshot,
+    opts: &FetchOpts,
+    verbosity: crate::ui::Verbosity,
+    actions: &mut Vec<(LocalBookmark, CleanupAction)>,
+) -> Result<()> {
+    if opts.no_gtmq_prune || pre.gtmq.is_empty() {
+        return Ok(());
+    }
+    let gtmq_prs = gh::list_prs_by_head_prefix(workspace_root, &opts.gtmq_prefixes, 500)?;
+    for branch in &pre.gtmq {
+        let pr = gtmq_prs.iter().find(|p| p.head_ref_name == branch.name);
+        let action = classify_gtmq_branch(pr);
+        if let CleanupAction::GtmqPruned { .. } = action {
+            let step =
+                crate::ui::Step::start(&format!("Pruning gtmq branch {}", branch.name), verbosity);
+            if opts.dry_run {
+                step.skip("dry-run", None);
+            } else {
+                let _ = jj::delete_bookmark(jj, &branch.name);
+                let _ = jj::delete_remote_branch(workspace_root, &opts.remote, &branch.name);
+                step.success("deleted local + remote", None);
             }
-            (_, _, false) => format!("{} error(s)", rewind_errors.len()),
+        }
+        actions.push((branch.clone(), action));
+    }
+    Ok(())
+}
+
+/// Orphan-restack via `jj rebase` ONLY for bookmarks whose
+/// tracked parent disappeared between the pre-fetch snapshot and
+/// now.
+///
+/// The "disappeared" set covers both:
+///
+///   - Fetch-deletions: jj git fetch propagates remote-side
+///     deletions (post-merge cleanup) to tracked local bookmarks.
+///     By the time we get here those bookmarks are already gone
+///     from the local list.
+///   - Sync-deletions: gt sync --force deletes any merged-PR
+///     bookmarks the fetch missed.
+///
+/// We capture `pre.stacked` + `pre.normal` BEFORE jj git fetch
+/// (see [`snapshot_pre_fetch`]) precisely so both deletion
+/// categories show up in `before - remaining` as one set.
+///
+/// The naive "rebase every remaining bookmark" approach we used
+/// to do here rebases unrelated bookmarks (any time they happened
+/// to live on a non-trunk commit) and was the source of the bug
+/// where `jj-gt fetch` would surprise-rebase an in-flight
+/// unrelated stack entry and sometimes introduce conflicts.
+fn orphan_rebase_phase(
+    jj: &JjCli,
+    pre: &PreFetchSnapshot,
+    opts: &FetchOpts,
+    actions: &mut Vec<(LocalBookmark, CleanupAction)>,
+) -> Result<()> {
+    if opts.no_rebase || opts.dry_run {
+        return Ok(());
+    }
+    let remaining = list_local_bookmarks(jj)?;
+    let remaining_names: BTreeSet<String> = remaining.iter().map(|b| b.name.clone()).collect();
+    let deleted = compute_deleted_set(&pre.normal_names(), &remaining_names);
+
+    for sb in &pre.stacked {
+        let Some(prev_parent) = plan_orphan_rebase(sb, &remaining_names, &deleted) else {
+            continue;
         };
-        if rewind_errors.is_empty() {
-            rewind_step.success(&summary, None);
-        } else {
-            rewind_step.warn(&summary, Some(&rewind_errors.join("\n")));
-        }
-    }
-
-    // 6. gtmq_* pruning.
-    if !opts.no_gtmq_prune && !gtmq.is_empty() {
-        let gtmq_prs = gh::list_prs_by_head_prefix(workspace_root, &opts.gtmq_prefixes, 500)?;
-        for branch in &gtmq {
-            let pr = gtmq_prs.iter().find(|p| p.head_ref_name == branch.name);
-            let action = classify_gtmq_branch(pr);
-            if let CleanupAction::GtmqPruned { .. } = action {
-                let step =
-                    ui::Step::start(&format!("Pruning gtmq branch {}", branch.name), verbosity);
-                if opts.dry_run {
-                    step.skip("dry-run", None);
-                } else {
-                    let _ = jj::delete_bookmark(jj, &branch.name);
-                    let _ = jj::delete_remote_branch(workspace_root, &opts.remote, &branch.name);
-                    step.success("deleted local + remote", None);
-                }
-            }
-            actions.push((branch.clone(), action));
-        }
-    }
-
-    // 7. Orphan-restack via `jj rebase` ONLY for bookmarks whose
-    // tracked parent disappeared between the pre-fetch snapshot and
-    // now. The "disappeared" set covers both:
-    //
-    //   - Fetch-deletions: jj git fetch propagates remote-side
-    //     deletions (post-merge cleanup) to tracked local
-    //     bookmarks. By the time we get here those bookmarks are
-    //     already gone from the local list.
-    //   - Sync-deletions: gt sync --force deletes any merged-PR
-    //     bookmarks the fetch missed.
-    //
-    // We capture pre_sync_stacked + bookmarks_before_sync BEFORE
-    // jj git fetch (see step 0c) precisely so both deletion
-    // categories show up in `before - remaining` as one set.
-    //
-    // The naive "rebase every remaining bookmark" approach we used
-    // to do here rebases unrelated bookmarks (any time they happened
-    // to live on a non-trunk commit) and was the source of the bug
-    // where `jj-gt fetch` would surprise-rebase an in-flight
-    // unrelated stack entry and sometimes introduce conflicts.
-    if !opts.no_rebase && !opts.dry_run {
-        let remaining = list_local_bookmarks(jj)?;
-        let remaining_names: std::collections::BTreeSet<String> =
-            remaining.iter().map(|b| b.name.clone()).collect();
-        let before_names: std::collections::BTreeSet<String> = bookmarks_before_sync
+        // Confirmed orphan: rebase onto trunk.
+        let local = remaining
             .iter()
-            .map(|b| b.name.clone())
-            .collect();
-        // "Disappeared from local bookmarks during the pipeline" —
-        // fetch OR sync, doesn't matter which step deleted them.
-        // The variable retains the historical name because all the
-        // downstream functions (`plan_orphan_rebase`,
-        // `build_orphan_rebase_revset`) accept it under that name.
-        let deleted_during_sync: std::collections::BTreeSet<String> =
-            before_names.difference(&remaining_names).cloned().collect();
+            .find(|b| b.name == sb.name)
+            .cloned()
+            .expect("filtered by remaining_names above");
 
-        for sb in &pre_sync_stacked {
-            let Some(prev_parent) = plan_orphan_rebase(sb, &remaining_names, &deleted_during_sync)
-            else {
-                continue;
-            };
-            // Confirmed orphan: rebase onto trunk.
-            let local = remaining
-                .iter()
-                .find(|b| b.name == sb.name)
-                .cloned()
-                .expect("filtered by remaining_names above");
+        // Look up the deleted parent's pre-sync commit id so we
+        // can use it as the lower bound of the rebase revset.
+        // The parent's bookmark is gone, but the commit object
+        // sticks around until jj's GC runs.
+        let parent_commit = pre
+            .normal
+            .iter()
+            .find(|b| b.name == prev_parent)
+            .map(|b| b.commit_id.clone());
 
-            // Look up the deleted parent's pre-sync commit id so we
-            // can use it as the lower bound of the rebase revset.
-            // The parent's bookmark is gone, but the commit object
-            // sticks around until jj's GC runs.
-            let parent_commit = bookmarks_before_sync
-                .iter()
-                .find(|b| b.name == prev_parent)
-                .map(|b| b.commit_id.clone());
+        let rebase_revset = match parent_commit.as_deref() {
+            Some(commit) => build_orphan_rebase_revset(commit, &sb.name),
+            None => {
+                // Defensive fallback. We snapshotted pre.normal
+                // from list_local_bookmarks ourselves so a miss
+                // here would mean the parent bookmark exists in
+                // the stack graph but not in the bookmark list —
+                // shouldn't happen, but if it does, fall back to
+                // the bookmark-only revset and accept that multi-
+                // commit stacks may only move their tip.
+                sb.name.clone()
+            }
+        };
 
-            let rebase_revset = match parent_commit.as_deref() {
-                Some(commit) => build_orphan_rebase_revset(commit, &sb.name),
-                None => {
-                    // Defensive fallback. We snapshotted
-                    // bookmarks_before_sync from list_local_bookmarks
-                    // ourselves so a miss here would mean the parent
-                    // bookmark exists in the stack graph but not in
-                    // the bookmark list — shouldn't happen, but if
-                    // it does, fall back to the bookmark-only revset
-                    // and accept that multi-commit stacks may only
-                    // move their tip.
-                    sb.name.clone()
-                }
-            };
-
-            match jj::rebase(jj, &rebase_revset, &opts.trunk) {
-                Ok(jj::RebaseOutcome::Clean) | Ok(jj::RebaseOutcome::NoOp) => {
-                    actions.push((
-                        local,
-                        CleanupAction::Rebased {
-                            onto: opts.trunk.clone(),
-                            prev_parent,
-                        },
-                    ));
-                }
-                Ok(jj::RebaseOutcome::Conflicted { message }) => {
-                    actions.push((
-                        local,
-                        CleanupAction::RebaseConflicted {
-                            onto: opts.trunk.clone(),
-                            prev_parent,
-                            message,
-                        },
-                    ));
-                }
-                Err(e) => {
-                    // Hard rebase failure (e.g. immutable commit) —
-                    // surface as a conflicted action so it's at
-                    // least visible in the output rather than silently
-                    // swallowed.
-                    actions.push((
-                        local,
-                        CleanupAction::RebaseConflicted {
-                            onto: opts.trunk.clone(),
-                            prev_parent,
-                            message: format!("jj rebase failed: {e}"),
-                        },
-                    ));
-                }
+        match jj::rebase(jj, &rebase_revset, &opts.trunk) {
+            Ok(jj::RebaseOutcome::Clean) | Ok(jj::RebaseOutcome::NoOp) => {
+                actions.push((
+                    local,
+                    CleanupAction::Rebased {
+                        onto: opts.trunk.clone(),
+                        prev_parent,
+                    },
+                ));
+            }
+            Ok(jj::RebaseOutcome::Conflicted { message }) => {
+                actions.push((
+                    local,
+                    CleanupAction::RebaseConflicted {
+                        onto: opts.trunk.clone(),
+                        prev_parent,
+                        message,
+                    },
+                ));
+            }
+            Err(e) => {
+                // Hard rebase failure (e.g. immutable commit) —
+                // surface as a conflicted action so it's at
+                // least visible in the output rather than silently
+                // swallowed.
+                actions.push((
+                    local,
+                    CleanupAction::RebaseConflicted {
+                        onto: opts.trunk.clone(),
+                        prev_parent,
+                        message: format!("jj rebase failed: {e}"),
+                    },
+                ));
             }
         }
     }
+    Ok(())
+}
 
-    Ok(actions)
+/// Pure set-arithmetic helper for the orphan-rebase deleted-set.
+/// Returns the set of names present in `before` but absent from
+/// `after`. Made a named function so a unit test can pin the
+/// semantics — `before - after` covers BOTH fetch-deletions and
+/// sync-deletions because `before` is the pre-fetch snapshot and
+/// `after` is the post-sync snapshot.
+pub fn compute_deleted_set(
+    before: &BTreeSet<String>,
+    after: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    before.difference(after).cloned().collect()
 }
 
 /// Plan a single orphan rebase: returns `Some((bookmark, parent))`
