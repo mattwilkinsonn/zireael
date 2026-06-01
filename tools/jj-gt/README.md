@@ -192,14 +192,18 @@ the common `jj-gt` flows are reachable from inside the TUI:
 | Action | Default key | What it does |
 | --- | --- | --- |
 | `jj-gt-submit-selected` | `x s` | Submit the bookmark at the focused commit (`jj-gt submit -r context.commit_id()`) |
-| `jj-gt-submit` | `x S` | Submit every bookmark on the @-ancestor stack (`jj-gt submit`) |
 | `jj-gt-fetch` | `x f` | Run the Graphite-aware fetch + cleanup pipeline (`jj-gt fetch`) |
 | `jj-gt-track-selected` | `x t` | Sync `refs/branch-metadata/*` for the focused bookmark (`jj-gt track -r context.commit_id()`) |
+| `jj-gt-submit` | `x S` | Submit every bookmark on the @-ancestor stack (`jj-gt submit`) |
 | `jj-gt-track` | `x T` | Sync metadata refs for every bookmark on the stack (`jj-gt track`) |
 | `jj-gt-reconcile` | `x r` | Re-track adjacent diverged bookmarks + push rebased SHAs (`jj-gt reconcile`) |
 
-Lowercase = focused-bookmark-only (the common case). Uppercase = whole
-stack. Same lowercase/uppercase split jj-hp uses for `x p`/`x P`.
+Order matters: jjui's `x`-prefix overlay surfaces candidates in the
+order they appear in the config, so the most-frequent actions
+(submit-selected, fetch, track-selected) land at the top of the
+menu and the recovery/whole-stack flows further down. Lowercase =
+focused-bookmark-only. Uppercase = whole stack. Same lowercase/
+uppercase split jj-hp uses for `x p`/`x P`.
 
 The selected variants use `-r context.commit_id()` rather than
 `-b <name>` because jjui's lua context exposes the focused commit's ID
@@ -212,13 +216,6 @@ If you'd rather hand-edit `~/.config/jjui/config.toml` instead of
 running `jj-gt init`, append:
 
 ```toml
-[[actions]]
-name = "jj-gt-submit"
-lua = """
-  jj_async("util", "exec", "--", "jj-gt", "submit")
-  revisions.refresh()
-"""
-
 [[actions]]
 name = "jj-gt-submit-selected"
 lua = """
@@ -234,16 +231,23 @@ lua = """
 """
 
 [[actions]]
-name = "jj-gt-track"
+name = "jj-gt-track-selected"
 lua = """
-  jj_async("util", "exec", "--", "jj-gt", "track")
+  jj_async("util", "exec", "--", "jj-gt", "track", "-r", context.commit_id())
   revisions.refresh()
 """
 
 [[actions]]
-name = "jj-gt-track-selected"
+name = "jj-gt-submit"
 lua = """
-  jj_async("util", "exec", "--", "jj-gt", "track", "-r", context.commit_id())
+  jj_async("util", "exec", "--", "jj-gt", "submit")
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-track"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "track")
   revisions.refresh()
 """
 
@@ -253,12 +257,6 @@ lua = """
   jj_async("util", "exec", "--", "jj-gt", "reconcile")
   revisions.refresh()
 """
-
-[[bindings]]
-action = "jj-gt-submit"
-seq = ["x", "S"]
-scope = "revisions"
-desc = "jj-gt submit (whole stack)"
 
 [[bindings]]
 action = "jj-gt-submit-selected"
@@ -273,16 +271,22 @@ scope = "revisions"
 desc = "jj-gt fetch"
 
 [[bindings]]
-action = "jj-gt-track"
-seq = ["x", "T"]
-scope = "revisions"
-desc = "jj-gt track (whole stack)"
-
-[[bindings]]
 action = "jj-gt-track-selected"
 seq = ["x", "t"]
 scope = "revisions"
 desc = "jj-gt track selected bookmark(s)"
+
+[[bindings]]
+action = "jj-gt-submit"
+seq = ["x", "S"]
+scope = "revisions"
+desc = "jj-gt submit (whole stack)"
+
+[[bindings]]
+action = "jj-gt-track"
+seq = ["x", "T"]
+scope = "revisions"
+desc = "jj-gt track (whole stack)"
 
 [[bindings]]
 action = "jj-gt-reconcile"

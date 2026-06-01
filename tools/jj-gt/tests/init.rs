@@ -187,6 +187,55 @@ fn apply_writes_jjui_config_when_requested() {
 }
 
 #[test]
+fn add_jjui_actions_orders_by_frequency() {
+    // The menu order matters: jjui's `x`-prefix overlay surfaces
+    // candidates top-down in the order they appear in the config.
+    // Most-frequent operations first so the muscle-memory keystroke
+    // is the shortest path through the menu.
+    //
+    // Pin the order here so a future reshuffle has to update both
+    // the SPECS array in init.rs AND this explicit list.
+    let (output, _) = add_jjui_actions("").unwrap();
+    let parsed: toml::Table = output.parse().unwrap();
+    let action_order: Vec<&str> = parsed["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
+        .collect();
+    assert_eq!(
+        action_order,
+        vec![
+            "jj-gt-submit-selected", // daily ship-my-bookmark
+            "jj-gt-fetch",           // sync trunk + cleanup
+            "jj-gt-track-selected",  // recovery for a single bookmark
+            "jj-gt-submit",          // whole-stack submit (less common)
+            "jj-gt-track",           // whole-stack track
+            "jj-gt-reconcile",       // last-resort recovery
+        ],
+        "action order in SPECS drifted from frequency-ordered list",
+    );
+    let binding_order: Vec<&str> = parsed["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.get("action").and_then(|n| n.as_str()))
+        .collect();
+    assert_eq!(
+        binding_order,
+        vec![
+            "jj-gt-submit-selected",
+            "jj-gt-fetch",
+            "jj-gt-track-selected",
+            "jj-gt-submit",
+            "jj-gt-track",
+            "jj-gt-reconcile",
+        ],
+        "binding order in SPECS drifted from frequency-ordered list",
+    );
+}
+
+#[test]
 fn scripted_prompter_runs_out_of_answers_errors() {
     let mut p = ScriptedPrompter::new(vec![]);
     let res = p.confirm("anything?", true);
@@ -197,15 +246,13 @@ fn scripted_prompter_runs_out_of_answers_errors() {
 fn readme_toml_matches_generated_jjui_config() {
     // Drift guard: the README's "If you'd rather hand-edit ..."
     // TOML block must mirror what `add_jjui_actions("")` produces.
-    // Reads tools/jj-gt/README.md from the workspace root,
-    // extracts the first ```toml fenced block, parses it, and
-    // asserts every (action_name, seq) pair appears in both the
-    // README's TOML and the generated config.
-    //
-    // We assert SUBSET, not strict equality, because the README
-    // is hand-written prose-formatted TOML and the generated
-    // pretty-printed output may differ in field order or
-    // whitespace.
+    // Asserts both the set of (action_name, seq) pairs AND the
+    // order they appear in. Ordering matters because jjui's
+    // `x`-prefix overlay surfaces candidates in the order they
+    // appear in the config; reordering the SPECS array in the
+    // code without updating the README would silently produce
+    // different menu sort orders for the two install paths
+    // (auto via `jj-gt init` vs hand-paste from README).
     let readme_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md");
     let readme = std::fs::read_to_string(&readme_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", readme_path.display()));
@@ -226,14 +273,15 @@ fn readme_toml_matches_generated_jjui_config() {
     let readme_parsed: toml::Table = readme_toml
         .parse()
         .unwrap_or_else(|e| panic!("parse README TOML: {e}\n---\n{readme_toml}\n---"));
-    let readme_actions: std::collections::BTreeSet<&str> = readme_parsed
+
+    let readme_action_order: Vec<&str> = readme_parsed
         .get("actions")
         .and_then(|v| v.as_array())
         .expect("README TOML has no [[actions]]")
         .iter()
         .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
         .collect();
-    let readme_bindings: std::collections::BTreeMap<&str, Vec<&str>> = readme_parsed
+    let readme_binding_order: Vec<(&str, Vec<&str>)> = readme_parsed
         .get("bindings")
         .and_then(|v| v.as_array())
         .expect("README TOML has no [[bindings]]")
@@ -253,35 +301,35 @@ fn readme_toml_matches_generated_jjui_config() {
     // Generate the canonical config from an empty input.
     let (generated, _) = add_jjui_actions("").unwrap();
     let generated_parsed: toml::Table = generated.parse().unwrap();
-    let generated_actions: std::collections::BTreeSet<&str> = generated_parsed["actions"]
+    let generated_action_order: Vec<&str> = generated_parsed["actions"]
         .as_array()
         .unwrap()
         .iter()
         .filter_map(|v| v.get("name").and_then(|n| n.as_str()))
         .collect();
-    let generated_bindings: std::collections::BTreeMap<&str, Vec<&str>> =
-        generated_parsed["bindings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|v| {
-                let action = v.get("action").and_then(|n| n.as_str())?;
-                let seq: Vec<&str> = v
-                    .get("seq")
-                    .and_then(|n| n.as_array())?
-                    .iter()
-                    .filter_map(|s| s.as_str())
-                    .collect();
-                Some((action, seq))
-            })
-            .collect();
+    let generated_binding_order: Vec<(&str, Vec<&str>)> = generated_parsed["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| {
+            let action = v.get("action").and_then(|n| n.as_str())?;
+            let seq: Vec<&str> = v
+                .get("seq")
+                .and_then(|n| n.as_array())?
+                .iter()
+                .filter_map(|s| s.as_str())
+                .collect();
+            Some((action, seq))
+        })
+        .collect();
 
     assert_eq!(
-        readme_actions, generated_actions,
-        "README action names drifted from generated config",
+        readme_action_order, generated_action_order,
+        "README action ORDER drifted from generated config (jjui menu sort \
+         order will differ between auto-install and copy/paste)",
     );
     assert_eq!(
-        readme_bindings, generated_bindings,
-        "README bindings drifted from generated config",
+        readme_binding_order, generated_binding_order,
+        "README binding ORDER drifted from generated config",
     );
 }
