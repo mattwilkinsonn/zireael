@@ -183,6 +183,118 @@ Dynamic completers TAB-expand bookmark and remote names by shelling
 back into `jj-gt` with `COMPLETE=<shell>` set — no jj working-copy
 snapshot per keypress (uses `--ignore-working-copy`).
 
+## jjui integration
+
+`jj-gt init` walks you through a one-time setup that installs six
+[jjui](https://github.com/idursun/jjui) actions + keybindings so
+the common `jj-gt` flows are reachable from inside the TUI:
+
+| Action | Default key | What it does |
+| --- | --- | --- |
+| `jj-gt-submit-selected` | `x s` | Submit the bookmark at the focused commit (`jj-gt submit -r context.commit_id()`) |
+| `jj-gt-submit` | `x S` | Submit every bookmark on the @-ancestor stack (`jj-gt submit`) |
+| `jj-gt-fetch` | `x f` | Run the Graphite-aware fetch + cleanup pipeline (`jj-gt fetch`) |
+| `jj-gt-track-selected` | `x t` | Sync `refs/branch-metadata/*` for the focused bookmark (`jj-gt track -r context.commit_id()`) |
+| `jj-gt-track` | `x T` | Sync metadata refs for every bookmark on the stack (`jj-gt track`) |
+| `jj-gt-reconcile` | `x r` | Re-track adjacent diverged bookmarks + push rebased SHAs (`jj-gt reconcile`) |
+
+Lowercase = focused-bookmark-only (the common case). Uppercase = whole
+stack. Same lowercase/uppercase split jj-hp uses for `x p`/`x P`.
+
+The selected variants use `-r context.commit_id()` rather than
+`-b <name>` because jjui's lua context exposes the focused commit's ID
+but not its bookmark name(s). jj-gt's own resolver finds the
+bookmark(s) at that commit; if the commit has zero bookmarks, jj-gt
+errors clearly; if multiple, the multi-stack fan-out submits each
+independently.
+
+If you'd rather hand-edit `~/.config/jjui/config.toml` instead of
+running `jj-gt init`, append:
+
+```toml
+[[actions]]
+name = "jj-gt-submit"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "submit")
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-submit-selected"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "submit", "-r", context.commit_id())
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-fetch"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "fetch")
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-track"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "track")
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-track-selected"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "track", "-r", context.commit_id())
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-gt-reconcile"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "reconcile")
+  revisions.refresh()
+"""
+
+[[bindings]]
+action = "jj-gt-submit"
+seq = ["x", "S"]
+scope = "revisions"
+desc = "jj-gt submit (whole stack)"
+
+[[bindings]]
+action = "jj-gt-submit-selected"
+seq = ["x", "s"]
+scope = "revisions"
+desc = "jj-gt submit selected bookmark(s)"
+
+[[bindings]]
+action = "jj-gt-fetch"
+seq = ["x", "f"]
+scope = "revisions"
+desc = "jj-gt fetch"
+
+[[bindings]]
+action = "jj-gt-track"
+seq = ["x", "T"]
+scope = "revisions"
+desc = "jj-gt track (whole stack)"
+
+[[bindings]]
+action = "jj-gt-track-selected"
+seq = ["x", "t"]
+scope = "revisions"
+desc = "jj-gt track selected bookmark(s)"
+
+[[bindings]]
+action = "jj-gt-reconcile"
+seq = ["x", "r"]
+scope = "revisions"
+desc = "jj-gt reconcile"
+```
+
+The `revisions.refresh()` after each `jj_async` repaints jjui's
+revisions pane so the post-submit bookmark moves are visible
+immediately.
+
 ## How parent derivation works
 
 For each selected bookmark `B`, jj-gt asks jj which other bookmark sits

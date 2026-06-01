@@ -501,3 +501,74 @@ desc = "my custom push key"
         .unwrap_or("");
     assert_eq!(desc, "my custom push key");
 }
+
+#[test]
+fn readme_toml_matches_generated_jjui_config() {
+    // Drift guard: the README's jjui-integration TOML block must
+    // mirror what `add_jjui_actions("")` produces. If the README
+    // claims `x p` for `jj-hp-push-selected` but the code installs
+    // something different, this fails loudly.
+    //
+    // The README has multiple ```toml blocks (config snippets for
+    // other features); we grab the FIRST one because that's the
+    // one the new section adds. Future shuffles that move the
+    // jjui block past index 0 will need to update this test.
+    let readme_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md");
+    let readme = std::fs::read_to_string(&readme_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", readme_path.display()));
+
+    let start_marker = "```toml\n";
+    let start = readme
+        .find(start_marker)
+        .expect("no ```toml block in README");
+    let body_start = start + start_marker.len();
+    let end = readme[body_start..]
+        .find("\n```")
+        .expect("toml block has no closing fence");
+    let readme_toml = &readme[body_start..body_start + end];
+
+    let readme_parsed: toml::Table = readme_toml
+        .parse()
+        .unwrap_or_else(|e| panic!("parse README TOML: {e}\n---\n{readme_toml}\n---"));
+
+    let readme_bindings: std::collections::BTreeMap<&str, Vec<&str>> = readme_parsed
+        .get("bindings")
+        .and_then(|v| v.as_array())
+        .expect("README TOML has no [[bindings]]")
+        .iter()
+        .filter_map(|v| {
+            let action = v.get("action").and_then(|n| n.as_str())?;
+            let seq: Vec<&str> = v
+                .get("seq")
+                .and_then(|n| n.as_array())?
+                .iter()
+                .filter_map(|s| s.as_str())
+                .collect();
+            Some((action, seq))
+        })
+        .collect();
+
+    let (generated, _) = add_jjui_actions("").unwrap();
+    let generated_parsed: toml::Table = generated.parse().unwrap();
+    let generated_bindings: std::collections::BTreeMap<&str, Vec<&str>> =
+        generated_parsed["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| {
+                let action = v.get("action").and_then(|n| n.as_str())?;
+                let seq: Vec<&str> = v
+                    .get("seq")
+                    .and_then(|n| n.as_array())?
+                    .iter()
+                    .filter_map(|s| s.as_str())
+                    .collect();
+                Some((action, seq))
+            })
+            .collect();
+
+    assert_eq!(
+        readme_bindings, generated_bindings,
+        "README bindings drifted from generated config",
+    );
+}
