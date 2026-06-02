@@ -177,24 +177,31 @@ pub fn run_pre_push_stack(
                 // the spinner row and print the final line in the
                 // correct color above any still-running rows.
                 //
-                // For failures, hand the captured output to the
-                // tracker so it dumps the buffer between the
+                // For Failed / Fixup, hand the captured output to
+                // the tracker so it dumps the buffer between the
                 // completion line and the still-running spinner
                 // block — immediate signal, no waiting for the
-                // post-run replay. Pass `None` for non-failure
-                // outcomes; the tracker only renders the dump for
-                // `FinishedStatus::Failed`.
+                // post-run summary. Passed / Cancelled have
+                // nothing actionable to show, so pass `None`.
                 let status = if outcome.cancelled {
                     crate::progress::FinishedStatus::Cancelled
-                } else if outcome.success {
-                    crate::progress::FinishedStatus::Passed
-                } else {
+                } else if !outcome.success {
                     crate::progress::FinishedStatus::Failed
-                };
-                let captured = if status == crate::progress::FinishedStatus::Failed {
-                    outcome.captured_output.as_deref()
+                } else if outcome.fixup_commit.is_some() {
+                    // success=true + fixup_commit=Some means a hook
+                    // (e.g. cargo fmt) rewrote files and the retry
+                    // run came back clean. The bookmark still can't
+                    // proceed (the user has to squash the fixup
+                    // commit), so surface the rewrite output here.
+                    crate::progress::FinishedStatus::Fixup
                 } else {
-                    None
+                    crate::progress::FinishedStatus::Passed
+                };
+                let captured = match status {
+                    crate::progress::FinishedStatus::Failed
+                    | crate::progress::FinishedStatus::Fixup => outcome.captured_output.as_deref(),
+                    crate::progress::FinishedStatus::Passed
+                    | crate::progress::FinishedStatus::Cancelled => None,
                 };
                 tracker.finished(&update.bookmark, status, captured);
             };
@@ -286,10 +293,10 @@ pub fn run_pre_push_stack(
     }
 
     // Anything classified as Failed or Fixup means the submit
-    // can't proceed. Render the per-screen summary + replay the
-    // captured output of just the failed bookmarks at the bottom
-    // (the user is already looking there), then return a single
-    // error naming the first failure.
+    // can't proceed. Render the per-bookmark status summary table
+    // (the captured output was already dumped in-band by the
+    // tracker at completion time — see `Tracker::finished`), then
+    // return a single error naming the first failure.
     let bad_count = classified
         .iter()
         .filter(|(_, r)| {

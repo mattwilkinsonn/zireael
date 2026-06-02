@@ -150,53 +150,72 @@ impl Tracker {
     /// Mark a bookmark as finished. Removes it from the active set
     /// (so the next frame stops drawing its row), prints the final
     /// status line above the spinner, and — when `status` is
-    /// `Failed` and `captured` is non-empty — dumps the captured
-    /// output between the status line and the still-running
-    /// spinner block. The dump lands at exactly the moment of
-    /// failure so the user gets actionable signal without waiting
-    /// for sibling bookmarks to drain (which can be 30-60s on a
-    /// cold cargo cache).
+    /// `Failed` or `Fixup` and `captured` is non-empty — dumps the
+    /// captured output between the status line and the still-
+    /// running spinner block. The dump lands at exactly the moment
+    /// of completion so the user gets actionable signal without
+    /// waiting for sibling bookmarks to drain (which can be 30-60s
+    /// on a cold cargo cache).
     ///
     /// Passing `None` for `captured` is the right call when:
-    ///   - `status != Failed` (nothing to dump),
-    ///   - status IS Failed but the failure shape doesn't produce
+    ///   - `status` is `Passed` / `Cancelled` (nothing to dump),
+    ///   - status IS Failed / Fixup but the runner didn't produce
     ///     a captured buffer (e.g. a spawn error before the runner
-    ///     started). The completion line stands alone in that case.
+    ///     started, or a sequential run that streamed live). The
+    ///     completion line stands alone in that case.
     pub fn finished(&self, bookmark: &str, status: FinishedStatus, captured: Option<&str>) {
         let line = render_completion_line(bookmark, status);
-        let should_dump =
-            status == FinishedStatus::Failed && captured.is_some_and(|c| !c.trim().is_empty());
+        let kind = match status {
+            FinishedStatus::Failed => Some("failure output"),
+            FinishedStatus::Fixup => Some("autofix output"),
+            FinishedStatus::Passed | FinishedStatus::Cancelled => None,
+        };
+        let dump_payload = kind.and_then(|k| {
+            captured
+                .filter(|c| !c.trim().is_empty())
+                .map(|c| (k, c.to_owned()))
+        });
 
         // Non-TTY: print line + dump synchronously, no clear-and-
         // redraw protocol needed (there's no spinner block to
         // erase).
         if self.renderer.is_none() {
-            eprintln!("{line}");
-            if should_dump {
-                dump_failure_block(bookmark, captured.unwrap());
+            let mut err = std::io::stderr().lock();
+            let _ = writeln!(err, "{line}");
+            if let Some((k, c)) = dump_payload.as_ref() {
+                write_failure_block(&mut err, bookmark, k, c);
             }
             return;
         }
 
-        let mut state = self.state.lock().unwrap();
-        if let Some(pos) = state.running.iter().position(|e| e.label == bookmark) {
-            state.running.remove(pos);
+        // TTY path: clear the spinner block + print the completion
+        // line under the state lock so a concurrent render-tick
+        // doesn't interleave with the clear/print pair. Release the
+        // lock BEFORE writing the captured buffer — captured output
+        // can be tens of KB (compiler diagnostics, lint diffs) and
+        // we don't want to block the renderer thread or other
+        // workers' `finished` calls behind the dump's terminal I/O.
+        // The renderer will redraw the running set on its next tick
+        // because `lines_drawn` has already been reset to zero.
+        {
+            let mut state = self.state.lock().unwrap();
+            if let Some(pos) = state.running.iter().position(|e| e.label == bookmark) {
+                state.running.remove(pos);
+            }
+            let mut err = std::io::stderr().lock();
+            clear_block(&mut err, state.lines_drawn);
+            let _ = writeln!(err, "{line}");
+            let _ = err.flush();
+            // Reset BEFORE releasing the lock so any concurrent
+            // render-tick that races in next sees an empty erase
+            // budget rather than trying to erase the lines we just
+            // emitted as the completion line + (about-to-be) dump.
+            state.lines_drawn = 0;
         }
-        // Wipe the current spinner block, print the completion
-        // line + (if failure) the captured output, then let the
-        // next render-tick redraw the still-running rows below
-        // everything we just emitted.
-        clear_block(&mut std::io::stderr(), state.lines_drawn);
-        let mut err = std::io::stderr();
-        let _ = writeln!(err, "{line}");
-        if should_dump {
-            dump_failure_block(bookmark, captured.unwrap());
+        if let Some((k, c)) = dump_payload.as_ref() {
+            let mut err = std::io::stderr().lock();
+            write_failure_block(&mut err, bookmark, k, c);
         }
-        let _ = err.flush();
-        // After the wipe the next render-tick will redraw the
-        // running set from scratch — set lines_drawn to 0 so it
-        // doesn't try to erase the bookmarks we just cleared.
-        state.lines_drawn = 0;
     }
 
     /// Stop the renderer thread and wait for it to exit. Safe to
@@ -238,13 +257,16 @@ impl Default for Tracker {
 }
 
 /// Outcome a worker reports when a bookmark finishes. Mirrors the
-/// three states the existing `progress` callback in
-/// `jj_gt::hooks::run_pre_push_stack` already handles — kept here
-/// so the tracker owns the line formatting in one place.
+/// states `jj_gt::hooks::run_pre_push_stack` already classifies —
+/// kept here so the tracker owns the line formatting in one place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FinishedStatus {
     Passed,
     Failed,
+    /// Runner modified files (post-fix or autofix). Output is dumped
+    /// in-band with an "autofix output" header so the user can see
+    /// what was rewritten without waiting for the post-run summary.
+    Fixup,
     Cancelled,
 }
 
@@ -257,6 +279,10 @@ fn render_completion_line(bookmark: &str, status: FinishedStatus) -> String {
         FinishedStatus::Failed => format!(
             "  {}     {bookmark}",
             "FAILED".if_supports_color(Stream::Stderr, |s| s.red())
+        ),
+        FinishedStatus::Fixup => format!(
+            "  {}    {bookmark}",
+            "AUTOFIX".if_supports_color(Stream::Stderr, |s| s.yellow())
         ),
         FinishedStatus::Cancelled => format!(
             "  {}  {bookmark} (sibling failed)",
@@ -322,7 +348,7 @@ fn render_loop(state: Arc<Mutex<State>>, stop: Arc<AtomicBool>) {
 /// the now-empty block. Bails on the first write failure (terminal
 /// closed mid-run) — there's no recovery path so silently dropping
 /// matches what `eprintln!` does on a write error.
-fn clear_block(err: &mut std::io::Stderr, n: usize) {
+fn clear_block(err: &mut dyn Write, n: usize) {
     for _ in 0..n {
         if write!(err, "\x1b[1A\r\x1b[2K").is_err() {
             return;
@@ -331,26 +357,31 @@ fn clear_block(err: &mut std::io::Stderr, n: usize) {
     let _ = err.flush();
 }
 
-/// Print a captured-output block for a failed bookmark with a
-/// visible header/footer fence so the user can scan back through
-/// the scrollback and find the start of a particular bookmark's
-/// failure quickly.
+/// Print a captured-output block for a failed or autofix bookmark
+/// with a visible header/footer fence so the user can scan back
+/// through the scrollback and find the start of a particular
+/// bookmark's output quickly.
+///
+/// `kind` is rendered into the header fence and is used to tell
+/// `failure output` from `autofix output` apart in the scrollback.
+/// Writes to `out` (production passes a locked `stderr`); tests
+/// route to a `Vec<u8>` so they can assert on the output without
+/// spinning up a terminal.
 ///
 /// The block format matches `render_failure_report`'s historical
 /// shape so users who got used to the post-run replay see the
 /// same fence in the mid-run dump. Once the mid-run dump is the
 /// only place the captured output appears, the post-run report
 /// is just a summary table (one line per bookmark).
-fn dump_failure_block(bookmark: &str, captured: &str) {
-    let mut err = std::io::stderr();
-    let _ = writeln!(err, "--- {bookmark} (failure output) ---");
-    let _ = err.write_all(captured.as_bytes());
+fn write_failure_block(out: &mut dyn Write, bookmark: &str, kind: &str, captured: &str) {
+    let _ = writeln!(out, "--- {bookmark} ({kind}) ---");
+    let _ = out.write_all(captured.as_bytes());
     if !captured.ends_with('\n') {
-        let _ = writeln!(err);
+        let _ = writeln!(out);
     }
-    let _ = writeln!(err, "--- end {bookmark} ---");
-    let _ = writeln!(err);
-    let _ = err.flush();
+    let _ = writeln!(out, "--- end {bookmark} ---");
+    let _ = writeln!(out);
+    let _ = out.flush();
 }
 
 #[cfg(test)]
@@ -375,6 +406,12 @@ mod tests {
             !render_completion_line("foo", FinishedStatus::Failed).contains("full output below"),
             "completion line should not promise a deferred replay anymore",
         );
+        // Fixup is the new "success but file rewrite" status —
+        // distinct word + color from Failed so the user can tell
+        // at a glance which bookmarks need a squash vs which need
+        // a full re-run.
+        assert!(render_completion_line("foo", FinishedStatus::Fixup).contains("AUTOFIX"));
+        assert!(render_completion_line("foo", FinishedStatus::Fixup).contains("foo"));
         assert!(render_completion_line("foo", FinishedStatus::Cancelled).contains("cancelled"));
         assert!(
             render_completion_line("foo", FinishedStatus::Cancelled).contains("sibling failed")
@@ -390,8 +427,14 @@ mod tests {
         let t = Tracker::new();
         t.started("alpha");
         t.started("beta");
+        t.started("gamma");
         t.finished("alpha", FinishedStatus::Passed, None);
-        t.finished("beta", FinishedStatus::Failed, None);
+        t.finished("beta", FinishedStatus::Failed, Some("cargo error E0308\n"));
+        t.finished(
+            "gamma",
+            FinishedStatus::Fixup,
+            Some("fmt rewrote 2 files\n"),
+        );
         t.finish();
     }
 
@@ -415,7 +458,12 @@ mod tests {
         // used to print, so users who know to look for "--- <name>"
         // in their scrollback still find it.
         let mut buf: Vec<u8> = Vec::new();
-        write_failure_block_to(&mut buf, "sea-559", "Diff in foo.rs:\n-extra\n");
+        write_failure_block(
+            &mut buf,
+            "sea-559",
+            "failure output",
+            "Diff in foo.rs:\n-extra\n",
+        );
         let out = String::from_utf8(buf).unwrap();
         assert!(
             out.contains("--- sea-559 (failure output) ---"),
@@ -432,31 +480,31 @@ mod tests {
     }
 
     #[test]
+    fn dump_failure_block_renders_autofix_kind_in_header() {
+        // The same helper serves Failed (failure output) and Fixup
+        // (autofix output). Pin the kind label so a future tweak
+        // to the enum doesn't silently lose the distinction.
+        let mut buf: Vec<u8> = Vec::new();
+        write_failure_block(&mut buf, "sea-559", "autofix output", "fmt wrote 2 files\n");
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("--- sea-559 (autofix output) ---"),
+            "header should carry the autofix kind: {out:?}",
+        );
+    }
+
+    #[test]
     fn dump_failure_block_appends_newline_when_capture_lacks_one() {
         // Same trailing-newline contract the old report had: even
         // if the captured buffer didn't end with '\n', the footer
         // fence must land on its own line.
         let mut buf: Vec<u8> = Vec::new();
-        write_failure_block_to(&mut buf, "sea-559", "no trailing newline");
+        write_failure_block(&mut buf, "sea-559", "failure output", "no trailing newline");
         let out = String::from_utf8(buf).unwrap();
         let end_pos = out.find("--- end sea-559 ---").unwrap();
         assert!(
             out[..end_pos].ends_with('\n'),
             "fence ran on the same line as the captured content: {out:?}",
         );
-    }
-
-    /// Test-only helper that mirrors `dump_failure_block` but writes
-    /// to an arbitrary `Write` sink. Production code uses
-    /// `dump_failure_block` (which writes to stderr directly); tests
-    /// route to a buffer so they can assert on the output.
-    fn write_failure_block_to(out: &mut impl std::io::Write, bookmark: &str, captured: &str) {
-        let _ = writeln!(out, "--- {bookmark} (failure output) ---");
-        let _ = out.write_all(captured.as_bytes());
-        if !captured.ends_with('\n') {
-            let _ = writeln!(out);
-        }
-        let _ = writeln!(out, "--- end {bookmark} ---");
-        let _ = writeln!(out);
     }
 }
