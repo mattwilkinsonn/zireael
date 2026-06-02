@@ -188,33 +188,47 @@ impl Tracker {
             return;
         }
 
-        // TTY path: clear the spinner block + print the completion
-        // line under the state lock so a concurrent render-tick
-        // doesn't interleave with the clear/print pair. Release the
-        // lock BEFORE writing the captured buffer — captured output
-        // can be tens of KB (compiler diagnostics, lint diffs) and
-        // we don't want to block the renderer thread or other
-        // workers' `finished` calls behind the dump's terminal I/O.
-        // The renderer will redraw the running set on its next tick
-        // because `lines_drawn` has already been reset to zero.
+        // TTY path. Two locks at play here:
+        //   1. `stderr().lock()` — keeps the renderer thread (and
+        //      any concurrent worker) from interleaving its own
+        //      writes between this worker's clear_block, completion
+        //      line, and (optionally) failure dump. Held for the
+        //      whole atomic visual unit.
+        //   2. `self.state` — guards `state.running` and
+        //      `state.lines_drawn` against concurrent worker /
+        //      renderer access. Held only long enough to remove
+        //      this bookmark from the running set and reset
+        //      `lines_drawn` to zero so the next render-tick
+        //      doesn't try to erase the lines we just emitted.
+        //
+        // The state lock is released BEFORE the captured-output
+        // dump even when one is present — captured buffers can be
+        // tens of KB (compiler diagnostics, lint diffs) and we
+        // don't want other workers' `finished` calls or the
+        // renderer's state snapshot to wait behind that terminal
+        // I/O. The stderr lock is held across the dump regardless,
+        // because the visual contract is "completion line + dump
+        // appear back-to-back, attached to each other"; a render-
+        // tick or a sibling worker's completion line landing
+        // between them would break that.
+        let mut err = std::io::stderr().lock();
         {
             let mut state = self.state.lock().unwrap();
             if let Some(pos) = state.running.iter().position(|e| e.label == bookmark) {
                 state.running.remove(pos);
             }
-            let mut err = std::io::stderr().lock();
             clear_block(&mut err, state.lines_drawn);
             let _ = writeln!(err, "{line}");
-            let _ = err.flush();
-            // Reset BEFORE releasing the lock so any concurrent
+            // Reset BEFORE releasing the state lock so any concurrent
             // render-tick that races in next sees an empty erase
             // budget rather than trying to erase the lines we just
             // emitted as the completion line + (about-to-be) dump.
             state.lines_drawn = 0;
         }
         if let Some((k, c)) = dump_payload.as_ref() {
-            let mut err = std::io::stderr().lock();
             write_failure_block(&mut err, bookmark, k, c);
+        } else {
+            let _ = err.flush();
         }
     }
 
