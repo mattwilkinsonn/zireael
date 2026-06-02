@@ -68,7 +68,7 @@ machine I use:
 | mattserver | x86_64 NixOS | ZFS backup target + actions runners + gaming | `nixosConfigurations.mattserver` |
 | mattpc-wsl | x86_64 NixOS (WSL2) | Windows-host dev environment | `nixosConfigurations.mattpc-wsl` |
 | rpi4 | aarch64 NixOS | Headless DNS (Technitium) | `nixosConfigurations.rpi4` |
-| rpi5 | aarch64 NixOS | Tailscale exit node | `nixosConfigurations.rpi5` |
+| rpi5 | aarch64 NixOS | Tailscale exit node + Kimai (`hours.sealedsecurity.com`) | `nixosConfigurations.rpi5` |
 
 Manages the OS configuration ([`nixos/`](./nix-config/nixos),
 [`darwin/`](./nix-config/darwin)) and the user-level home-manager
