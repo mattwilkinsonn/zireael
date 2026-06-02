@@ -105,9 +105,19 @@ cargo install --path .
 - [`jj`](https://jj-vcs.github.io) on PATH.
 - [`gt`](https://graphite.dev/docs/graphite-cli) on PATH
   (`npm i -g @withgraphite/graphite-cli`).
-- [`gh`](https://cli.github.com) on PATH, authenticated against the
-  remote that hosts your PRs.
+- [`gh`](https://cli.github.com) on PATH, **authenticated** against the
+  remote that hosts your PRs (`gh auth login` if you haven't already
+  — `gh auth status` to verify).
 - The repo must already be tracked by Graphite — run `gt init` once.
+
+**Why gh?** `jj-gt fetch` and `jj-gt status` batch PR-state lookups
+via `gh pr list --search head:<branch>` so they can classify each
+local bookmark (merged / open / closed / drift). Without `gh` auth,
+those calls fail mid-run rather than at startup, so check `gh auth
+status` once before your first `jj-gt fetch` against a private repo.
+(`jj-gt submit` itself delegates the actual push to `gt submit`,
+which has its own GitHub auth path — the `gh` dependency is for
+read-side PR lookups in fetch + status.)
 
 ## Usage
 
