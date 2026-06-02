@@ -284,6 +284,36 @@ fn track_rejects_child_before_parent() {
 }
 
 #[test]
+fn track_failure_surfaces_gt_stderr_not_empty_string() {
+    // Regression: previously `gt track` failures came back as
+    // `GtFailed { status: 1, stderr: "" }` because `run_gt` used
+    // `cmd.status()` and inherited gt's stderr to the user's
+    // terminal — which the spinner row then erased as it redrew.
+    // The captured runner used by `track()` must surface gt's
+    // actual error text so the user sees what went wrong.
+    if !binary_available("jj") || !binary_available("gt") {
+        eprintln!("skipping: jj or gt not on PATH");
+        return;
+    }
+    let tmp = build_three_stack_fixture();
+    gt_init(tmp.path());
+
+    // Same failure mode as `track_rejects_child_before_parent`:
+    // tracking `top` while `mid` is untracked makes gt error.
+    let err =
+        gt::track(tmp.path(), "top", "mid").expect_err("expected gt to reject this configuration");
+    match err {
+        jj_gt::error::JjGtError::GtFailed { stderr, .. } => {
+            assert!(
+                !stderr.trim().is_empty(),
+                "expected captured stderr to be non-empty, got: `{stderr}`",
+            );
+        }
+        other => panic!("expected GtFailed, got: {other:?}"),
+    }
+}
+
+#[test]
 fn submit_path_orders_track_calls_bottom_to_top() {
     // End-to-end: derive_parents → sort_for_tracking → gt::track in
     // the same order jj-gt submit does. Passing an inverted user
