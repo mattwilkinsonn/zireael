@@ -308,6 +308,18 @@ fn track_failure_surfaces_gt_stderr_not_empty_string() {
                 !stderr.trim().is_empty(),
                 "expected captured stderr to be non-empty, got: `{stderr}`",
             );
+            // `run_gt_captured` falls back to "(gt produced no output)"
+            // when BOTH stdout and stderr come back empty — that
+            // satisfies non-empty above but doesn't prove gt itself
+            // produced a real diagnostic. Pin the sentinel explicitly
+            // so a regression where capture stops working (e.g.
+            // reverting to `cmd.status()`) gets caught here too.
+            assert_ne!(
+                stderr.trim(),
+                "(gt produced no output)",
+                "stderr came from the synthetic fallback, not gt itself; \
+                 capture path is broken",
+            );
         }
         other => panic!("expected GtFailed, got: {other:?}"),
     }
