@@ -971,6 +971,52 @@ in
         ip6 daddr { fc00::/7, fe80::/10 } \
           log prefix "runner-egress-drop: " level warn drop
 
+        # Force v4 fallback for outbound TCP from this UID.
+        #
+        # Strace evidence (2026-06-01 round-9 diagnostic) showed
+        # `bun install` opening ~30 parallel non-blocking SYNs to
+        # 2606:4700::6810:XXX:443 (Cloudflare /120, npmjs.org).
+        # Every connect returned EINPROGRESS and then ETIMEDOUT
+        # ~10s later. ZERO runner-egress drops fired during the
+        # hang window — the SYNs leave the box and never get a
+        # SYN-ACK. Sequential v4 (curl, single connection) to the
+        # same Cloudflare service works in <300ms. Likely an
+        # upstream anti-flood / WAF on Cloudflare's edge that
+        # rate-limits a SYN burst from one source v6, OR a
+        # SLAAC-allocated /64 we're not propagating cleanly.
+        #
+        # The fix is surgical: reject outbound v6 TCP for this UID
+        # so getaddrinfo's v4 results (also returned in the resolver
+        # answer) are tried instead.
+        #
+        # Why `reject` (not `drop`):
+        #   `drop` would silently swallow the SYN and the local
+        #   socket would still sit in EINPROGRESS until the kernel's
+        #   tcp_syn_retries exhausts (~127s) — the exact symptom we
+        #   already see from the upstream silent drop. `reject with
+        #   icmpx admin-prohibited` synthesizes an ICMPv6 admin-
+        #   prohibited back into the local stack so the socket fails
+        #   immediately with EACCES/EHOSTUNREACH; bun blows through
+        #   its v6 candidates in microseconds and lands on v4 inside
+        #   one app-level timeout instead of fifty.
+        #
+        # Why `meta nfproto ipv6 meta l4proto tcp` (not
+        # `ip6 nexthdr tcp`):
+        #   `ip6 nexthdr` inspects only the base header's Next
+        #   Header field; if there's any extension header (Hop-by-
+        #   Hop, Routing, Destination, Fragment) the match misses
+        #   and the packet leaks through to the `tcp dport 443
+        #   accept` below. `meta l4proto` walks the nexthdr chain.
+        #   The `nfproto ipv6` gate is required because in this
+        #   `inet`-family table `meta l4proto tcp` alone would
+        #   match v4 TCP too and kill the v4 path.
+        #
+        # Distinct log prefix so future debugging can tell "v6
+        # force-downgrade" from "actual policy block."
+        meta nfproto ipv6 meta l4proto tcp \
+          log prefix "runner-egress-drop-v6tcp: " level warn \
+          reject with icmpx type admin-prohibited
+
         # Allow public HTTP/HTTPS + git+ssh.
         tcp dport { 80, 443, 22 } accept
 
