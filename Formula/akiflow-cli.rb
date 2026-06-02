@@ -8,18 +8,18 @@ class AkiflowCli < Formula
     on_arm do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/akiflow-cli-v#{version}-darwin-arm64.tar.gz"
       # SHA256 is bumped by .github/workflows/release.yml when a tag is pushed.
-      sha256 "2a92f3b889fdf43e6cb69b7e1aebbfa171f3fa6eabbfac662366beaaefc7bf27"
+      sha256 "25fb08ba98213f2ba347c74d5f3828c04a98a10dd50cb6684e417d67770517b1"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/akiflow-cli-v#{version}-linux-x64.tar.gz"
-      sha256 "c4d4fb7c88f164a625113343a47b858d9b3ddecd2b7267ea1441fca58413b52c"
+      sha256 "313db7734293542be76416bbf4bee13c43eb7a64873d9d41877dabebcbd57043"
     end
     on_arm do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/akiflow-cli-v#{version}-linux-arm64.tar.gz"
-      sha256 "e2d9cbc6dd17d192e6addabf4418284e63147ce6410326140aaf7af05e992d68"
+      sha256 "b73c4fcff12697fc8e7fffbe83d6846db3e8cbb3186cde47a1f9214c472feef6"
     end
   end
 
