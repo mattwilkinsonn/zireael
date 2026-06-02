@@ -148,17 +148,33 @@ impl Tracker {
     }
 
     /// Mark a bookmark as finished. Removes it from the active set
-    /// (so the next frame stops drawing its row) and prints the
-    /// final status line above the spinner — the same one the
-    /// existing `progress` callback was printing, just routed
-    /// through here so the spinner has a chance to clear its
-    /// previous frame first.
-    pub fn finished(&self, bookmark: &str, status: FinishedStatus) {
+    /// (so the next frame stops drawing its row), prints the final
+    /// status line above the spinner, and — when `status` is
+    /// `Failed` and `captured` is non-empty — dumps the captured
+    /// output between the status line and the still-running
+    /// spinner block. The dump lands at exactly the moment of
+    /// failure so the user gets actionable signal without waiting
+    /// for sibling bookmarks to drain (which can be 30-60s on a
+    /// cold cargo cache).
+    ///
+    /// Passing `None` for `captured` is the right call when:
+    ///   - `status != Failed` (nothing to dump),
+    ///   - status IS Failed but the failure shape doesn't produce
+    ///     a captured buffer (e.g. a spawn error before the runner
+    ///     started). The completion line stands alone in that case.
+    pub fn finished(&self, bookmark: &str, status: FinishedStatus, captured: Option<&str>) {
         let line = render_completion_line(bookmark, status);
-        // Non-TTY: completion line stands alone, no clear-and-redraw
-        // dance needed.
+        let should_dump =
+            status == FinishedStatus::Failed && captured.is_some_and(|c| !c.trim().is_empty());
+
+        // Non-TTY: print line + dump synchronously, no clear-and-
+        // redraw protocol needed (there's no spinner block to
+        // erase).
         if self.renderer.is_none() {
             eprintln!("{line}");
+            if should_dump {
+                dump_failure_block(bookmark, captured.unwrap());
+            }
             return;
         }
 
@@ -166,11 +182,17 @@ impl Tracker {
         if let Some(pos) = state.running.iter().position(|e| e.label == bookmark) {
             state.running.remove(pos);
         }
-        // Print the completion line through the same erase-redraw
-        // protocol the renderer uses, so it ends up *above* the
-        // current spinner block instead of mixing into it.
+        // Wipe the current spinner block, print the completion
+        // line + (if failure) the captured output, then let the
+        // next render-tick redraw the still-running rows below
+        // everything we just emitted.
         clear_block(&mut std::io::stderr(), state.lines_drawn);
-        let _ = writeln!(std::io::stderr(), "{line}");
+        let mut err = std::io::stderr();
+        let _ = writeln!(err, "{line}");
+        if should_dump {
+            dump_failure_block(bookmark, captured.unwrap());
+        }
+        let _ = err.flush();
         // After the wipe the next render-tick will redraw the
         // running set from scratch — set lines_drawn to 0 so it
         // doesn't try to erase the bookmarks we just cleared.
@@ -233,7 +255,7 @@ fn render_completion_line(bookmark: &str, status: FinishedStatus) -> String {
             "passed".if_supports_color(Stream::Stderr, |s| s.green())
         ),
         FinishedStatus::Failed => format!(
-            "  {}     {bookmark} (full output below)",
+            "  {}     {bookmark}",
             "FAILED".if_supports_color(Stream::Stderr, |s| s.red())
         ),
         FinishedStatus::Cancelled => format!(
@@ -309,6 +331,28 @@ fn clear_block(err: &mut std::io::Stderr, n: usize) {
     let _ = err.flush();
 }
 
+/// Print a captured-output block for a failed bookmark with a
+/// visible header/footer fence so the user can scan back through
+/// the scrollback and find the start of a particular bookmark's
+/// failure quickly.
+///
+/// The block format matches `render_failure_report`'s historical
+/// shape so users who got used to the post-run replay see the
+/// same fence in the mid-run dump. Once the mid-run dump is the
+/// only place the captured output appears, the post-run report
+/// is just a summary table (one line per bookmark).
+fn dump_failure_block(bookmark: &str, captured: &str) {
+    let mut err = std::io::stderr();
+    let _ = writeln!(err, "--- {bookmark} (failure output) ---");
+    let _ = err.write_all(captured.as_bytes());
+    if !captured.ends_with('\n') {
+        let _ = writeln!(err);
+    }
+    let _ = writeln!(err, "--- end {bookmark} ---");
+    let _ = writeln!(err);
+    let _ = err.flush();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,8 +366,14 @@ mod tests {
         assert!(render_completion_line("foo", FinishedStatus::Passed).contains("passed"));
         assert!(render_completion_line("foo", FinishedStatus::Passed).contains("foo"));
         assert!(render_completion_line("foo", FinishedStatus::Failed).contains("FAILED"));
+        // The completion line for a failure no longer mentions "full
+        // output below" — the captured output is dumped immediately
+        // after this line by `dump_failure_block`, not deferred to a
+        // post-run replay. Pin the absence so a future revert is
+        // caught.
         assert!(
-            render_completion_line("foo", FinishedStatus::Failed).contains("full output below")
+            !render_completion_line("foo", FinishedStatus::Failed).contains("full output below"),
+            "completion line should not promise a deferred replay anymore",
         );
         assert!(render_completion_line("foo", FinishedStatus::Cancelled).contains("cancelled"));
         assert!(
@@ -340,8 +390,8 @@ mod tests {
         let t = Tracker::new();
         t.started("alpha");
         t.started("beta");
-        t.finished("alpha", FinishedStatus::Passed);
-        t.finished("beta", FinishedStatus::Failed);
+        t.finished("alpha", FinishedStatus::Passed, None);
+        t.finished("beta", FinishedStatus::Failed, None);
         t.finish();
     }
 
@@ -355,7 +405,58 @@ mod tests {
         // teardown leaked.
         let t = Tracker::new();
         t.started("x");
-        t.finished("x", FinishedStatus::Passed);
+        t.finished("x", FinishedStatus::Passed, None);
         drop(t);
+    }
+
+    #[test]
+    fn dump_failure_block_renders_fenced_output() {
+        // The block format is the same fence the post-run replay
+        // used to print, so users who know to look for "--- <name>"
+        // in their scrollback still find it.
+        let mut buf: Vec<u8> = Vec::new();
+        write_failure_block_to(&mut buf, "sea-559", "Diff in foo.rs:\n-extra\n");
+        let out = String::from_utf8(buf).unwrap();
+        assert!(
+            out.contains("--- sea-559 (failure output) ---"),
+            "missing header fence: {out:?}",
+        );
+        assert!(
+            out.contains("Diff in foo.rs:"),
+            "missing captured content: {out:?}",
+        );
+        assert!(
+            out.contains("--- end sea-559 ---"),
+            "missing footer fence: {out:?}",
+        );
+    }
+
+    #[test]
+    fn dump_failure_block_appends_newline_when_capture_lacks_one() {
+        // Same trailing-newline contract the old report had: even
+        // if the captured buffer didn't end with '\n', the footer
+        // fence must land on its own line.
+        let mut buf: Vec<u8> = Vec::new();
+        write_failure_block_to(&mut buf, "sea-559", "no trailing newline");
+        let out = String::from_utf8(buf).unwrap();
+        let end_pos = out.find("--- end sea-559 ---").unwrap();
+        assert!(
+            out[..end_pos].ends_with('\n'),
+            "fence ran on the same line as the captured content: {out:?}",
+        );
+    }
+
+    /// Test-only helper that mirrors `dump_failure_block` but writes
+    /// to an arbitrary `Write` sink. Production code uses
+    /// `dump_failure_block` (which writes to stderr directly); tests
+    /// route to a buffer so they can assert on the output.
+    fn write_failure_block_to(out: &mut impl std::io::Write, bookmark: &str, captured: &str) {
+        let _ = writeln!(out, "--- {bookmark} (failure output) ---");
+        let _ = out.write_all(captured.as_bytes());
+        if !captured.ends_with('\n') {
+            let _ = writeln!(out);
+        }
+        let _ = writeln!(out, "--- end {bookmark} ---");
+        let _ = writeln!(out);
     }
 }
