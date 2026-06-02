@@ -35,6 +35,24 @@ fn jj(cwd: &Path, args: &[&str]) {
     );
 }
 
+/// Shell out to `git`. Mirrors [`jj`] so the test fixtures don't
+/// repeat the `Command::new("git").args(...).output().unwrap()` +
+/// `assert!(status.success(), ...)` boilerplate at every call
+/// site.
+fn git(cwd: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?} failed: {}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
 fn jj_capture(cwd: &Path, args: &[&str]) -> String {
     let out = Command::new("jj")
         .args(args)
@@ -331,4 +349,227 @@ fn is_ancestor_recognizes_linear_ancestry() {
     assert!(!jj_gt::jj::is_ancestor(tmp.path(), &tip_oid, &main_oid).unwrap());
     // A commit is its own ancestor (reflexive — git's contract).
     assert!(jj_gt::jj::is_ancestor(tmp.path(), &main_oid, &main_oid).unwrap());
+}
+
+/// Build a `main → bottom → mid → top` stack + bare remote, push
+/// everything, track all four bookmarks on the remote. Returns the
+/// workspace TempDir (caller manages lifetime); the bare remote
+/// lives inside the workspace tmp dir (sibling to `.jj/.git`) so it
+/// cleans up together.
+fn build_tracked_stack_with_bare_remote() -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    jj(tmp.path(), &["git", "init", "--colocate"]);
+    jj(
+        tmp.path(),
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(
+        tmp.path(),
+        &["config", "set", "--repo", "user.name", "Tester"],
+    );
+
+    // main → bottom → mid → top, real commits so the OIDs differ.
+    // Advance @ off `top` after creating it so subsequent jj
+    // operations don't auto-snapshot empty changes back onto `top`
+    // (which produces the dreaded "(conflicted) ... behind by 1 commit"
+    // shape during track_bookmark_on_remote).
+    jj(tmp.path(), &["describe", "-m", "root"]);
+    jj(tmp.path(), &["bookmark", "create", "main", "-r", "@"]);
+    jj(tmp.path(), &["new", "-m", "bottom"]);
+    jj(tmp.path(), &["bookmark", "create", "bottom", "-r", "@"]);
+    jj(tmp.path(), &["new", "-m", "mid"]);
+    jj(tmp.path(), &["bookmark", "create", "mid", "-r", "@"]);
+    jj(tmp.path(), &["new", "-m", "top"]);
+    jj(tmp.path(), &["bookmark", "create", "top", "-r", "@"]);
+    jj(tmp.path(), &["new", "-m", "post-top"]);
+    jj(tmp.path(), &["git", "export"]);
+
+    // Bare remote next to the workspace.
+    let remote_path = tmp.path().join("remote.git");
+    let bare = std::process::Command::new("git")
+        .args(["init", "--bare", "-q"])
+        .arg(&remote_path)
+        .output()
+        .unwrap();
+    assert!(bare.status.success());
+
+    // Wire `origin` to the bare remote and push everything.
+    let add_remote = std::process::Command::new("git")
+        .args(["remote", "add", "origin"])
+        .arg(format!("file://{}", remote_path.display()))
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    assert!(
+        add_remote.status.success(),
+        "git remote add failed: {}",
+        String::from_utf8_lossy(&add_remote.stderr)
+    );
+    for bookmark in ["main", "bottom", "mid", "top"] {
+        git(tmp.path(), &["push", "origin", bookmark]);
+    }
+    // Import so jj's remote-tracking refs are populated.
+    jj(tmp.path(), &["git", "import"]);
+    // Track each so a future remote-side deletion propagates locally
+    // on fetch — the bug condition we're testing.
+    for bookmark in ["main", "bottom", "mid", "top"] {
+        jj_gt::jj::track_bookmark_on_remote(
+            &JjCli::new(tmp.path().to_path_buf()),
+            bookmark,
+            "origin",
+        )
+        .unwrap();
+    }
+    tmp
+}
+
+#[test]
+fn snapshot_pre_fetch_captures_parent_edges_that_post_fetch_loses() {
+    // The orchestration bug this test pins:
+    //
+    //   1. User has a tracked stack: `main → bottom → mid → top`.
+    //   2. Someone merges `bottom`'s PR upstream; the post-merge
+    //      cleanup deletes the remote ref.
+    //   3. User runs `jj-gt fetch`. `jj git fetch` propagates the
+    //      remote-side deletion to the LOCAL `bottom` bookmark
+    //      (because it was tracked).
+    //   4. By the time the cleanup code derives the stack graph,
+    //      `bottom` is gone — so `derive_parents` for `top` /
+    //      `mid` returns Trunk (not `bottom`), the orphan-rebase
+    //      rule never fires, and `top`+`mid` are left floating
+    //      on a stale base.
+    //
+    // Fix: `snapshot_pre_fetch` captures the parent edges BEFORE
+    // fetch runs, so the orphan-rebase phase still sees the
+    // pre-fetch edges and can detect that the (now-deleted) parent
+    // was an orphan trigger.
+    //
+    // This test asserts the contract:
+    //
+    //   - The pre-fetch snapshot, taken while all bookmarks exist
+    //     locally, includes the `top → mid → bottom` chain.
+    //   - After `jj git fetch` (with remote-deleted-bottom), the
+    //     post-fetch snapshot LOSES the `bottom` edge — confirming
+    //     the bug condition is reproduced and the snapshot's
+    //     timing is load-bearing.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+
+    let tmp = build_tracked_stack_with_bare_remote();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    let opts = jj_gt::cleanup::FetchOpts {
+        remote: "origin".into(),
+        trunk: "main".into(),
+        ..jj_gt::cleanup::FetchOpts::default()
+    };
+
+    // Step 1: snapshot the pre-fetch state. PR list bypassed via
+    // _with_prs so we don't need gh; the structural contract is
+    // independent of PR info.
+    let pre_bookmarks = jj_gt::jj::list_local_bookmarks(&jj_cli).unwrap();
+    let (gtmq, normal): (Vec<_>, Vec<_>) = pre_bookmarks
+        .iter()
+        .cloned()
+        .partition(|b| b.name.starts_with("gtmq_"));
+    let pre = jj_gt::cleanup::snapshot_pre_fetch_with_prs(&jj_cli, &opts, gtmq, normal, Vec::new())
+        .unwrap();
+    let pre_normal_names: std::collections::BTreeSet<&str> =
+        pre.normal.iter().map(|b| b.name.as_str()).collect();
+    for expected in ["main", "bottom", "mid", "top"] {
+        assert!(
+            pre_normal_names.contains(expected),
+            "pre-fetch normal set missing `{expected}`: {pre_normal_names:?}",
+        );
+    }
+    let pre_edges: std::collections::BTreeMap<String, String> = pre
+        .stacked
+        .iter()
+        .filter_map(|sb| match &sb.parent {
+            jj_gt::stack::BookmarkOrTrunk::Bookmark(p) => Some((sb.name.clone(), p.clone())),
+            jj_gt::stack::BookmarkOrTrunk::Trunk => None,
+        })
+        .collect();
+    // The full chain must be intact at pre-fetch time.
+    assert_eq!(
+        pre_edges.get("top").map(String::as_str),
+        Some("mid"),
+        "expected pre-fetch top→mid edge, got {pre_edges:?}",
+    );
+    assert_eq!(
+        pre_edges.get("mid").map(String::as_str),
+        Some("bottom"),
+        "expected pre-fetch mid→bottom edge, got {pre_edges:?}",
+    );
+
+    // Step 2: delete `bottom` on the bare remote (simulates the
+    // post-merge cleanup).
+    git(tmp.path(), &["push", "origin", "--delete", "bottom"]);
+
+    // Step 3: `jj git fetch`. Tracked `bottom` should disappear
+    // from local.
+    jj(tmp.path(), &["git", "fetch", "--remote", "origin"]);
+
+    let post_bookmarks = jj_gt::jj::list_local_bookmarks(&jj_cli).unwrap();
+    let post_names: std::collections::BTreeSet<&str> =
+        post_bookmarks.iter().map(|b| b.name.as_str()).collect();
+    assert!(
+        !post_names.contains("bottom"),
+        "fetch should have propagated the bottom deletion to local; \
+         got post-fetch bookmarks: {post_names:?}",
+    );
+    assert!(
+        post_names.contains("top") && post_names.contains("mid") && post_names.contains("main"),
+        "fetch should have left main/mid/top alone: {post_names:?}",
+    );
+
+    // Step 4: re-derive the stacked-edges using the post-fetch
+    // bookmark list. This is what the pre-fix buggy code did. We
+    // assert the edge LOSS — confirming the bug condition reproduces
+    // and the only reason the production fix works is the pre-fetch
+    // timing of `snapshot_pre_fetch`.
+    let (gtmq_post, normal_post): (Vec<_>, Vec<_>) = post_bookmarks
+        .iter()
+        .cloned()
+        .partition(|b| b.name.starts_with("gtmq_"));
+    let post = jj_gt::cleanup::snapshot_pre_fetch_with_prs(
+        &jj_cli,
+        &opts,
+        gtmq_post,
+        normal_post,
+        Vec::new(),
+    )
+    .unwrap();
+    let post_edges: std::collections::BTreeMap<String, String> = post
+        .stacked
+        .iter()
+        .filter_map(|sb| match &sb.parent {
+            jj_gt::stack::BookmarkOrTrunk::Bookmark(p) => Some((sb.name.clone(), p.clone())),
+            jj_gt::stack::BookmarkOrTrunk::Trunk => None,
+        })
+        .collect();
+    assert_ne!(
+        post_edges.get("mid").map(String::as_str),
+        Some("bottom"),
+        "post-fetch mid→bottom edge should have been lost when bottom \
+         was deleted (this is the bug condition the pre-fetch snapshot \
+         fix prevents)",
+    );
+
+    // Step 5: regression assertion — the orphan-rebase deleted-set
+    // computed from pre vs post correctly identifies `bottom` as
+    // disappeared. Using `pre.normal_names()` keeps this test aligned
+    // with the helper production callers use; if the encapsulated
+    // "what counts as a normal name" semantics change, the test
+    // tracks it automatically.
+    let pre_names = pre.normal_names();
+    let post_names_set: std::collections::BTreeSet<String> =
+        post_bookmarks.iter().map(|b| b.name.clone()).collect();
+    let deleted = jj_gt::cleanup::compute_deleted_set(&pre_names, &post_names_set);
+    assert!(
+        deleted.contains("bottom"),
+        "compute_deleted_set should report `bottom` as deleted; got {deleted:?}",
+    );
 }
