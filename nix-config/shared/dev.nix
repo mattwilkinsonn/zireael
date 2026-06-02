@@ -2,6 +2,7 @@
   lib,
   pkgs,
   codexPackage,
+  coderabbitPackage,
   ...
 }:
 
@@ -68,6 +69,7 @@
 
     # AI / LLM tooling
     codexPackage # OpenAI Codex CLI
+    coderabbitPackage # CodeRabbit CLI from numtide/llm-agents.nix
 
     # Misc dev-machine utilities
     rclone # Drive/Dropbox/etc remote sync (used by Berkeley Mono font activation)
@@ -187,6 +189,16 @@
         mkdir -p "$HOME/.local"
         ${pkgs.fnm}/bin/fnm exec --using=default -- npm install --prefix="$HOME/.local" -g obsidian-headless
       '';
+
+  # Greptile CLI — npm package providing the `greptile` command.
+  # Cross-platform dev-tier install, using the same fnm-managed default
+  # Node as obsidian-headless. `--prefix=$HOME/.local` puts the binary
+  # in ~/.local/bin, already on PATH from shared/home.nix.
+  home.activation.installGreptile = lib.hm.dag.entryAfter [ "writeBoundary" "fnmDefaultLts" ] ''
+    echo "Installing/updating greptile..."
+    mkdir -p "$HOME/.local"
+    ${pkgs.fnm}/bin/fnm exec --using=default -- npm install --prefix="$HOME/.local" -g greptile
+  '';
 
   # Obsidian Sync — continuous background sync of ~/notes to the
   # "Notes" remote vault, driven by 1Password creds.
