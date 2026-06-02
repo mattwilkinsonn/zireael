@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/mattwilkinsonn/zireael"
@@ -39,7 +39,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # in the per-package Cargo.toml for that auto-rewrite to fire,
 # which is what `dep = { workspace = true }` produces from the
 # entry below.
-jj-hooks = { version = "0.3.3", path = "tools/jj-hooks" }
+jj-hooks = { version = "0.3.4", path = "tools/jj-hooks" }
 
 [profile.release]
 lto = "thin"
