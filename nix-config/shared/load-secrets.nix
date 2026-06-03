@@ -133,7 +133,8 @@ _:
               # file so the default account is user-controllable without
               # an edit-and-nix-switch cycle.
               local team_template
-              team_template='export LINEAR_API_KEY="{{ op://Employee Dev/Linear API Key/credential }}"'
+              team_template='export LINEAR_API_KEY="{{ op://Employee Dev/Linear API Key/credential }}"
+    export CODERABBIT_API_KEY="{{ op://Employee Dev/CodeRabbit API Key/credential }}"'
               _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN Team "$team_template"
 
               # Choose which Claude OAuth token to load by default.

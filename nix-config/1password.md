@@ -133,6 +133,7 @@ the duration of the call.
 | op:// reference | Env var |
 | --- | --- |
 | `op://Employee Dev/Linear API Key/credential` | `LINEAR_API_KEY` |
+| `op://Employee Dev/CodeRabbit API Key/credential` | `CODERABBIT_API_KEY` |
 
 `CLAUDE_CODE_OAUTH_TOKEN` is loaded by `load-secrets` from either
 `op://Dev/Personal Claude Code OAuth Token/credential` or
