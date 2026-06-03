@@ -698,6 +698,16 @@ fn action_to_row(action: &cleanup::CleanupAction) -> (ui::ActionStatus, String) 
             ui::ActionStatus::Ok,
             format!("rebased onto {onto} (parent `{prev_parent}` was removed by gt sync)"),
         ),
+        CleanupAction::RebaseDeferredForConflict {
+            onto,
+            prev_parent,
+            message,
+        } => (
+            ui::ActionStatus::Warn,
+            format!(
+                "rebase onto {onto} would have conflicted (parent `{prev_parent}` was removed by gt sync) — {message}; deferred to `jj-gt restack` (run manually when you're ready to resolve)"
+            ),
+        ),
         CleanupAction::RebaseConflicted {
             onto,
             prev_parent,

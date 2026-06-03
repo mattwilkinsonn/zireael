@@ -779,3 +779,207 @@ fn derive_parents_strict_propagates_revset_error_for_missing_bookmark() {
         "expected error to mention the missing bookmark, got: {msg}",
     );
 }
+
+/// Build a tiny one-commit workspace + return the JjCli for it.
+/// Helper for the op-id snapshot / restore tests.
+fn build_single_commit_workspace() -> (tempfile::TempDir, JjCli) {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(cwd, &["describe", "-m", "root"]);
+    jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
+    jj(cwd, &["new", "-m", "work"]);
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+    (tmp, jj_cli)
+}
+
+#[test]
+fn current_op_id_returns_a_hex_id_for_the_latest_op() {
+    // Pin the contract: `current_op_id` returns a non-empty hex
+    // string corresponding to the most recent op. Used as a
+    // snapshot point for `op_restore` in the orphan-rebase
+    // conflict-defer path.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let (_tmp, jj_cli) = build_single_commit_workspace();
+
+    let op_id = jj_gt::jj::current_op_id(&jj_cli).unwrap();
+    assert!(!op_id.is_empty(), "op id should be non-empty");
+    assert!(
+        op_id.chars().all(|c| c.is_ascii_hexdigit()),
+        "op id should be all hex, got: {op_id:?}",
+    );
+    assert!(
+        op_id.len() >= 12,
+        "op id should be long enough to be unambiguous, got: {op_id:?}",
+    );
+}
+
+#[test]
+fn op_restore_rolls_back_a_bookmark_set() {
+    // The full round-trip: snapshot op id → mutate → restore →
+    // assert the mutation was undone. This is the primitive the
+    // orphan-rebase conflict-defer path uses.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let (_tmp, jj_cli) = build_single_commit_workspace();
+    let cwd = _tmp.path();
+
+    let main_commit = jj_gt::jj::resolve_commit_id(&jj_cli, "main").unwrap();
+    let work_commit = jj_gt::jj::resolve_commit_id(&jj_cli, "@").unwrap();
+    assert_ne!(
+        main_commit, work_commit,
+        "test prereq: main and @ should be different commits",
+    );
+
+    // Snapshot. Then move main forward.
+    let snapshot = jj_gt::jj::current_op_id(&jj_cli).unwrap();
+    jj(cwd, &["bookmark", "set", "main", "-r", "@"]);
+    assert_eq!(
+        jj_gt::jj::resolve_commit_id(&jj_cli, "main").unwrap(),
+        work_commit,
+        "post-mutation: main should be at the work commit",
+    );
+
+    // Roll back. main should snap back to its pre-snapshot position.
+    jj_gt::jj::op_restore(&jj_cli, &snapshot).unwrap();
+    assert_eq!(
+        jj_gt::jj::resolve_commit_id(&jj_cli, "main").unwrap(),
+        main_commit,
+        "post-restore: main should be back at the original commit",
+    );
+}
+
+#[test]
+fn count_conflicts_in_returns_zero_for_clean_revset() {
+    // Cheap baseline test for the conflict-detection helper.
+    // Used by the orphan-rebase phase to decide whether the
+    // freshly-applied rebase actually conflicted or just looked
+    // like it might from jj's stderr.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let (_tmp, jj_cli) = build_single_commit_workspace();
+
+    // Clean workspace, no conflicts anywhere.
+    assert_eq!(jj_gt::jj::count_conflicts_in(&jj_cli, "all()").unwrap(), 0);
+    assert_eq!(jj_gt::jj::count_conflicts_in(&jj_cli, "main").unwrap(), 0);
+}
+
+#[test]
+fn fetch_orphan_rebase_defers_when_rebase_would_conflict() {
+    // Regression for issue #60 part 2: `jj-gt fetch`'s orphan-
+    // rebase should NOT leave the user with conflict markers when
+    // the rebase would conflict. The fix snapshots the op id before
+    // the rebase, runs it, and if jj reports conflicts in the
+    // rebased range, rolls back via `op restore` and surfaces the
+    // bookmark as `RebaseDeferredForConflict`.
+    //
+    // Fixture topology:
+    //
+    //   *  upper          <- `upper` bookmark
+    //   *  bottom         <- `bottom` bookmark (will be "deleted")
+    //   *  main
+    //
+    // `bottom` creates a file `shared.txt`, `upper` modifies the
+    // same file with content that doesn't merge cleanly with what
+    // main has (it has nothing). When `bottom` is removed from the
+    // chain and `upper` is rebased onto main, jj produces a
+    // conflict because upper's change has no base to apply to.
+    //
+    // The test calls the same `jj::rebase` codepath the orphan-
+    // rebase phase uses + asserts the outcome is Conflicted; the
+    // higher-level phase logic (which wraps with snapshot/restore)
+    // is exercised indirectly via the unit tests above for the
+    // helper primitives.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(cwd, &["describe", "-m", "root"]);
+    jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
+
+    // bottom creates shared.txt with content A.
+    jj(cwd, &["new", "-m", "bottom: create shared.txt"]);
+    std::fs::write(cwd.join("shared.txt"), "version A\n").unwrap();
+    jj(cwd, &["bookmark", "create", "bottom", "-r", "@"]);
+    let bottom_commit = jj_capture(
+        cwd,
+        &[
+            "log",
+            "-r",
+            "bottom",
+            "--no-graph",
+            "-T",
+            "commit_id",
+            "--limit",
+            "1",
+        ],
+    )
+    .trim()
+    .to_owned();
+
+    // upper modifies shared.txt with content C — diverges from A.
+    // When upper is rebased onto main (which has no shared.txt),
+    // jj will see "delete the file" (since A is no longer the
+    // base) vs "modify it to C" — a conflict.
+    jj(cwd, &["new", "-m", "upper: modify shared.txt"]);
+    std::fs::write(cwd.join("shared.txt"), "version C\n").unwrap();
+    jj(cwd, &["bookmark", "create", "upper", "-r", "@"]);
+    jj(cwd, &["git", "export"]);
+
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+
+    // Snapshot the op id BEFORE the rebase — matches what
+    // `orphan_rebase_phase` does in production.
+    let pre_rebase_op = jj_gt::jj::current_op_id(&jj_cli).unwrap();
+    let revset = jj_gt::cleanup::build_orphan_rebase_revset(&bottom_commit, "upper");
+    let outcome = jj_gt::jj::rebase(&jj_cli, &revset, "main").unwrap();
+
+    // Confirm the rebase produced conflicts (the bug condition the
+    // fix defends against).
+    assert!(
+        matches!(outcome, jj_gt::jj::RebaseOutcome::Conflicted { .. }),
+        "fixture should produce a conflicted rebase to exercise the deferred path; got {outcome:?}",
+    );
+    let upper_after = jj_gt::jj::resolve_commit_id(&jj_cli, "upper").unwrap();
+    assert_eq!(
+        jj_gt::jj::count_conflicts_in(&jj_cli, &format!("{upper_after}::{upper_after}")).unwrap(),
+        1,
+        "post-rebase: upper should carry a conflict marker",
+    );
+
+    // Roll back via op_restore — same primitive the fix uses.
+    jj_gt::jj::op_restore(&jj_cli, &pre_rebase_op).unwrap();
+
+    // The bookmark should be back where it started (pre-rebase).
+    // No conflicts in the rebased range anymore.
+    let upper_after_restore = jj_gt::jj::resolve_commit_id(&jj_cli, "upper").unwrap();
+    assert_ne!(
+        upper_after_restore, upper_after,
+        "post-restore: upper's commit id should change back from the rebased version",
+    );
+    assert_eq!(
+        jj_gt::jj::count_conflicts_in(&jj_cli, "all()").unwrap(),
+        0,
+        "post-restore: no conflicts should remain anywhere",
+    );
+}

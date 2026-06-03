@@ -589,6 +589,72 @@ pub fn rebase(jj: &JjCli, source_revset: &str, dest: &str) -> Result<RebaseOutco
     Ok(RebaseOutcome::Clean)
 }
 
+/// `jj op log --limit 1 --no-graph -T 'self.id()'` — returns the
+/// current operation id, useful as a snapshot before a potentially-
+/// destructive mutation that may need rolling back via [`op_restore`].
+///
+/// Op ids are long hex strings; jj accepts any unambiguous prefix
+/// in op-restore, but we keep the full id for safety so a future
+/// concurrent op can't collide on a short prefix.
+pub fn current_op_id(jj: &JjCli) -> Result<String> {
+    let out = jj_run(
+        jj,
+        &[
+            "op",
+            "log",
+            "--limit",
+            "1",
+            "--no-graph",
+            "-T",
+            "self.id()",
+            "--ignore-working-copy",
+        ],
+    )?;
+    Ok(out.trim().to_owned())
+}
+
+/// `jj op restore <op_id> --ignore-working-copy` — rewinds the
+/// repository to the state recorded at `op_id`. Used to roll back
+/// a rebase that turned out to introduce conflicts, so the user
+/// doesn't have to clean up commits that fetch shouldn't have
+/// touched in the first place.
+///
+/// Note: `op restore` is a global operation across all workspaces
+/// sharing `.jj/`. The caller paired with a snapshot taken
+/// immediately before the would-be mutation, so the restore
+/// window is tight and unlikely to clobber unrelated ops from
+/// other workspaces. Still, the caller should only invoke this
+/// when they hold the pipeline lock.
+pub fn op_restore(jj: &JjCli, op_id: &str) -> Result<()> {
+    let _ = jj_run(jj, &["op", "restore", op_id, "--ignore-working-copy"])?;
+    Ok(())
+}
+
+/// Count of conflicted commits in `revset` — used after a rebase
+/// to detect whether the rebased range now contains conflict
+/// markers. `jj log -r 'conflicts() & <revset>' --no-graph -T id`
+/// emits one line per matching commit; counting lines gives the
+/// count without parsing the content.
+///
+/// Returns 0 when the revset is empty (no commits) or when none of
+/// the matched commits carry conflicts.
+pub fn count_conflicts_in(jj: &JjCli, revset: &str) -> Result<usize> {
+    let combined_revset = format!("conflicts() & ({revset})");
+    let out = jj_run(
+        jj,
+        &[
+            "log",
+            "-r",
+            &combined_revset,
+            "--no-graph",
+            "-T",
+            "commit_id ++ \"\\n\"",
+            "--ignore-working-copy",
+        ],
+    )?;
+    Ok(out.lines().filter(|l| !l.trim().is_empty()).count())
+}
+
 /// `jj bookmark delete <name> --ignore-working-copy`.
 pub fn delete_bookmark(jj: &JjCli, name: &str) -> Result<()> {
     let _ = jj_run(jj, &["bookmark", "delete", name, "--ignore-working-copy"])?;
