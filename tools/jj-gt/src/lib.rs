@@ -188,6 +188,84 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
     }
 }
 
+/// Step 0 for `fetch` / `submit` / `restack` / `reconcile`: run
+/// `jj workspace update-stale` so the current workspace catches up
+/// with any op-log moves made by sibling workspaces sharing the
+/// same `.jj/`.
+///
+/// Surfaces the outcome as a structured step so the user can see
+/// when `@` moved out from under them (silently swallowing that
+/// would erase the "another workspace mutated something" signal
+/// jj's default stale-warning preserves).
+///
+/// Skipped when `JJ_GT_SKIP_UPDATE_STALE=1` is set — escape hatch
+/// for the rare debug case where you specifically want jj's
+/// staleness error to fire.
+pub(crate) fn maybe_catch_up_workspace(
+    jj: &JjCli,
+    verbosity: ui::Verbosity,
+) -> Result<(), JjGtError> {
+    // Honor the escape hatch BEFORE rendering the step. Without
+    // this early-return the user gets a "ran update-stale →
+    // already current" line in the per-step log even though we
+    // never shelled out, which is confusing when they set the
+    // var to debug a staleness interaction. The same env-var
+    // check inside `jj::ensure_workspace_current` is kept as a
+    // defense-in-depth for direct callers of the helper.
+    if std::env::var("JJ_GT_SKIP_UPDATE_STALE").as_deref() == Ok("1") {
+        return Ok(());
+    }
+    let step = ui::Step::start(
+        "Catching up workspace (jj workspace update-stale)",
+        verbosity,
+    );
+    match jj::ensure_workspace_current(jj) {
+        Ok(jj::UpdateStaleOutcome::NotStale) => {
+            step.skip("already current", None);
+            Ok(())
+        }
+        Ok(jj::UpdateStaleOutcome::Updated {
+            from_change_id,
+            to_change_id,
+        }) => {
+            // Trim to short ids for the log line so the message
+            // doesn't dominate the terminal width.
+            let short = |id: &str| -> String { id.chars().take(12).collect() };
+            step.success(
+                &format!(
+                    "@ moved from {} to {} (sibling workspace advanced the op log)",
+                    short(&from_change_id),
+                    short(&to_change_id),
+                ),
+                None,
+            );
+            Ok(())
+        }
+        Ok(jj::UpdateStaleOutcome::CouldNotVerify) => {
+            // `update-stale` succeeded but the before/after
+            // change-id probe couldn't read `@`. Surface as a
+            // warning rather than "already current" — the latter
+            // would lie about us having verified the workspace
+            // state. The next jj command will surface a clearer
+            // error if the workspace is still stale; this is
+            // just a "we tried, the signal was ambiguous" log.
+            step.warn(
+                "update-stale ran but couldn't verify @ moved (probe failed)",
+                None,
+            );
+            Ok(())
+        }
+        Err(e) => {
+            // Don't hard-error the run when update-stale itself
+            // misbehaves — the next jj command will surface a
+            // clearer error if the workspace is still actually
+            // stale. Log a warning so the user knows we tried.
+            step.warn(&format!("update-stale failed: {e}"), None);
+            Ok(())
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn submit_cmd(
     jj: &JjCli,
@@ -204,6 +282,11 @@ fn submit_cmd(
 ) -> Result<ExitCode, JjGtError> {
     let workspace_root = jj.workspace_root().map_err(JjGtError::Hooks)?;
     let trunk = status::resolve_trunk(&workspace_root, trunk.as_deref())?;
+
+    // Step 0a: catch up the workspace before any subprocess that
+    // would otherwise fail with "working copy is stale" — see
+    // `maybe_catch_up_workspace` for the rationale.
+    maybe_catch_up_workspace(jj, verbosity)?;
 
     // Resolve bookmark selection + derive parents up front (these
     // are fast, no subprocess noise to report). Errors here abort
@@ -654,6 +737,11 @@ fn fetch_cmd(
 
     ui::section(&format!("Fetching + cleaning up against {remote}"));
 
+    // Step 0a: catch up the workspace before any subprocess that
+    // would otherwise fail with "working copy is stale" — see
+    // `maybe_catch_up_workspace` for the rationale.
+    maybe_catch_up_workspace(jj, verbosity)?;
+
     let actions = cleanup::run_fetch(jj, &workspace_root, &opts, verbosity)?;
 
     if !actions.is_empty() {
@@ -675,10 +763,15 @@ fn restack_cmd(
     remote: String,
     stop_on_conflict: bool,
     dry_run: bool,
-    _verbosity: ui::Verbosity,
+    verbosity: ui::Verbosity,
 ) -> Result<ExitCode, JjGtError> {
     let workspace_root = jj.workspace_root().map_err(JjGtError::Hooks)?;
     let trunk = status::resolve_trunk(&workspace_root, trunk.as_deref())?;
+
+    // Step 0a: catch up the workspace before any subprocess that
+    // would otherwise fail with "working copy is stale" — see
+    // `maybe_catch_up_workspace` for the rationale.
+    maybe_catch_up_workspace(jj, verbosity)?;
 
     // The actual rebase destination is `<trunk>@<remote>` so we
     // catch any post-fetch advances. jj's `<name>@<remote>` syntax
