@@ -982,4 +982,178 @@ fn fetch_orphan_rebase_defers_when_rebase_would_conflict() {
         0,
         "post-restore: no conflicts should remain anywhere",
     );
+
+    // Both `jj::rebase` and `jj::op_restore` pass `--ignore-working-
+    // copy`, which means the on-disk file state hasn't been
+    // synchronized with the repo state. The user-facing experience
+    // depends on the NEXT jj command (which won't have that flag)
+    // materializing the restored tree onto disk.
+    //
+    // Trigger materialization by running a plain `jj status` — that
+    // command snapshots + updates the working copy by default.
+    // Then assert the on-disk shared.txt has the restored content
+    // ("version C\n", upper's pre-rebase state) and contains no
+    // conflict markers.
+    //
+    // Without this assertion, the test would pass even if a
+    // regression left conflict markers on the user's disk while
+    // the repo state was technically clean.
+    jj(cwd, &["status"]);
+    let on_disk = std::fs::read_to_string(cwd.join("shared.txt"))
+        .expect("shared.txt should exist after the working copy is materialized");
+    assert_eq!(
+        on_disk, "version C\n",
+        "post-restore + materialize: shared.txt on disk should match upper's pre-rebase content; got: {on_disk:?}",
+    );
+    assert!(
+        !on_disk.contains("<<<<<<<"),
+        "post-restore: shared.txt on disk should not contain conflict markers; got: {on_disk:?}",
+    );
+    assert!(
+        !on_disk.contains("======="),
+        "post-restore: shared.txt on disk should not contain conflict markers; got: {on_disk:?}",
+    );
+    assert!(
+        !on_disk.contains(">>>>>>>"),
+        "post-restore: shared.txt on disk should not contain conflict markers; got: {on_disk:?}",
+    );
+}
+
+#[test]
+fn orphan_rebase_phase_defers_via_op_restore_on_conflict() {
+    // Higher-level integration of the conflict-defer behavior.
+    //
+    // Where `fetch_orphan_rebase_defers_when_rebase_would_conflict`
+    // (above) exercises the `current_op_id + rebase + op_restore`
+    // primitives in sequence, this test walks the *real*
+    // `orphan_rebase_phase` function — so the snapshot-failed and
+    // restore-failed defensive arms have a happy-path baseline to
+    // regress against.
+    //
+    // Fixture topology (identical to the primitive test):
+    //
+    //   *  upper          <- `upper` bookmark
+    //   *  bottom         <- `bottom` bookmark (simulated as deleted
+    //                       upstream — present in PreFetchSnapshot,
+    //                       absent from list_local_bookmarks output
+    //                       at phase time)
+    //   *  main
+    //
+    // We construct a `PreFetchSnapshot` that includes `bottom` as
+    // a `StackedBookmark` parent of `upper`, then delete `bottom`
+    // locally so the phase sees it in the deleted set. The phase
+    // should attempt the rebase, detect the conflict, roll back
+    // via op_restore, and emit a `RebaseDeferredForConflict`
+    // action — not a `RebaseConflicted`.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(cwd, &["describe", "-m", "root"]);
+    jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
+
+    // bottom: creates shared.txt with content A.
+    jj(cwd, &["new", "-m", "bottom: create shared.txt"]);
+    std::fs::write(cwd.join("shared.txt"), "version A\n").unwrap();
+    jj(cwd, &["bookmark", "create", "bottom", "-r", "@"]);
+
+    // upper: modifies shared.txt with content C.
+    jj(cwd, &["new", "-m", "upper: modify shared.txt"]);
+    std::fs::write(cwd.join("shared.txt"), "version C\n").unwrap();
+    jj(cwd, &["bookmark", "create", "upper", "-r", "@"]);
+    jj(cwd, &["git", "export"]);
+
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+    let pre_upper = jj_gt::jj::resolve_commit_id(&jj_cli, "upper").unwrap();
+
+    // Build a PreFetchSnapshot the way snapshot_pre_fetch would,
+    // but bypass the gh call by passing an empty PR list to
+    // snapshot_pre_fetch_with_prs.
+    let opts = jj_gt::cleanup::FetchOpts {
+        remote: "origin".into(),
+        trunk: "main".into(),
+        no_backfill: true,
+        no_rebase: false,
+        no_gtmq_prune: true,
+        ..jj_gt::cleanup::FetchOpts::default()
+    };
+    let pre_all = jj_gt::jj::list_local_bookmarks(&jj_cli).unwrap();
+    let (gtmq_pre, normal_pre): (Vec<_>, Vec<_>) = pre_all
+        .into_iter()
+        .partition(|b| b.name.starts_with("gtmq_"));
+    let pre = jj_gt::cleanup::snapshot_pre_fetch_with_prs(
+        &jj_cli,
+        &opts,
+        gtmq_pre,
+        normal_pre,
+        Vec::new(),
+    )
+    .unwrap();
+
+    // Sanity check the snapshot captured the upper → bottom edge.
+    let upper_parent =
+        pre.stacked
+            .iter()
+            .find(|sb| sb.name == "upper")
+            .map(|sb| match &sb.parent {
+                jj_gt::stack::BookmarkOrTrunk::Bookmark(p) => p.as_str(),
+                jj_gt::stack::BookmarkOrTrunk::Trunk => "main",
+            });
+    assert_eq!(
+        upper_parent,
+        Some("bottom"),
+        "test prereq: pre-fetch snapshot should record upper → bottom; got {upper_parent:?}",
+    );
+
+    // Simulate the post-fetch state where `bottom`'s remote ref was
+    // deleted (merged PR) and `jj git fetch`'s auto-import wiped the
+    // local bookmark. The orphan-rebase phase reads
+    // list_local_bookmarks at phase entry to compute the deleted
+    // set; deleting bottom locally produces the exact condition
+    // the phase exists to handle.
+    jj(cwd, &["bookmark", "delete", "bottom"]);
+
+    // Run the phase. The conflict-defer path should fire: snapshot
+    // op id → rebase upper onto main → detect conflict → op_restore
+    // → emit RebaseDeferredForConflict.
+    let mut actions: Vec<(jj_gt::jj::LocalBookmark, jj_gt::cleanup::CleanupAction)> = Vec::new();
+    jj_gt::cleanup::orphan_rebase_phase(&jj_cli, &pre, &opts, &mut actions).unwrap();
+
+    // The phase should have produced exactly one action for upper.
+    let upper_action = actions
+        .iter()
+        .find(|(b, _)| b.name == "upper")
+        .map(|(_, a)| a.clone())
+        .expect("phase should emit an action for upper");
+    assert!(
+        matches!(
+            upper_action,
+            jj_gt::cleanup::CleanupAction::RebaseDeferredForConflict { .. }
+        ),
+        "expected RebaseDeferredForConflict; got {upper_action:?}",
+    );
+
+    // The bookmark should be back where it started — op_restore
+    // rolled the rebase back. Compare commit ids: post-phase upper
+    // should match the pre-phase commit.
+    let post_upper = jj_gt::jj::resolve_commit_id(&jj_cli, "upper").unwrap();
+    assert_eq!(
+        post_upper, pre_upper,
+        "post-phase: upper should still point at its pre-rebase commit (rebase was rolled back); got {post_upper}, expected {pre_upper}",
+    );
+
+    // And no conflicts should remain in the workspace.
+    assert_eq!(
+        jj_gt::jj::count_conflicts_in(&jj_cli, "all()").unwrap(),
+        0,
+        "post-phase: no conflicts should remain anywhere",
+    );
 }

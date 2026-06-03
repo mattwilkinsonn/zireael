@@ -922,7 +922,17 @@ fn gtmq_prune_phase(
 /// to live on a non-trunk commit) and was the source of the bug
 /// where `jj-gt fetch` would surprise-rebase an in-flight
 /// unrelated stack entry and sometimes introduce conflicts.
-fn orphan_rebase_phase(
+/// 7. Rebase orphaned descendants of removed bookmarks onto
+/// trunk so the stack doesn't dangle on a fetch-deleted parent.
+///
+/// Snapshots the op id before each rebase and rolls back via
+/// `jj op restore` if the rebase introduces conflicts — fetch
+/// should never leave the user with conflict markers from a
+/// mutation they didn't ask for. Conflict-deferred bookmarks
+/// surface as `RebaseDeferredForConflict` in the per-bookmark
+/// summary table; the user runs `jj-gt restack` when they're
+/// ready to resolve.
+pub fn orphan_rebase_phase(
     jj: &JjCli,
     pre: &PreFetchSnapshot,
     opts: &FetchOpts,

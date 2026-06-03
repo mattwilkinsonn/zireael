@@ -630,11 +630,21 @@ pub fn op_restore(jj: &JjCli, op_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// Count of conflicted commits in `revset` — used after a rebase
-/// to detect whether the rebased range now contains conflict
-/// markers. `jj log -r 'conflicts() & <revset>' --no-graph -T id`
-/// emits one line per matching commit; counting lines gives the
-/// count without parsing the content.
+/// Count of conflicted commits in `revset` — used to detect whether
+/// a rebased range now contains conflict markers without parsing
+/// human-readable stderr. `jj log -r 'conflicts() & <revset>'
+/// --no-graph -T id` emits one line per matching commit; counting
+/// lines gives the count without parsing the content.
+///
+/// Used by the restack code path to enumerate conflicted commits
+/// after `jj rebase`, so the per-stack summary can report "5
+/// commits conflicted" instead of a generic "rebase produced
+/// conflicts." Also held in reserve as a double-confirmation
+/// against [`rebase`]'s stderr-parsing heuristic — that heuristic
+/// is cheap and correct today, but if jj's CLI output ever drifts,
+/// the conflict-defer path in
+/// [`crate::cleanup::orphan_rebase_phase`] could call this to
+/// validate before rolling back.
 ///
 /// Returns 0 when the revset is empty (no commits) or when none of
 /// the matched commits carry conflicts.
