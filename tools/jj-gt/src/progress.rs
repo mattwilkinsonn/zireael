@@ -243,8 +243,13 @@ impl Tracker {
         // run completes (the caller's next eprintln would land on
         // the spinner's last row otherwise).
         if self.renderer.is_some() {
+            // stderr → state, matching `Tracker::finished` and the
+            // render loop. Without this, shutdown() could deadlock
+            // against a render-tick that holds stderr and is
+            // waiting on state.
+            let mut err = std::io::stderr().lock();
             let mut state = self.state.lock().unwrap();
-            clear_block(&mut std::io::stderr(), state.lines_drawn);
+            clear_block(&mut err, state.lines_drawn);
             state.lines_drawn = 0;
         }
         self.stop.store(true, Ordering::Release);
@@ -310,8 +315,23 @@ fn render_completion_line(bookmark: &str, status: FinishedStatus) -> String {
 fn render_loop(state: Arc<Mutex<State>>, stop: Arc<AtomicBool>) {
     let mut tick: usize = 0;
     while !stop.load(Ordering::Acquire) {
-        // Snapshot under the lock; format + write outside the lock
-        // so worker threads don't block on terminal I/O.
+        // Acquire the stderr lock BEFORE the state snapshot so the
+        // whole tick — snapshot, clear_block, spinner writes — is
+        // serialized against `Tracker::finished`. Without this, a
+        // worker's `finished()` could fire between our state-lock
+        // release (line A below) and our subsequent `clear_block`,
+        // leaving us with a stale `prev_lines` that doesn't match
+        // what's actually on screen anymore — `clear_block` would
+        // then erase rows that include the worker's freshly-written
+        // completion line + failure dump.
+        //
+        // The lock ordering here (stderr → state → release state →
+        // continue stderr) matches the order `Tracker::finished`
+        // uses, so the two paths can't deadlock against each other.
+        // Stderr is released before the inter-frame sleep so worker
+        // threads' `started`/`finished` calls aren't blocked for
+        // the full ~100ms frame.
+        let mut err = std::io::stderr().lock();
         let (running_snapshot, prev_lines): (Vec<(String, Duration)>, usize) = {
             let mut s = state.lock().unwrap();
             let snap: Vec<(String, Duration)> = s
@@ -325,9 +345,9 @@ fn render_loop(state: Arc<Mutex<State>>, stop: Arc<AtomicBool>) {
             // lines.
             s.lines_drawn = snap.len();
             (snap, prev)
+            // (A) state lock released here.
         };
 
-        let mut err = std::io::stderr();
         clear_block(&mut err, prev_lines);
 
         let glyph = SPINNER_GLYPHS[tick % SPINNER_GLYPHS.len()];
@@ -342,6 +362,10 @@ fn render_loop(state: Arc<Mutex<State>>, stop: Arc<AtomicBool>) {
             );
         }
         let _ = err.flush();
+        // Drop stderr lock before the sleep so workers can land
+        // their completion lines / failure dumps during the
+        // inter-frame quiet window.
+        drop(err);
 
         tick = tick.wrapping_add(1);
         std::thread::sleep(FRAME_DURATION);
@@ -351,7 +375,9 @@ fn render_loop(state: Arc<Mutex<State>>, stop: Arc<AtomicBool>) {
     // spinner block on screen. [`Tracker::finish`] also wipes
     // before signalling stop, but a duplicate wipe is harmless
     // (writes 0 escapes when `lines_drawn` is 0).
-    let mut err = std::io::stderr();
+    //
+    // Same lock ordering as the main render-tick: stderr → state.
+    let mut err = std::io::stderr().lock();
     let last = state.lock().unwrap().lines_drawn;
     clear_block(&mut err, last);
     state.lock().unwrap().lines_drawn = 0;
