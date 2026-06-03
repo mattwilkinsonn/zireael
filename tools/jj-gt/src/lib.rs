@@ -696,7 +696,19 @@ fn action_to_row(action: &cleanup::CleanupAction) -> (ui::ActionStatus, String) 
         ),
         CleanupAction::Rebased { onto, prev_parent } => (
             ui::ActionStatus::Ok,
-            format!("rebased onto {onto} (parent `{prev_parent}` was removed by gt sync)"),
+            format!(
+                "rebased onto {onto} (parent `{prev_parent}` was removed earlier in fetch/sync cleanup)"
+            ),
+        ),
+        CleanupAction::RebaseDeferredForConflict {
+            onto,
+            prev_parent,
+            message,
+        } => (
+            ui::ActionStatus::Warn,
+            format!(
+                "rebase onto {onto} would have conflicted (parent `{prev_parent}` was removed earlier in fetch/sync cleanup) — {message}; deferred to `jj-gt restack` (run manually when you're ready to resolve)"
+            ),
         ),
         CleanupAction::RebaseConflicted {
             onto,
@@ -705,7 +717,7 @@ fn action_to_row(action: &cleanup::CleanupAction) -> (ui::ActionStatus, String) 
         } => (
             ui::ActionStatus::Error,
             format!(
-                "rebase onto {onto} produced conflicts (parent `{prev_parent}` was removed by gt sync) — {message}; run `jj resolve` to fix"
+                "rebase onto {onto} produced conflicts (parent `{prev_parent}` was removed earlier in fetch/sync cleanup) — {message}; run `jj resolve` to fix"
             ),
         ),
         CleanupAction::RestoredAfterRewind { pre, post } => (

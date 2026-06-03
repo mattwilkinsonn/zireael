@@ -84,10 +84,24 @@ pub enum CleanupAction {
     /// linear. The previous parent name is preserved for the user
     /// to see why the rebase happened.
     Rebased { onto: String, prev_parent: String },
-    /// Same trigger as `Rebased`, but `jj rebase` reported the
-    /// resulting commit(s) as conflicted. We don't roll back —
-    /// jj's conflict markers stay in the working tree and the user
-    /// runs `jj resolve` to clean up.
+    /// Same trigger as `Rebased`, but the rebase produced
+    /// conflicts. We rolled it back via `jj op restore` so the
+    /// user's working state isn't littered with conflict markers
+    /// from a fetch they didn't ask to mutate. The bookmark is
+    /// still anchored to its pre-fetch parent; resolving the
+    /// orphan now requires `jj-gt restack` (issue #61) or a
+    /// manual `jj rebase -d main@origin`. `message` carries the
+    /// jj stderr line that surfaced the conflict.
+    RebaseDeferredForConflict {
+        onto: String,
+        prev_parent: String,
+        message: String,
+    },
+    /// `jj rebase` itself errored (e.g. immutable destination,
+    /// nonexistent source). Distinct from the conflict-deferred
+    /// path because we can't even attempt the rebase; the
+    /// bookmark is left where it was and the error message is
+    /// surfaced for diagnosis.
     RebaseConflicted {
         onto: String,
         prev_parent: String,
@@ -908,7 +922,17 @@ fn gtmq_prune_phase(
 /// to live on a non-trunk commit) and was the source of the bug
 /// where `jj-gt fetch` would surprise-rebase an in-flight
 /// unrelated stack entry and sometimes introduce conflicts.
-fn orphan_rebase_phase(
+/// 7. Rebase orphaned descendants of removed bookmarks onto
+/// trunk so the stack doesn't dangle on a fetch-deleted parent.
+///
+/// Snapshots the op id before each rebase and rolls back via
+/// `jj op restore` if the rebase introduces conflicts — fetch
+/// should never leave the user with conflict markers from a
+/// mutation they didn't ask for. Conflict-deferred bookmarks
+/// surface as `RebaseDeferredForConflict` in the per-bookmark
+/// summary table; the user runs `jj-gt restack` when they're
+/// ready to resolve.
+pub fn orphan_rebase_phase(
     jj: &JjCli,
     pre: &PreFetchSnapshot,
     opts: &FetchOpts,
@@ -956,6 +980,27 @@ fn orphan_rebase_phase(
             }
         };
 
+        // Snapshot the op id BEFORE the rebase so we can roll back
+        // cleanly if the rebase produces conflicts. fetch should
+        // never leave the user with conflict markers from a
+        // mutation they didn't ask for — the deferred path puts the
+        // ball back in their court via `jj-gt restack` (#61) or a
+        // manual `jj rebase -d main@origin`.
+        let pre_rebase_op = match jj::current_op_id(jj) {
+            Ok(id) => Some(id),
+            Err(e) => {
+                // If we can't snapshot the op id we can't safely
+                // restore — fall back to the legacy behaviour
+                // (apply the rebase and surface conflicts if any).
+                // Log + continue with the original codepath; the
+                // user gets the same outcome as before the fix.
+                tracing::warn!(
+                    "jj-gt: couldn't snapshot op id pre-rebase ({e}); deferred-on-conflict disabled for this bookmark"
+                );
+                None
+            }
+        };
+
         match jj::rebase(jj, &rebase_revset, &opts.trunk) {
             Ok(jj::RebaseOutcome::Clean) | Ok(jj::RebaseOutcome::NoOp) => {
                 actions.push((
@@ -967,20 +1012,62 @@ fn orphan_rebase_phase(
                 ));
             }
             Ok(jj::RebaseOutcome::Conflicted { message }) => {
-                actions.push((
-                    local,
-                    CleanupAction::RebaseConflicted {
-                        onto: opts.trunk.clone(),
-                        prev_parent,
-                        message,
-                    },
-                ));
+                // The rebase succeeded as far as jj was concerned,
+                // but the result has conflict markers. Roll back so
+                // the user's working state stays untouched, and
+                // mark the bookmark as deferred so it shows up in
+                // the per-bookmark summary as "needs restack."
+                if let Some(op_id) = pre_rebase_op.as_deref() {
+                    match jj::op_restore(jj, op_id) {
+                        Ok(()) => {
+                            actions.push((
+                                local,
+                                CleanupAction::RebaseDeferredForConflict {
+                                    onto: opts.trunk.clone(),
+                                    prev_parent,
+                                    message,
+                                },
+                            ));
+                        }
+                        Err(restore_err) => {
+                            // Restore failed — the user is stuck with
+                            // the conflicted rebase result. Surface
+                            // both the original conflict and the
+                            // restore failure so they know what to
+                            // clean up.
+                            let combined = format!(
+                                "{message}; op_restore to roll back also failed: {restore_err}"
+                            );
+                            actions.push((
+                                local,
+                                CleanupAction::RebaseConflicted {
+                                    onto: opts.trunk.clone(),
+                                    prev_parent,
+                                    message: combined,
+                                },
+                            ));
+                        }
+                    }
+                } else {
+                    // Pre-rebase op snapshot failed — can't restore,
+                    // fall through to the legacy "conflicts left in
+                    // working tree" surface.
+                    actions.push((
+                        local,
+                        CleanupAction::RebaseConflicted {
+                            onto: opts.trunk.clone(),
+                            prev_parent,
+                            message,
+                        },
+                    ));
+                }
             }
             Err(e) => {
                 // Hard rebase failure (e.g. immutable commit) —
                 // surface as a conflicted action so it's at
                 // least visible in the output rather than silently
-                // swallowed.
+                // swallowed. Nothing to roll back; jj already
+                // errored before mutating anything.
                 actions.push((
                     local,
                     CleanupAction::RebaseConflicted {
