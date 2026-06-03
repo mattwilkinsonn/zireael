@@ -176,14 +176,34 @@ pub fn run_pre_push_stack(
                 // tracker's status enum so the tracker can clear
                 // the spinner row and print the final line in the
                 // correct color above any still-running rows.
+                //
+                // For Failed / Fixup, hand the captured output to
+                // the tracker so it dumps the buffer between the
+                // completion line and the still-running spinner
+                // block — immediate signal, no waiting for the
+                // post-run summary. Passed / Cancelled have
+                // nothing actionable to show, so pass `None`.
                 let status = if outcome.cancelled {
                     crate::progress::FinishedStatus::Cancelled
-                } else if outcome.success {
-                    crate::progress::FinishedStatus::Passed
-                } else {
+                } else if !outcome.success {
                     crate::progress::FinishedStatus::Failed
+                } else if outcome.fixup_commit.is_some() {
+                    // success=true + fixup_commit=Some means a hook
+                    // (e.g. cargo fmt) rewrote files and the retry
+                    // run came back clean. The bookmark still can't
+                    // proceed (the user has to squash the fixup
+                    // commit), so surface the rewrite output here.
+                    crate::progress::FinishedStatus::Fixup
+                } else {
+                    crate::progress::FinishedStatus::Passed
                 };
-                tracker.finished(&update.bookmark, status);
+                let captured = match status {
+                    crate::progress::FinishedStatus::Failed
+                    | crate::progress::FinishedStatus::Fixup => outcome.captured_output.as_deref(),
+                    crate::progress::FinishedStatus::Passed
+                    | crate::progress::FinishedStatus::Cancelled => None,
+                };
+                tracker.finished(&update.bookmark, status, captured);
             };
         let outcomes = jj_hooks::hooks::run_for_partitioned_updates_parallel(
             jj,
@@ -273,10 +293,10 @@ pub fn run_pre_push_stack(
     }
 
     // Anything classified as Failed or Fixup means the submit
-    // can't proceed. Render the per-screen summary + replay the
-    // captured output of just the failed bookmarks at the bottom
-    // (the user is already looking there), then return a single
-    // error naming the first failure.
+    // can't proceed. Render the per-bookmark status summary table
+    // (the captured output was already dumped in-band by the
+    // tracker at completion time — see `Tracker::finished`), then
+    // return a single error naming the first failure.
     let bad_count = classified
         .iter()
         .filter(|(_, r)| {
@@ -329,12 +349,18 @@ pub(crate) enum BookmarkResult {
     Cancelled,
 }
 
-/// Render the per-screen failure summary + replay each
-/// Failed/Fixup bookmark's captured output. Pure function over a
-/// classified result list; used by `run_pre_push_stack` after a
-/// multi-bookmark run produces at least one failure, and unit-
-/// tested via this surface so the shape is pinned without
-/// requiring real hook subprocesses.
+/// Render the post-run summary table — one line per bookmark with
+/// its status word. Pure function over a classified result list;
+/// used by `run_pre_push_stack` after a multi-bookmark run produces
+/// at least one failure, and unit-tested via this surface so the
+/// shape is pinned without requiring real hook subprocesses.
+///
+/// The captured failure output is NOT replayed here — the parallel
+/// tracker (`progress::Tracker::finished`) already dumped it at
+/// failure time, just below the failing bookmark's completion line.
+/// Replaying it post-run would print the same content twice; the
+/// summary table is the one-glance index of what happened, and the
+/// scrollback above already has the actionable detail.
 ///
 /// Writes to `out` (typically `stderr`). Returns the underlying
 /// IO error if writes fail; in production that's basically never
@@ -354,28 +380,6 @@ pub(crate) fn render_failure_report(
         }
     }
     writeln!(out)?;
-
-    for (name, result) in classified {
-        let (captured, kind) = match result {
-            BookmarkResult::Failed { captured, .. } => (captured, "failure output"),
-            BookmarkResult::Fixup { captured, .. } => (captured, "autofix output"),
-            _ => continue,
-        };
-        writeln!(out, "--- {name} ({kind}) ---")?;
-        if let Some(buf) = captured {
-            write!(out, "{buf}")?;
-            if !buf.ends_with('\n') {
-                writeln!(out)?;
-            }
-        } else {
-            writeln!(
-                out,
-                "(no captured output — sequential run, see live stream above)"
-            )?;
-        }
-        writeln!(out, "--- end {name} ---")?;
-        writeln!(out)?;
-    }
     Ok(())
 }
 
@@ -458,10 +462,11 @@ mod tests {
     }
 
     #[test]
-    fn report_replays_captured_output_of_failed_bookmark() {
-        // The whole point of this PR: actionable content (the fmt
-        // diff, the clippy warning) lands right above the final
-        // error so the user doesn't have to scroll.
+    fn report_summary_omits_captured_replay() {
+        // Post-A3 contract: the captured output of failed bookmarks
+        // is NOT in the summary report. The parallel tracker prints
+        // it at failure time. The summary report's job is the
+        // one-line-per-bookmark status overview.
         let out = render(&[(
             "sea-559",
             BookmarkResult::Failed {
@@ -469,98 +474,20 @@ mod tests {
                 captured: Some("Diff in foo.rs:399:\n-extra\n".into()),
             },
         )]);
+        // Summary line is still there.
+        assert!(out.contains("FAILED     sea-559"), "got:\n{out}");
+        // But the per-bookmark fenced replay is gone.
         assert!(
-            out.contains("--- sea-559 (failure output) ---"),
-            "got:\n{out}"
-        );
-        assert!(out.contains("Diff in foo.rs:399:"), "got:\n{out}");
-        assert!(out.contains("--- end sea-559 ---"), "got:\n{out}");
-    }
-
-    #[test]
-    fn report_replays_captured_output_of_autofix_bookmark() {
-        let out = render(&[(
-            "sea-559",
-            BookmarkResult::Fixup {
-                message: "fixup".into(),
-                captured: Some("autofix wrote 2 files\n".into()),
-            },
-        )]);
-        assert!(out.contains("AUTOFIX    sea-559"), "got:\n{out}");
-        assert!(
-            out.contains("--- sea-559 (autofix output) ---"),
-            "got:\n{out}"
-        );
-        assert!(out.contains("autofix wrote 2 files"), "got:\n{out}");
-    }
-
-    #[test]
-    fn report_skips_replay_for_passed_and_cancelled() {
-        // Passed + Cancelled bookmarks show up in the summary
-        // table but NOT in the captured-output replay section —
-        // they have nothing actionable.
-        let out = render(&[
-            (
-                "sea-559",
-                BookmarkResult::Failed {
-                    message: "boom".into(),
-                    captured: Some("fmt diff content\n".into()),
-                },
-            ),
-            ("sea-561", BookmarkResult::Cancelled),
-            ("sea-695", BookmarkResult::Passed),
-        ]);
-        // sea-561 and sea-695 appear in the summary header...
-        assert!(out.contains("cancelled  sea-561"));
-        assert!(out.contains("passed     sea-695"));
-        // ...but not as a replay block header.
-        assert!(
-            !out.contains("--- sea-561 ("),
-            "got unexpected sea-561 replay:\n{out}"
+            !out.contains("--- sea-559 (failure output) ---"),
+            "captured replay should be absent from summary:\n{out}",
         );
         assert!(
-            !out.contains("--- sea-695 ("),
-            "got unexpected sea-695 replay:\n{out}"
+            !out.contains("Diff in foo.rs:399:"),
+            "captured content should be absent from summary:\n{out}",
         );
-    }
-
-    #[test]
-    fn report_handles_missing_captured_output_gracefully() {
-        // Sequential (`--hooks-sequential`) runs don't capture
-        // because output streamed live. The replay block must
-        // not panic — it just notes that the live stream was
-        // upstream.
-        let out = render(&[(
-            "sea-559",
-            BookmarkResult::Failed {
-                message: "boom".into(),
-                captured: None,
-            },
-        )]);
-        assert!(out.contains("--- sea-559 (failure output) ---"));
-        assert!(out.contains("(no captured output"));
-    }
-
-    #[test]
-    fn report_appends_trailing_newline_to_unterminated_capture() {
-        // Captured buffers may or may not end with '\n'; the
-        // replay should always end the block cleanly so the
-        // following separator doesn't run-on.
-        let out = render(&[(
-            "sea-559",
-            BookmarkResult::Failed {
-                message: "boom".into(),
-                captured: Some("no trailing newline".into()),
-            },
-        )]);
-        // Find the failure block and check there's a newline
-        // before the "--- end" marker.
-        let pos = out.find("--- end sea-559 ---").expect("end marker missing");
-        let before = &out[..pos];
         assert!(
-            before.ends_with('\n'),
-            "expected newline before end marker, got `{}`",
-            before.chars().rev().take(20).collect::<String>(),
+            !out.contains("--- end sea-559 ---"),
+            "captured-block end marker should be absent from summary:\n{out}",
         );
     }
 }
