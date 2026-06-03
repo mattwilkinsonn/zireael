@@ -223,7 +223,7 @@ snapshot per keypress (uses `--ignore-working-copy`).
 
 ## jjui integration
 
-`jj-gt init` walks you through a one-time setup that installs six
+`jj-gt init` walks you through a one-time setup that installs seven
 [jjui](https://github.com/idursun/jjui) actions + keybindings so
 the common `jj-gt` flows are reachable from inside the TUI:
 
@@ -235,6 +235,7 @@ the common `jj-gt` flows are reachable from inside the TUI:
 | `jj-gt-submit` | `x S` | Submit every bookmark on the @-ancestor stack (`jj-gt submit`) |
 | `jj-gt-track` | `x T` | Sync metadata refs for every bookmark on the stack (`jj-gt track`) |
 | `jj-gt-reconcile` | `x r` | Re-track adjacent diverged bookmarks + push rebased SHAs (`jj-gt reconcile`) |
+| `jj-gt-restack` | `x R` | Rebase every local stack onto trunk (`jj-gt restack`) — opt-in cascade for when fetch deferred a conflicting rebase or main has advanced |
 
 Order matters: jjui's `x`-prefix overlay surfaces candidates in the
 order they appear in the config, so the most-frequent actions
@@ -296,6 +297,13 @@ lua = """
   revisions.refresh()
 """
 
+[[actions]]
+name = "jj-gt-restack"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "restack")
+  revisions.refresh()
+"""
+
 [[bindings]]
 action = "jj-gt-submit-selected"
 seq = ["x", "s"]
@@ -331,6 +339,12 @@ action = "jj-gt-reconcile"
 seq = ["x", "r"]
 scope = "revisions"
 desc = "jj-gt reconcile"
+
+[[bindings]]
+action = "jj-gt-restack"
+seq = ["x", "R"]
+scope = "revisions"
+desc = "jj-gt restack (rebase all local stacks onto trunk)"
 ```
 
 The `revisions.refresh()` after each `jj_async` repaints jjui's

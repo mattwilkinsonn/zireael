@@ -67,12 +67,14 @@ pub struct AddedItems {
     pub added_track: bool,
     pub added_track_selected: bool,
     pub added_reconcile: bool,
+    pub added_restack: bool,
     pub added_binding_submit: bool,
     pub added_binding_submit_selected: bool,
     pub added_binding_fetch: bool,
     pub added_binding_track: bool,
     pub added_binding_track_selected: bool,
     pub added_binding_reconcile: bool,
+    pub added_binding_restack: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -196,6 +198,7 @@ fn apply_jjui_config(path: &Path) -> Result<AddedItems> {
 ///   x T → jj-gt-track (whole stack)
 ///   x t → jj-gt-track-selected
 ///   x r → jj-gt-reconcile
+///   x R → jj-gt-restack (rebase every local stack onto trunk)
 ///
 /// Idempotent — running twice on the same input is a no-op.
 pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
@@ -318,13 +321,25 @@ fn action_specs() -> &'static [ActionSpec] {
             scope: "revisions",
         },
         // 6. reconcile — recovery flow; only reached when
-        //    submit/fetch produced ambiguous state. Last in the
-        //    list because it's the least common.
+        //    submit/fetch produced ambiguous state.
         ActionSpec {
             action_name: "jj-gt-reconcile",
             lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"reconcile\")\n  revisions.refresh()\n",
             seq: &["x", "r"],
             desc: "jj-gt reconcile",
+            scope: "revisions",
+        },
+        // 7. restack — explicit "rewrite every stack onto new
+        //    trunk." Used when fetch deferred a conflicting
+        //    rebase (#60) or when the user wants to opt into the
+        //    full sync-with-restack cascade. Capital R so it
+        //    doesn't collide with `r` (reconcile) and to signal
+        //    the disruptive nature.
+        ActionSpec {
+            action_name: "jj-gt-restack",
+            lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"restack\")\n  revisions.refresh()\n",
+            seq: &["x", "R"],
+            desc: "jj-gt restack (rebase all local stacks onto trunk)",
             scope: "revisions",
         },
     ];
@@ -342,6 +357,7 @@ fn set_added_action_flag(added: &mut AddedItems, name: &str) {
         "jj-gt-track" => added.added_track = true,
         "jj-gt-track-selected" => added.added_track_selected = true,
         "jj-gt-reconcile" => added.added_reconcile = true,
+        "jj-gt-restack" => added.added_restack = true,
         _ => unreachable!("unexpected action name in action_specs: {name}"),
     }
 }
@@ -354,6 +370,7 @@ fn set_added_binding_flag(added: &mut AddedItems, name: &str) {
         "jj-gt-track" => added.added_binding_track = true,
         "jj-gt-track-selected" => added.added_binding_track_selected = true,
         "jj-gt-reconcile" => added.added_binding_reconcile = true,
+        "jj-gt-restack" => added.added_binding_restack = true,
         _ => unreachable!("unexpected action name in action_specs: {name}"),
     }
 }

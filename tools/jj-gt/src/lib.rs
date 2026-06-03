@@ -16,6 +16,7 @@ pub mod jj;
 pub mod lock;
 pub mod progress;
 pub mod reconcile;
+pub mod restack;
 pub mod select;
 pub mod stack;
 pub mod status;
@@ -139,6 +140,22 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
             Ok(ExitCode::SUCCESS)
         }
 
+        Command::Restack {
+            bookmark,
+            trunk,
+            remote,
+            stop_on_conflict,
+            dry_run,
+        } => restack_cmd(
+            &jj,
+            bookmark,
+            trunk,
+            remote,
+            stop_on_conflict,
+            dry_run,
+            verbosity,
+        ),
+
         Command::Init { print_only } => {
             init::print_setup_reminders();
             if !print_only {
@@ -152,12 +169,14 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
                     || jjui.added_track
                     || jjui.added_track_selected
                     || jjui.added_reconcile
+                    || jjui.added_restack
                     || jjui.added_binding_submit
                     || jjui.added_binding_submit_selected
                     || jjui.added_binding_fetch
                     || jjui.added_binding_track
                     || jjui.added_binding_track_selected
                     || jjui.added_binding_reconcile
+                    || jjui.added_binding_restack
                 {
                     eprintln!("jj-gt: merged jjui actions/bindings into jjui config");
                 }
@@ -646,6 +665,82 @@ fn fetch_cmd(
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn restack_cmd(
+    jj: &JjCli,
+    bookmark: Option<String>,
+    trunk: Option<String>,
+    remote: String,
+    stop_on_conflict: bool,
+    dry_run: bool,
+    _verbosity: ui::Verbosity,
+) -> Result<ExitCode, JjGtError> {
+    let workspace_root = jj.workspace_root().map_err(JjGtError::Hooks)?;
+    let trunk = status::resolve_trunk(&workspace_root, trunk.as_deref())?;
+
+    // The actual rebase destination is `<trunk>@<remote>` so we
+    // catch any post-fetch advances. jj's `<name>@<remote>` syntax
+    // does NOT fall back to a local bookmark when the remote
+    // tracking ref doesn't exist — so probe first, then fall back
+    // to plain `<trunk>` when the remote-tracking form fails to
+    // resolve. Covers the case where the user passes `--trunk
+    // some-local-bookmark` for a bookmark that exists locally but
+    // not on the remote.
+    let remote_form = format!("{trunk}@{remote}");
+    let destination = if jj::resolve_commit_id(jj, &remote_form).is_ok() {
+        remote_form
+    } else {
+        tracing::info!(
+            "jj-gt restack: `{remote_form}` did not resolve, falling back to local `{trunk}`"
+        );
+        trunk.clone()
+    };
+
+    let opts = restack::RestackOpts {
+        trunk_destination: destination.clone(),
+        stop_on_conflict,
+        dry_run,
+        only_bookmark: bookmark,
+    };
+
+    if let Some(only) = opts.only_bookmark.as_deref() {
+        ui::section(&format!(
+            "Restacking stack containing `{only}` onto {destination}{}",
+            if dry_run { " (dry-run)" } else { "" }
+        ));
+    } else {
+        ui::section(&format!(
+            "Restacking all local stacks onto {destination}{}",
+            if dry_run { " (dry-run)" } else { "" }
+        ));
+    }
+
+    let results = restack::run_restack(jj, &opts)?;
+
+    if results.is_empty() {
+        ui::section("Nothing to restack");
+        eprintln!(
+            "  no local bookmarks found above {destination} — already in sync, or no bookmarks authored by current user"
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    ui::section("Per-stack restack");
+    for result in &results {
+        let (status, message) = restack::outcome_to_row(&result.outcome);
+        ui::action_row(&result.tip, status, &message);
+    }
+
+    if restack::any_unresolved(&results) {
+        // One or more stacks ended conflicted / failed — exit non-
+        // zero so scripts (and the jj-gt-restack jjui action's
+        // refresh trigger) can react.
+        Ok(ExitCode::from(1))
+    } else {
+        Ok(ExitCode::SUCCESS)
+    }
 }
 
 /// Map a [`cleanup::CleanupAction`] to the (status, message) tuple

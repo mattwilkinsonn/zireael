@@ -19,21 +19,23 @@ fn plan_with_no_unsets_flag() {
 }
 
 #[test]
-fn add_jjui_actions_to_empty_config_installs_all_six() {
+fn add_jjui_actions_to_empty_config_installs_all_seven() {
     let (output, added) = add_jjui_actions("").unwrap();
-    // All six actions + bindings should be added.
+    // All seven actions + bindings should be added.
     assert!(added.added_submit);
     assert!(added.added_submit_selected);
     assert!(added.added_fetch);
     assert!(added.added_track);
     assert!(added.added_track_selected);
     assert!(added.added_reconcile);
+    assert!(added.added_restack);
     assert!(added.added_binding_submit);
     assert!(added.added_binding_submit_selected);
     assert!(added.added_binding_fetch);
     assert!(added.added_binding_track);
     assert!(added.added_binding_track_selected);
     assert!(added.added_binding_reconcile);
+    assert!(added.added_binding_restack);
 
     let parsed: toml::Table = output.parse().unwrap();
     let action_names: Vec<&str> = parsed["actions"]
@@ -49,6 +51,7 @@ fn add_jjui_actions_to_empty_config_installs_all_six() {
         "jj-gt-track",
         "jj-gt-track-selected",
         "jj-gt-reconcile",
+        "jj-gt-restack",
     ] {
         assert!(
             action_names.contains(&expected),
@@ -89,6 +92,7 @@ fn add_jjui_actions_default_keymap_uses_lowercase_for_selected() {
     assert_eq!(got["jj-gt-track"], vec!["x", "T"]);
     assert_eq!(got["jj-gt-track-selected"], vec!["x", "t"]);
     assert_eq!(got["jj-gt-reconcile"], vec!["x", "r"]);
+    assert_eq!(got["jj-gt-restack"], vec!["x", "R"]);
 }
 
 #[test]
@@ -212,6 +216,7 @@ fn add_jjui_actions_orders_by_frequency() {
             "jj-gt-submit",          // whole-stack submit (less common)
             "jj-gt-track",           // whole-stack track
             "jj-gt-reconcile",       // last-resort recovery
+            "jj-gt-restack",         // opt-in rebase of every stack onto trunk
         ],
         "action order in SPECS drifted from frequency-ordered list",
     );
@@ -230,6 +235,7 @@ fn add_jjui_actions_orders_by_frequency() {
             "jj-gt-submit",
             "jj-gt-track",
             "jj-gt-reconcile",
+            "jj-gt-restack",
         ],
         "binding order in SPECS drifted from frequency-ordered list",
     );
