@@ -280,9 +280,11 @@ pub fn rebase_one(
 /// is a property of the user's labeling; the commit count is what
 /// the user actually cares about when reading "rebased N commits."
 ///
-/// Falls back to the bookmark count on error so the summary still
-/// renders something useful — the precise count is informational,
-/// not load-bearing.
+/// Returns 0 on error (revset doesn't resolve, jj exits non-zero,
+/// etc.). The precise count is informational, not load-bearing —
+/// the summary surfaces "rebased N commits" but the rebase itself
+/// has already completed by the time we count, so a wrong count
+/// affects readability and nothing more.
 fn count_rebased_commits(jj: &JjCli, trunk_destination: &str, tip: &str) -> usize {
     let revset = format!("{trunk_destination}..{tip}");
     jj::count_commits_in(jj, &revset).unwrap_or_default()
