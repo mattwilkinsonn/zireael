@@ -466,11 +466,11 @@
     export PATH="${pkgs.gh}/bin:${pkgs.git}/bin:$PATH"
     if [ -d "$EXT_DIR" ]; then
       echo "Updating gh-pr-review extension..."
-      run ${pkgs.gh}/bin/gh extension upgrade agynio/gh-pr-review || \
+      run ${pkgs.gh}/bin/gh extension upgrade gh-pr-review || \
         echo "WARN: gh extension upgrade failed (gh not authed?); skipping."
     else
       echo "Installing gh-pr-review extension..."
-      run ${pkgs.gh}/bin/gh extension install agynio/gh-pr-review || \
+      run ${pkgs.gh}/bin/gh extension install https://github.com/agynio/gh-pr-review || \
         echo "WARN: gh extension install failed (gh not authed? run 'gh auth login' once)."
     fi
   '';
