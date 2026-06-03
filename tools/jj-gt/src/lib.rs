@@ -105,6 +105,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
             no_gtmq_prune,
             gtmq_prefix,
             auto,
+            no_export,
             dry_run,
         } => fetch_cmd(
             &jj,
@@ -115,6 +116,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
             no_gtmq_prune,
             gtmq_prefix,
             auto,
+            no_export,
             dry_run,
             verbosity,
         ),
@@ -606,6 +608,7 @@ fn fetch_cmd(
     no_gtmq_prune: bool,
     gtmq_prefix: Vec<String>,
     auto: bool,
+    no_export: bool,
     dry_run: bool,
     verbosity: ui::Verbosity,
 ) -> Result<ExitCode, JjGtError> {
@@ -627,6 +630,7 @@ fn fetch_cmd(
         gtmq_prefixes: prefixes,
         auto,
         dry_run,
+        no_export,
     };
 
     ui::section(&format!("Fetching + cleaning up against {remote}"));

@@ -154,6 +154,15 @@ pub enum Command {
         #[arg(long)]
         auto: bool,
 
+        /// Skip the pre-fetch `jj git export` step. Default off:
+        /// fetch exports JJ's bookmark view into git refs first so
+        /// that bookmark moves made in another workspace (sharing
+        /// the same `.jj/`) aren't reverted by `jj git fetch`'s
+        /// auto-import. Set this when you specifically want to
+        /// observe git's pre-export state.
+        #[arg(long)]
+        no_export: bool,
+
         /// Print what would happen at every step.
         #[arg(long)]
         dry_run: bool,

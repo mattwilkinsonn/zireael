@@ -33,6 +33,12 @@ pub struct FetchOpts {
     pub gtmq_prefixes: Vec<String>,
     pub auto: bool,
     pub dry_run: bool,
+    /// Skip the pre-fetch `jj git export` step. Default `false`;
+    /// the export is what keeps bookmark moves made in one workspace
+    /// from being clobbered by `jj git fetch`'s auto-import when
+    /// `.jj/` is shared across workspaces. Set to `true` only when
+    /// you specifically want to observe git's pre-export state.
+    pub no_export: bool,
 }
 
 impl Default for FetchOpts {
@@ -46,6 +52,7 @@ impl Default for FetchOpts {
             gtmq_prefixes: vec!["gtmq_".into()],
             auto: false,
             dry_run: false,
+            no_export: false,
         }
     }
 }
@@ -268,6 +275,24 @@ pub fn run_fetch(
     let _lock = acquire_pipeline_lock(workspace_root, opts)?;
     maybe_shelter(jj, opts, verbosity)?;
 
+    // Export jj's bookmark view into git's loose refs BEFORE the
+    // fetch step. Critical when `.jj/` is shared across workspaces
+    // (`jj workspace add`): another workspace may have run `jj
+    // bookmark set <bm> -r <new>` without exporting, leaving JJ's
+    // view at `<new>` but git's `refs/heads/<bm>` still at the
+    // older value. `jj git fetch` auto-imports after fetching, so
+    // without a pre-fetch export the import would treat git's
+    // stale loose ref as canonical and revert the local bookmark
+    // to the older commit — silently orphaning the other
+    // workspace's work.
+    //
+    // Skip in dry-run (no ref mutations) and when --no-export was
+    // explicitly passed (escape hatch for users who know what
+    // they're doing and want to inspect the bookmark state without
+    // touching git). Idempotent on the happy path: when JJ's view
+    // already matches git's loose refs, export is a no-op.
+    maybe_export_before_fetch(jj, opts, verbosity)?;
+
     // Snapshot the bookmark graph BEFORE `jj git fetch` runs. See
     // `snapshot_pre_fetch` for the timing rationale.
     let pre = snapshot_pre_fetch(jj, workspace_root, opts)?;
@@ -459,6 +484,41 @@ pub fn snapshot_post_fetch(jj: &JjCli) -> Result<PostFetchSnapshot> {
     Ok(PostFetchSnapshot {
         all: list_local_bookmarks(jj)?,
     })
+}
+
+/// 0c. Export jj's bookmark view into git's loose refs before the
+/// `jj git fetch` step. See the call site comment in `run_fetch`
+/// for the failure mode this defends against — short version:
+/// without this, fetch's auto-import treats git's stale ref values
+/// as canonical and clobbers any bookmark moves made in another
+/// workspace via `jj bookmark set` that haven't been pushed yet.
+///
+/// Idempotent — `jj git export` is a no-op when JJ's view already
+/// matches git's loose refs. Cheap (no network, no graph walk),
+/// so we don't gate it on detecting a divergence.
+///
+/// Skip in dry-run (no ref mutations allowed) and when `no_export`
+/// was explicitly set (caller wants to inspect the un-exported
+/// state).
+pub fn maybe_export_before_fetch(
+    jj: &JjCli,
+    opts: &FetchOpts,
+    verbosity: crate::ui::Verbosity,
+) -> Result<()> {
+    if opts.dry_run || opts.no_export {
+        return Ok(());
+    }
+    let step = crate::ui::Step::start("Exporting jj bookmarks to git refs", verbosity);
+    match jj::git_export(jj) {
+        Ok(()) => {
+            step.success("done", None);
+            Ok(())
+        }
+        Err(e) => {
+            step.fail(&format!("{e}"), None);
+            Err(e)
+        }
+    }
 }
 
 /// `jj git fetch`.

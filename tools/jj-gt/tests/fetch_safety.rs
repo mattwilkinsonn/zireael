@@ -573,3 +573,72 @@ fn snapshot_pre_fetch_captures_parent_edges_that_post_fetch_loses() {
         "compute_deleted_set should report `bottom` as deleted; got {deleted:?}",
     );
 }
+
+#[test]
+fn maybe_export_before_fetch_runs_jj_git_export() {
+    // Regression for the workspace-leak bug: when `jj bookmark set
+    // <bm> -r <new>` runs in workspace W2 sharing `.jj/` with W1
+    // (where W2 is non-colocated, so no auto-export fires), JJ's
+    // view has `<bm> = <new>` but git's `refs/heads/<bm>` is still
+    // at the old commit. When W1 later runs `jj-gt fetch`, the
+    // `jj git fetch` step auto-imports git refs back into JJ —
+    // which sees git's stale ref as canonical and reverts W2's
+    // bookmark move.
+    //
+    // The fix: `run_fetch` calls `maybe_export_before_fetch` BEFORE
+    // `jj git fetch`. From W1's perspective (colocated), the export
+    // sees its last-export tracking is behind JJ's current view
+    // (because W2 made the change without exporting), and updates
+    // git's loose refs to match. The subsequent fetch+auto-import
+    // is then a no-op for that bookmark.
+    //
+    // Reliably reproducing the full bug shape in a single-workspace
+    // test is awkward because colocated `jj bookmark set` auto-
+    // exports immediately and updates the "last exported" tracking
+    // — so a follow-up `jj git export` sees no work to do. The
+    // shape only manifests with the secondary-workspace timing
+    // gap. End-to-end coverage of `run_fetch` lives in
+    // `snapshot_pre_fetch_captures_parent_edges_that_post_fetch_loses`.
+    //
+    // What we pin here is the contract: the helper runs `jj git
+    // export` and doesn't error on a clean workspace. That's the
+    // minimum the fix has to do — if a future refactor breaks the
+    // call wiring, this test fires.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+
+    let tmp = build_tracked_stack_with_bare_remote();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    let opts = jj_gt::cleanup::FetchOpts {
+        remote: "origin".into(),
+        trunk: "main".into(),
+        ..jj_gt::cleanup::FetchOpts::default()
+    };
+
+    // Happy path: succeeds on a clean workspace.
+    jj_gt::cleanup::maybe_export_before_fetch(&jj_cli, &opts, jj_gt::ui::Verbosity::Quiet)
+        .expect("export should succeed on a clean workspace");
+
+    // dry-run skips the export entirely — return without error.
+    let dry_opts = jj_gt::cleanup::FetchOpts {
+        dry_run: true,
+        ..opts.clone()
+    };
+    jj_gt::cleanup::maybe_export_before_fetch(&jj_cli, &dry_opts, jj_gt::ui::Verbosity::Quiet)
+        .expect("export should no-op in dry-run mode");
+
+    // no_export skips the export entirely — return without error.
+    let no_export_opts = jj_gt::cleanup::FetchOpts {
+        no_export: true,
+        ..opts.clone()
+    };
+    jj_gt::cleanup::maybe_export_before_fetch(
+        &jj_cli,
+        &no_export_opts,
+        jj_gt::ui::Verbosity::Quiet,
+    )
+    .expect("export should be skipped when no_export is set");
+}
