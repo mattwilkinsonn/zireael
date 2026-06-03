@@ -5,10 +5,15 @@ import { parseDate as chronoParseDate } from "chrono-node";
  * Supports: "today", "tomorrow", "next monday", "next friday", "in 3 days", "next week"
  *
  * @param dateString - Natural language date string
+ * @param now - Reference "now" for parsing. Defaults to the current time;
+ *              tests pass a fixed Date to keep assertions deterministic.
  * @returns ISO date string (YYYY-MM-DD) or null if parsing fails
  */
-export function parseDate(dateString: string): string | null {
-	const result = chronoParseDate(dateString, new Date(), { forwardDate: true });
+export function parseDate(
+	dateString: string,
+	now: Date = new Date(),
+): string | null {
+	const result = chronoParseDate(dateString, now, { forwardDate: true });
 
 	if (!result) {
 		return null;
@@ -24,10 +29,11 @@ export function parseDate(dateString: string): string | null {
 /**
  * Get today's date in ISO format (YYYY-MM-DD).
  *
+ * @param now - Reference "now". Defaults to the current time; tests pass
+ *              a fixed Date to keep assertions deterministic.
  * @returns Today's date as ISO string
  */
-export function getTodayDate(): string {
-	const now = new Date();
+export function getTodayDate(now: Date = new Date()): string {
 	const year = now.getFullYear();
 	const month = String(now.getMonth() + 1).padStart(2, "0");
 	const day = String(now.getDate()).padStart(2, "0");
@@ -38,10 +44,12 @@ export function getTodayDate(): string {
 /**
  * Get tomorrow's date in ISO format (YYYY-MM-DD).
  *
+ * @param now - Reference "now". Defaults to the current time; tests pass
+ *              a fixed Date to keep assertions deterministic.
  * @returns Tomorrow's date as ISO string
  */
-export function getTomorrowDate(): string {
-	const tomorrow = new Date();
+export function getTomorrowDate(now: Date = new Date()): string {
+	const tomorrow = new Date(now);
 	tomorrow.setDate(tomorrow.getDate() + 1);
 
 	const year = tomorrow.getFullYear();
