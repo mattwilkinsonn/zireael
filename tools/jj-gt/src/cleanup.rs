@@ -49,7 +49,7 @@ impl Default for FetchOpts {
             no_backfill: false,
             no_rebase: false,
             no_gtmq_prune: false,
-            gtmq_prefixes: vec!["gtmq_".into()],
+            gtmq_prefixes: default_gtmq_prefixes_owned(),
             auto: false,
             dry_run: false,
             no_export: false,
@@ -264,6 +264,25 @@ pub fn classify_gtmq_branch(pr: Option<&PrInfo>) -> CleanupAction {
 /// configured `gtmq_` prefixes.
 pub fn is_gtmq_branch(name: &str, prefixes: &[String]) -> bool {
     prefixes.iter().any(|p| name.starts_with(p))
+}
+
+/// Single source of truth for the default `gtmq_*` prefix list.
+/// Used by both [`FetchOpts::default`] and
+/// `crate::select::resolve_bookmarks` so the two pipelines can't
+/// drift on what counts as a Graphite queue-test branch.
+///
+/// Convert to an owned `Vec<String>` via
+/// [`default_gtmq_prefixes_owned`] when you need the runtime-
+/// configurable shape `is_gtmq_branch` expects.
+pub const DEFAULT_GTMQ_PREFIXES: &[&str] = &["gtmq_"];
+
+/// Owned `Vec<String>` form of [`DEFAULT_GTMQ_PREFIXES`] for
+/// callers that need to feed it into APIs taking `&[String]`.
+pub fn default_gtmq_prefixes_owned() -> Vec<String> {
+    DEFAULT_GTMQ_PREFIXES
+        .iter()
+        .map(|&s| s.to_owned())
+        .collect()
 }
 
 /// Three-way classification of a bookmark's pre/post-sync position.

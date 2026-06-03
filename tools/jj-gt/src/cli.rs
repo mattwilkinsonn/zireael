@@ -296,8 +296,11 @@ pub struct BookmarkArgs {
     #[arg(short = 'c', long, action = clap::ArgAction::Append)]
     pub change: Vec<String>,
 
-    /// Operate on every local bookmark that's an ancestor of `@` and
-    /// a descendant of trunk.
+    /// Operate on every local bookmark across every stack in the
+    /// repo (`bookmarks() & trunk..`), excluding trunk + `gtmq_*`
+    /// queue branches. Use this for "submit all my stacks" /
+    /// "push all my stacks" — distinct from the bareword default,
+    /// which operates only on the @-ancestor stack.
     #[arg(long)]
     pub all: bool,
 

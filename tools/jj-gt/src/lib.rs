@@ -599,11 +599,22 @@ fn submit_cmd(
             trunk: trunk.clone(),
             dry_run: submit.dry_run,
         };
+        // Submit-path: the adjacent step's candidate pool is every
+        // tracked bookmark on the remote. Unrelated stacks whose
+        // gt metadata drifted since the last submit get re-tracked
+        // alongside the submit set. This matches the pre-2026-06
+        // behavior of standalone reconcile (which now scopes to
+        // the focused stack); for the submit flow we keep the
+        // broad sweep because submit is by definition a
+        // multi-stack operation.
+        let adjacent_candidates =
+            jj::list_tracked_bookmarks_on_remote(jj, &bookmarks.remote).unwrap_or_default();
         if let Err(e) = reconcile::reconcile(
             jj,
             &workspace_root,
             &reconcile_opts,
             &stack_names,
+            &adjacent_candidates,
             &stack_names,
             verbosity,
         ) {
@@ -781,7 +792,7 @@ fn fetch_cmd(
     let trunk = status::resolve_trunk(&workspace_root, trunk.as_deref())?;
 
     let prefixes = if gtmq_prefix.is_empty() {
-        vec!["gtmq_".into()]
+        cleanup::default_gtmq_prefixes_owned()
     } else {
         gtmq_prefix
     };

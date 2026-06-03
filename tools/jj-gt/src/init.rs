@@ -188,15 +188,17 @@ fn apply_jjui_config(path: &Path) -> Result<AddedItems> {
 
 /// Merge jj-gt's actions + bindings into a jjui config TOML string.
 ///
-/// Per-action lookup is name-based. Each action's `seq` follows the
-/// same lowercase=selected, uppercase=all convention as the
-/// jj-hooks 2026-05 swap:
+/// Per-action lookup is name-based. The lowercase/uppercase split
+/// follows the same convention as the jj-hooks 2026-05 swap:
+/// lowercase keys operate on the cursor-focused commit (and the
+/// stack ending there, since submit/track expand ancestors);
+/// uppercase keys operate on every stack in the repo.
 ///
-///   x S → jj-gt-submit (whole stack)
-///   x s → jj-gt-submit-selected (just the bookmark at focused commit)
+///   x s → jj-gt-submit-selected (submit stack ending at focused commit)
+///   x S → jj-gt-submit         (submit every stack — `jj-gt submit --all`)
 ///   x f → jj-gt-fetch
-///   x T → jj-gt-track (whole stack)
-///   x t → jj-gt-track-selected
+///   x t → jj-gt-track-selected (track just the focused bookmark)
+///   x T → jj-gt-track          (track every bookmark on every stack)
 ///   x r → jj-gt-reconcile
 ///   x R → jj-gt-restack (rebase every local stack onto trunk)
 ///
@@ -229,8 +231,24 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
             t.insert("lua".into(), toml::Value::String(spec.lua.into()));
             actions_arr.push(toml::Value::Table(t));
             set_added_action_flag(&mut added, spec.action_name);
+        } else {
+            // Action exists — see if its lua body matches a known
+            // older form we've installed before. If so, rewrite to
+            // the current form. Custom user lua is left alone (it
+            // doesn't match any historical form).
+            migrate_action_lua(actions_arr, spec.action_name, spec.lua, spec.known_old_lua);
         }
     }
+
+    // Snapshot the current state of `actions` after the
+    // lua-migration loop above so the binding-desc migration can
+    // gate on managed-action lua without borrowing `doc` twice
+    // (`actions_arr` and `bindings_arr` can't be live mutably
+    // against the same `doc` simultaneously). At this point
+    // `actions_arr` reflects every spec's current lua — managed
+    // actions are at `spec.lua`, user-owned actions still have
+    // the user's bytes.
+    let actions_snapshot: Vec<toml::Value> = actions_arr.to_vec();
 
     // -- Bindings --
     let bindings = doc
@@ -249,6 +267,22 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
                 spec.desc,
             ));
             set_added_binding_flag(&mut added, spec.action_name);
+        } else {
+            // Binding exists — migrate its `desc` if it matches a
+            // known older form we shipped AND the action it points
+            // at still runs one of our managed lua forms. Keeps
+            // jjui's overlay text accurate after a rename without
+            // clobbering descs the user wrote themselves on a
+            // user-owned action.
+            migrate_binding_desc(
+                bindings_arr,
+                &actions_snapshot,
+                spec.action_name,
+                spec.desc,
+                spec.known_old_descs,
+                spec.lua,
+                spec.known_old_lua,
+            );
         }
     }
 
@@ -264,6 +298,16 @@ struct ActionSpec {
     seq: &'static [&'static str],
     desc: &'static str,
     scope: &'static str,
+    /// Lua bodies we've shipped historically for this action and
+    /// now want to migrate forward. An existing action whose `lua`
+    /// matches any of these gets rewritten to the current `lua`.
+    /// Custom user bodies (anything not in this list) are left
+    /// alone — the user owns them.
+    known_old_lua: &'static [&'static str],
+    /// Bindings descs we've shipped historically. Same rationale
+    /// as `known_old_lua`: keeps the display string current after
+    /// a rename without clobbering user-customized descs.
+    known_old_descs: &'static [&'static str],
 }
 
 fn action_specs() -> &'static [ActionSpec] {
@@ -272,15 +316,19 @@ fn action_specs() -> &'static [ActionSpec] {
     // actions first so the menu reads top-down like a usage
     // frequency curve.
     static SPECS: &[ActionSpec] = &[
-        // 1. submit-selected — the daily "ship my current
-        //    bookmark" keystroke; same hand as `x` so it's the
-        //    fastest reach.
+        // 1. submit-selected — the daily "ship the stack ending at
+        //    my cursor" keystroke. `submit -r <commit>` expands
+        //    ancestors automatically so this submits every
+        //    bookmark from trunk up through the focused commit's
+        //    bookmark.
         ActionSpec {
             action_name: "jj-gt-submit-selected",
             lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"submit\", \"-r\", context.commit_id())\n  revisions.refresh()\n",
             seq: &["x", "s"],
-            desc: "jj-gt submit selected bookmark(s)",
+            desc: "jj-gt submit stack ending at cursor",
             scope: "revisions",
+            known_old_lua: &[],
+            known_old_descs: &["jj-gt submit selected bookmark(s)"],
         },
         // 2. fetch — sync trunk + Graphite cleanup, run multiple
         //    times a day.
@@ -290,6 +338,8 @@ fn action_specs() -> &'static [ActionSpec] {
             seq: &["x", "f"],
             desc: "jj-gt fetch",
             scope: "revisions",
+            known_old_lua: &[],
+            known_old_descs: &[],
         },
         // 3. track-selected — manual track invocation when a
         //    submit ran into trouble and you want to retry the
@@ -298,27 +348,51 @@ fn action_specs() -> &'static [ActionSpec] {
             action_name: "jj-gt-track-selected",
             lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"track\", \"-r\", context.commit_id())\n  revisions.refresh()\n",
             seq: &["x", "t"],
-            desc: "jj-gt track selected bookmark(s)",
+            desc: "jj-gt track bookmarks on focused commit",
             scope: "revisions",
+            known_old_lua: &[],
+            known_old_descs: &[
+                "jj-gt track selected bookmark(s)",
+                "jj-gt track selected bookmark",
+            ],
         },
-        // 4. submit (whole stack) — less frequent than submit-
-        //    selected; usually `jj-gt submit --all` already kicks
-        //    via the shell alias.
+        // 4. submit (every stack) — `--all` covers every local
+        //    bookmark across every stack in the repo (excluding
+        //    trunk + gtmq_*). Pre-jjui code anchored this at @,
+        //    which doesn't match how the cursor moves in jjui;
+        //    the new shape is the "submit everything I'm working
+        //    on" intent.
         ActionSpec {
             action_name: "jj-gt-submit",
-            lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"submit\")\n  revisions.refresh()\n",
+            lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"submit\", \"--all\")\n  revisions.refresh()\n",
             seq: &["x", "S"],
-            desc: "jj-gt submit (whole stack)",
+            desc: "jj-gt submit every stack",
             scope: "revisions",
+            known_old_lua: &[
+                // Pre-2026-06: bareword `jj-gt submit` (only the
+                // @-ancestor stack); broadened to `--all` so
+                // jjui's cursor-anywhere workflow gets a real
+                // "submit everything" key.
+                "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"submit\")\n  revisions.refresh()\n",
+            ],
+            known_old_descs: &["jj-gt submit (whole stack)"],
         },
-        // 5. track (whole stack) — similar but rarer than its
-        //    selected counterpart.
+        // 5. track (every stack) — counterpart to submit-every-
+        //    stack; tracks every bookmark on every stack so a
+        //    later `gt submit --stack` from outside jj-gt picks
+        //    up the right parent edges.
         ActionSpec {
             action_name: "jj-gt-track",
-            lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"track\")\n  revisions.refresh()\n",
+            lua: "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"track\", \"--all\")\n  revisions.refresh()\n",
             seq: &["x", "T"],
-            desc: "jj-gt track (whole stack)",
+            desc: "jj-gt track every stack",
             scope: "revisions",
+            known_old_lua: &[
+                // Pre-2026-06: bareword `jj-gt track`; same
+                // broadening rationale as jj-gt-submit above.
+                "  jj_async(\"util\", \"exec\", \"--\", \"jj-gt\", \"track\")\n  revisions.refresh()\n",
+            ],
+            known_old_descs: &["jj-gt track (whole stack)"],
         },
         // 6. reconcile — recovery flow; only reached when
         //    submit/fetch produced ambiguous state.
@@ -328,6 +402,8 @@ fn action_specs() -> &'static [ActionSpec] {
             seq: &["x", "r"],
             desc: "jj-gt reconcile",
             scope: "revisions",
+            known_old_lua: &[],
+            known_old_descs: &[],
         },
         // 7. restack — explicit "rewrite every stack onto new
         //    trunk." Used when fetch deferred a conflicting
@@ -341,6 +417,8 @@ fn action_specs() -> &'static [ActionSpec] {
             seq: &["x", "R"],
             desc: "jj-gt restack (rebase all local stacks onto trunk)",
             scope: "revisions",
+            known_old_lua: &[],
+            known_old_descs: &[],
         },
     ];
     SPECS
@@ -383,6 +461,99 @@ fn actions_has_name(arr: &[toml::Value], name: &str) -> bool {
 fn bindings_has_action(arr: &[toml::Value], action: &str) -> bool {
     arr.iter()
         .any(|v| v.get("action").and_then(|n| n.as_str()) == Some(action))
+}
+
+/// Rewrite the `lua` field of an existing action when its body
+/// matches one of the historical forms we've shipped. Custom
+/// bodies (anything not in `known_old`) are left alone so a user
+/// who hand-tuned the lua keeps their version.
+fn migrate_action_lua(
+    arr: &mut [toml::Value],
+    action_name: &str,
+    current_lua: &str,
+    known_old: &[&str],
+) {
+    if known_old.is_empty() {
+        return;
+    }
+    for entry in arr.iter_mut() {
+        let Some(table) = entry.as_table_mut() else {
+            continue;
+        };
+        if table.get("name").and_then(|v| v.as_str()) != Some(action_name) {
+            continue;
+        }
+        let existing_lua = table.get("lua").and_then(|v| v.as_str()).map(str::to_owned);
+        if let Some(lua) = existing_lua
+            && known_old.contains(&lua.as_str())
+        {
+            table.insert("lua".into(), toml::Value::String(current_lua.into()));
+        }
+    }
+}
+
+/// Rewrite the `desc` field of an existing binding when it matches
+/// one of the historical strings we've shipped AND the action it
+/// points at still runs one of our managed lua forms. The
+/// managed-action check (`actions` snapshot + `current_lua` /
+/// `known_old_lua`) keeps us from rewriting user-owned bindings —
+/// neither a custom desc on a managed action nor a managed desc on
+/// a user-owned action will be touched. Same custom-desc
+/// preservation rationale as [`migrate_action_lua`].
+///
+/// Called AFTER [`migrate_action_lua`], so any historical-managed
+/// lua has already been rewritten to `current_lua`; the check
+/// against `current_lua` is what catches just-migrated actions,
+/// and the check against `known_old_lua` is what catches any
+/// transitional state we haven't yet covered. Actions whose lua
+/// is the user's own (matches neither) are left alone.
+fn migrate_binding_desc(
+    bindings: &mut [toml::Value],
+    actions: &[toml::Value],
+    action_name: &str,
+    current_desc: &str,
+    known_old: &[&str],
+    current_lua: &str,
+    known_old_lua: &[&str],
+) {
+    if known_old.is_empty() {
+        return;
+    }
+    // Look up the action's current lua body. If it isn't `current_lua`
+    // (the just-migrated shape) or one of the still-recognized
+    // historical forms, treat the action as user-owned and bail —
+    // don't touch any binding's desc even if the desc string
+    // happens to match a historical form. The user owns the
+    // action; we don't assume their desc is ours just because the
+    // strings line up.
+    let action_lua = actions
+        .iter()
+        .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(action_name))
+        .and_then(|a| a.get("lua").and_then(|v| v.as_str()));
+    let action_is_managed = match action_lua {
+        Some(lua) => lua == current_lua || known_old_lua.contains(&lua),
+        None => return,
+    };
+    if !action_is_managed {
+        return;
+    }
+    for entry in bindings.iter_mut() {
+        let Some(table) = entry.as_table_mut() else {
+            continue;
+        };
+        if table.get("action").and_then(|v| v.as_str()) != Some(action_name) {
+            continue;
+        }
+        let existing_desc = table
+            .get("desc")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        if let Some(desc) = existing_desc
+            && known_old.contains(&desc.as_str())
+        {
+            table.insert("desc".into(), toml::Value::String(current_desc.into()));
+        }
+    }
 }
 
 fn make_binding(action: &str, seq: &[&str], scope: &str, desc: &str) -> toml::Value {

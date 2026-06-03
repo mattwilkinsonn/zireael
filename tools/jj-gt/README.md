@@ -190,7 +190,12 @@ jj-gt submit -b bottom--athena -b top--athena
 # `gt submit --stack` per tip
 jj-gt submit -b feature-a-tip -b feature-b-tip
 
-# Submit every bookmark on the @-ancestor chain
+# Submit every bookmark on the @-ancestor chain (the focused stack)
+jj-gt submit
+
+# Submit every bookmark across every stack in the repo (excludes
+# trunk + gtmq_* queue branches). Useful when you have multiple
+# independent stacks in flight.
 jj-gt submit --all
 
 # Submit as draft PRs, set merge-when-ready
@@ -229,20 +234,22 @@ the common `jj-gt` flows are reachable from inside the TUI:
 
 | Action | Default key | What it does |
 | --- | --- | --- |
-| `jj-gt-submit-selected` | `x s` | Submit the bookmark at the focused commit (`jj-gt submit -r context.commit_id()`) |
+| `jj-gt-submit-selected` | `x s` | Submit the stack ending at the focused commit (`jj-gt submit -r context.commit_id()` — expands ancestors automatically) |
 | `jj-gt-fetch` | `x f` | Run the Graphite-aware fetch + cleanup pipeline (`jj-gt fetch`) |
 | `jj-gt-track-selected` | `x t` | Sync `refs/branch-metadata/*` for the focused bookmark (`jj-gt track -r context.commit_id()`) |
-| `jj-gt-submit` | `x S` | Submit every bookmark on the @-ancestor stack (`jj-gt submit`) |
-| `jj-gt-track` | `x T` | Sync metadata refs for every bookmark on the stack (`jj-gt track`) |
+| `jj-gt-submit` | `x S` | Submit every bookmark on every stack across the repo (`jj-gt submit --all`) |
+| `jj-gt-track` | `x T` | Sync metadata refs for every bookmark on every stack (`jj-gt track --all`) |
 | `jj-gt-reconcile` | `x r` | Re-track adjacent diverged bookmarks + push rebased SHAs (`jj-gt reconcile`) |
 | `jj-gt-restack` | `x R` | Rebase every local stack onto trunk (`jj-gt restack`) — opt-in cascade for when fetch deferred a conflicting rebase or main has advanced |
 
 Order matters: jjui's `x`-prefix overlay surfaces candidates in the
 order they appear in the config, so the most-frequent actions
 (submit-selected, fetch, track-selected) land at the top of the
-menu and the recovery/whole-stack flows further down. Lowercase =
-focused-bookmark-only. Uppercase = whole stack. Same lowercase/
-uppercase split jj-hp uses for `x p`/`x P`.
+menu and the every-stack/recovery flows further down. Lowercase =
+"the stack at my cursor" (submit/track expand to include every
+bookmark from trunk up through the focused commit). Uppercase =
+"every stack in the repo." Same lowercase/uppercase split jj-hp
+uses for `x p`/`x P`.
 
 The selected variants use `-r context.commit_id()` rather than
 `-b <name>` because jjui's lua context exposes the focused commit's ID
@@ -279,14 +286,14 @@ lua = """
 [[actions]]
 name = "jj-gt-submit"
 lua = """
-  jj_async("util", "exec", "--", "jj-gt", "submit")
+  jj_async("util", "exec", "--", "jj-gt", "submit", "--all")
   revisions.refresh()
 """
 
 [[actions]]
 name = "jj-gt-track"
 lua = """
-  jj_async("util", "exec", "--", "jj-gt", "track")
+  jj_async("util", "exec", "--", "jj-gt", "track", "--all")
   revisions.refresh()
 """
 
@@ -308,7 +315,7 @@ lua = """
 action = "jj-gt-submit-selected"
 seq = ["x", "s"]
 scope = "revisions"
-desc = "jj-gt submit selected bookmark(s)"
+desc = "jj-gt submit stack ending at cursor"
 
 [[bindings]]
 action = "jj-gt-fetch"
@@ -320,19 +327,19 @@ desc = "jj-gt fetch"
 action = "jj-gt-track-selected"
 seq = ["x", "t"]
 scope = "revisions"
-desc = "jj-gt track selected bookmark(s)"
+desc = "jj-gt track bookmarks on focused commit"
 
 [[bindings]]
 action = "jj-gt-submit"
 seq = ["x", "S"]
 scope = "revisions"
-desc = "jj-gt submit (whole stack)"
+desc = "jj-gt submit every stack"
 
 [[bindings]]
 action = "jj-gt-track"
 seq = ["x", "T"]
 scope = "revisions"
-desc = "jj-gt track (whole stack)"
+desc = "jj-gt track every stack"
 
 [[bindings]]
 action = "jj-gt-reconcile"

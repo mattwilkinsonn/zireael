@@ -519,3 +519,61 @@ fn run_restack_reports_nonzero_conflict_count_when_rebase_conflicts() {
         other => panic!("expected Conflicted, got {other:?}"),
     }
 }
+
+#[test]
+fn resolve_bookmarks_all_returns_every_stack_excluding_gtmq_and_trunk() {
+    // Issue #67-follow-up: `--all` was broadened in 2026-06 from
+    // "the @-ancestor chain" (which `jj-gt submit` bareword
+    // already covers) to "every bookmark across every stack,
+    // minus trunk + gtmq_*." Pin the new semantics by:
+    //
+    //   - Setting up two independent stacks in one workspace.
+    //   - Parking `@` somewhere unrelated to either stack tip.
+    //   - Adding a `gtmq_*` queue branch on its own commit.
+    //   - Calling `select::resolve_bookmarks` with `--all`.
+    //   - Asserting we get bookmarks from BOTH stacks but NOT
+    //     trunk or the gtmq_*.
+    //
+    // Regression guard: if a future refactor accidentally
+    // narrows `--all` back to the @-ancestor chain, this test
+    // catches it because the @-anchored chain in this fixture
+    // doesn't reach either stack tip.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_two_stack_fixture();
+    let cwd = tmp.path();
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+
+    // Add a gtmq_* branch so we can confirm filtering works.
+    jj(cwd, &["new", "main", "-m", "gtmq queue commit"]);
+    jj(cwd, &["bookmark", "create", "gtmq_test", "-r", "@"]);
+    // Park @ back somewhere neutral so it's not on any stack tip.
+    jj(cwd, &["new", "main", "-m", "neutral wip"]);
+
+    let args = jj_gt::cli::BookmarkArgs {
+        all: true,
+        remote: "origin".into(),
+        ..jj_gt::cli::BookmarkArgs::default()
+    };
+    let resolved = jj_gt::select::resolve_bookmarks(&jj_cli, &args, "main").unwrap();
+    let as_set: std::collections::BTreeSet<&str> = resolved.iter().map(String::as_str).collect();
+
+    // Both stacks' bookmarks should be present.
+    for expected in ["upper-mid", "upper-tip", "sibling-tip"] {
+        assert!(
+            as_set.contains(expected),
+            "--all should include `{expected}` (it's on a non-trunk stack); got {as_set:?}",
+        );
+    }
+    // Trunk + gtmq_* should be filtered out.
+    assert!(
+        !as_set.contains("main"),
+        "--all must NOT include trunk; got {as_set:?}",
+    );
+    assert!(
+        !as_set.contains("gtmq_test"),
+        "--all must NOT include `gtmq_*` queue branches; got {as_set:?}",
+    );
+}

@@ -192,7 +192,10 @@ pub fn discover_stacks(jj: &JjCli, trunk_destination: &str) -> Result<Vec<Discov
 /// `main@origin`, and we'd attempt to rebase trunk onto itself.
 fn is_skippable(name: &str, trunk: &str) -> bool {
     let trunk_bookmark = trunk.split_once('@').map(|(b, _)| b).unwrap_or(trunk);
-    name == trunk_bookmark || name.starts_with("gtmq_")
+    name == trunk_bookmark
+        || crate::cleanup::DEFAULT_GTMQ_PREFIXES
+            .iter()
+            .any(|p| name.starts_with(p))
 }
 
 /// Narrow a discovery result to only the stack containing the named

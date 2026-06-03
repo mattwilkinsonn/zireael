@@ -339,3 +339,257 @@ fn readme_toml_matches_generated_jjui_config() {
         "README binding ORDER drifted from generated config",
     );
 }
+
+#[test]
+fn add_jjui_actions_migrates_pre_2026_06_submit_lua_to_all_form() {
+    // Issue #67-follow-up: 2026-06 broadened `x S` from
+    // `jj-gt submit` (bareword, @-anchored) to
+    // `jj-gt submit --all` (every stack). Users with the old
+    // form installed should get their lua refreshed in place
+    // without a name change.
+    let pre_2026_06 = r#"
+[[actions]]
+name = "jj-gt-submit"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "submit")
+  revisions.refresh()
+"""
+
+[[bindings]]
+action = "jj-gt-submit"
+seq = ["x", "S"]
+scope = "revisions"
+desc = "jj-gt submit (whole stack)"
+"#;
+    let (output, _) = add_jjui_actions(pre_2026_06).unwrap();
+    let parsed: toml::Table = output.parse().unwrap();
+
+    // The action's lua body should be rewritten to use --all.
+    let submit_action = parsed["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v.get("name").and_then(|n| n.as_str()) == Some("jj-gt-submit"))
+        .expect("jj-gt-submit action should exist");
+    let lua = submit_action.get("lua").and_then(|v| v.as_str()).unwrap();
+    assert!(
+        lua.contains("\"--all\""),
+        "lua body should now include --all; got: {lua}",
+    );
+
+    // And the binding's desc should be refreshed to the new text.
+    let submit_binding = parsed["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v.get("action").and_then(|n| n.as_str()) == Some("jj-gt-submit"))
+        .expect("jj-gt-submit binding should exist");
+    let desc = submit_binding.get("desc").and_then(|v| v.as_str()).unwrap();
+    assert_eq!(desc, "jj-gt submit every stack");
+}
+
+#[test]
+fn add_jjui_actions_leaves_user_customized_submit_lua_alone() {
+    // Negative case: a user who hand-wrote their own lua body
+    // for `jj-gt-submit` shouldn't have it overwritten. Only
+    // bodies that match our installed-history get refreshed.
+    let custom = r#"
+[[actions]]
+name = "jj-gt-submit"
+lua = """
+  -- user's custom flow
+  jj_async("util", "exec", "--", "jj-gt", "submit", "--draft")
+  revisions.refresh()
+"""
+
+[[bindings]]
+action = "jj-gt-submit"
+seq = ["x", "S"]
+scope = "revisions"
+desc = "my submit"
+"#;
+    let (output, _) = add_jjui_actions(custom).unwrap();
+    let parsed: toml::Table = output.parse().unwrap();
+
+    let submit_action = parsed["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v.get("name").and_then(|n| n.as_str()) == Some("jj-gt-submit"))
+        .expect("jj-gt-submit action should still exist");
+    let lua = submit_action.get("lua").and_then(|v| v.as_str()).unwrap();
+    assert!(
+        lua.contains("--draft"),
+        "user's custom lua body should be preserved; got: {lua}",
+    );
+
+    let submit_binding = parsed["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v.get("action").and_then(|n| n.as_str()) == Some("jj-gt-submit"))
+        .expect("jj-gt-submit binding should still exist");
+    let desc = submit_binding.get("desc").and_then(|v| v.as_str()).unwrap();
+    assert_eq!(
+        desc, "my submit",
+        "user's custom desc should be preserved (not in our history)",
+    );
+}
+
+#[test]
+fn add_jjui_actions_migrates_pre_2026_06_track_lua_to_all_form() {
+    // Symmetric to the `submit` migration test above: 2026-06
+    // also broadened `x T` from `jj-gt track` (bareword,
+    // @-anchored) to `jj-gt track --all` (every stack). Users
+    // with the old form installed should get their lua refreshed
+    // in place without a name change. Without a dedicated test
+    // for the track action, a typo in `known_old_lua` /
+    // `known_old_descs` for `jj-gt-track` would ship unnoticed.
+    let pre_2026_06 = r#"
+[[actions]]
+name = "jj-gt-track"
+lua = """
+  jj_async("util", "exec", "--", "jj-gt", "track")
+  revisions.refresh()
+"""
+
+[[bindings]]
+action = "jj-gt-track"
+seq = ["x", "T"]
+scope = "revisions"
+desc = "jj-gt track (whole stack)"
+"#;
+    let (output, _) = add_jjui_actions(pre_2026_06).unwrap();
+    let parsed: toml::Table = output.parse().unwrap();
+
+    let track_action = parsed["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v.get("name").and_then(|n| n.as_str()) == Some("jj-gt-track"))
+        .expect("jj-gt-track action should exist");
+    let lua = track_action.get("lua").and_then(|v| v.as_str()).unwrap();
+    assert!(
+        lua.contains("\"--all\""),
+        "lua body should now include --all; got: {lua}",
+    );
+
+    let track_binding = parsed["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v.get("action").and_then(|n| n.as_str()) == Some("jj-gt-track"))
+        .expect("jj-gt-track binding should exist");
+    let desc = track_binding.get("desc").and_then(|v| v.as_str()).unwrap();
+    assert_eq!(desc, "jj-gt track every stack");
+}
+
+#[test]
+fn add_jjui_actions_leaves_user_customized_track_lua_alone() {
+    // Negative symmetric to the submit-preservation test: a
+    // user's hand-written lua body for `jj-gt-track` (e.g. with
+    // a custom `--remote` flag) shouldn't get clobbered when the
+    // installer runs.
+    let custom = r#"
+[[actions]]
+name = "jj-gt-track"
+lua = """
+  -- user's custom flow
+  jj_async("util", "exec", "--", "jj-gt", "track", "--remote", "fork")
+  revisions.refresh()
+"""
+
+[[bindings]]
+action = "jj-gt-track"
+seq = ["x", "T"]
+scope = "revisions"
+desc = "my track"
+"#;
+    let (output, _) = add_jjui_actions(custom).unwrap();
+    let parsed: toml::Table = output.parse().unwrap();
+
+    let track_action = parsed["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v.get("name").and_then(|n| n.as_str()) == Some("jj-gt-track"))
+        .expect("jj-gt-track action should still exist");
+    let lua = track_action.get("lua").and_then(|v| v.as_str()).unwrap();
+    assert!(
+        lua.contains("--remote"),
+        "user's custom lua body should be preserved; got: {lua}",
+    );
+
+    let track_binding = parsed["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v.get("action").and_then(|n| n.as_str()) == Some("jj-gt-track"))
+        .expect("jj-gt-track binding should still exist");
+    let desc = track_binding.get("desc").and_then(|v| v.as_str()).unwrap();
+    assert_eq!(
+        desc, "my track",
+        "user's custom desc should be preserved (not in our history)",
+    );
+}
+
+#[test]
+fn add_jjui_actions_does_not_rewrite_desc_when_action_lua_is_user_customized() {
+    // The harder case: a user-owned action whose desc HAPPENS to
+    // match a historical form we shipped. Without the
+    // managed-lua gate, `migrate_binding_desc` would rewrite
+    // their desc to the current shipped form, silently
+    // relabeling a custom action as ours. The gate compares the
+    // action's current lua against `current_lua` + `known_old_lua`
+    // and skips the desc rewrite when the lua is user-owned.
+    //
+    // Pin the contract: a user-owned action with a coincidentally
+    // managed-looking desc string keeps its desc.
+    let custom_lua_managed_desc = r#"
+[[actions]]
+name = "jj-gt-submit"
+lua = """
+  -- user's custom flow
+  jj_async("util", "exec", "--", "jj-gt", "submit", "--draft", "--remote", "fork")
+  revisions.refresh()
+"""
+
+[[bindings]]
+action = "jj-gt-submit"
+seq = ["x", "S"]
+scope = "revisions"
+desc = "jj-gt submit (whole stack)"
+"#;
+    let (output, _) = add_jjui_actions(custom_lua_managed_desc).unwrap();
+    let parsed: toml::Table = output.parse().unwrap();
+
+    // The action's lua should be untouched (not in known_old_lua).
+    let submit_action = parsed["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v.get("name").and_then(|n| n.as_str()) == Some("jj-gt-submit"))
+        .expect("jj-gt-submit action should still exist");
+    let lua = submit_action.get("lua").and_then(|v| v.as_str()).unwrap();
+    assert!(
+        lua.contains("--draft") && lua.contains("--remote"),
+        "user's custom lua body should be preserved; got: {lua}",
+    );
+
+    // The binding's desc must be preserved EVEN THOUGH the
+    // string matches a historical desc we shipped — the
+    // managed-lua gate sees the action's lua as user-owned and
+    // refuses to touch any of its bindings' descs.
+    let submit_binding = parsed["bindings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v.get("action").and_then(|n| n.as_str()) == Some("jj-gt-submit"))
+        .expect("jj-gt-submit binding should still exist");
+    let desc = submit_binding.get("desc").and_then(|v| v.as_str()).unwrap();
+    assert_eq!(
+        desc, "jj-gt submit (whole stack)",
+        "user's desc must be preserved when action's lua is user-owned, \
+         even if the desc string happens to match one we historically shipped",
+    );
+}

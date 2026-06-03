@@ -28,14 +28,14 @@ lua = """
 [[actions]]
 name = "jj-gt-submit"
 lua = """
-  jj_async("util", "exec", "--", "jj-gt", "submit")
+  jj_async("util", "exec", "--", "jj-gt", "submit", "--all")
   revisions.refresh()
 """
 
 [[actions]]
 name = "jj-gt-track"
 lua = """
-  jj_async("util", "exec", "--", "jj-gt", "track")
+  jj_async("util", "exec", "--", "jj-gt", "track", "--all")
   revisions.refresh()
 """
 
@@ -57,7 +57,7 @@ lua = """
 action = "jj-gt-submit-selected"
 seq = ["x", "s"]
 scope = "revisions"
-desc = "jj-gt submit selected bookmark(s)"
+desc = "jj-gt submit stack ending at cursor"
 
 [[bindings]]
 action = "jj-gt-fetch"
@@ -69,7 +69,7 @@ desc = "jj-gt fetch"
 action = "jj-gt-track-selected"
 seq = ["x", "t"]
 scope = "revisions"
-desc = "jj-gt track selected bookmark(s)"
+desc = "jj-gt track bookmarks on focused commit"
 
 
 [[actions]]
@@ -82,7 +82,7 @@ lua = """
 [[actions]]
 name = "jj-hp-push"
 lua = """
-  jj_async("util", "exec", "--", "jj-hp", "push")
+  jj_async("util", "exec", "--", "jj-hp", "push", "--all")
   revisions.refresh()
 """
 
@@ -90,25 +90,25 @@ lua = """
 action = "jj-hp-push-selected"
 seq = ["x", "p"]
 scope = "revisions"
-desc = "jj-hp push selected bookmark(s)"
+desc = "jj-hp push selected bookmark"
 
 [[bindings]]
 action = "jj-hp-push"
 seq = ["x", "P"]
 scope = "revisions"
-desc = "jj-hp push"
+desc = "jj-hp push every bookmark"
 
 [[bindings]]
 action = "jj-gt-submit"
 seq = ["x", "S"]
 scope = "revisions"
-desc = "jj-gt submit (whole stack)"
+desc = "jj-gt submit every stack"
 
 [[bindings]]
 action = "jj-gt-track"
 seq = ["x", "T"]
 scope = "revisions"
-desc = "jj-gt track (whole stack)"
+desc = "jj-gt track every stack"
 
 [[bindings]]
 action = "jj-gt-reconcile"
