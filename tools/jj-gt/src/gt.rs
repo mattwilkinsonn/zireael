@@ -23,8 +23,25 @@ use crate::error::{JjGtError, Result};
 ///
 /// `--no-interactive` keeps gt from prompting when invoked from a
 /// script and is mandatory in a CI / non-TTY context.
+///
+/// gt's stderr is captured (not streamed) so a non-zero exit
+/// surfaces the actual error message in `JjGtError::GtFailed.stderr`.
+/// Errors like "branch X already tracks parent Y" or "parent Z does
+/// not exist" are otherwise silently swallowed by the spinner row.
 pub fn track(workspace_root: &Path, branch: &str, parent: &str) -> Result<()> {
-    run_gt(
+    // Best-effort untrack first. Stale tracking metadata from a prior
+    // submit where the stack was reordered makes plain `gt track`
+    // exit non-zero with "branch already tracks parent X" even though
+    // we want to overwrite. Untracking first turns the subsequent
+    // track into the canonical "set parent" operation regardless of
+    // prior state.
+    //
+    // Ignore the result — gt returns non-zero when the branch isn't
+    // tracked yet, which is the common case on a fresh stack. The
+    // subsequent track call is the one that actually reports a
+    // meaningful failure.
+    let _ = run_gt_captured(workspace_root, &["untrack", branch, "--no-interactive"]);
+    run_gt_captured(
         workspace_root,
         &["track", branch, "--parent", parent, "--no-interactive"],
     )
@@ -132,17 +149,25 @@ pub fn build_submit_argv(tip: &str, submit: &SubmitArgs) -> Vec<String> {
     argv
 }
 
-/// Run `gt <argv>` in `workspace_root`.
+/// Run `gt <argv>` in `workspace_root`. Inherits stdout / stderr so
+/// gt's progress output streams live to the user's terminal — used
+/// for `gt submit` where the AI commit-message generation, push
+/// progress, and PR-creation messages are exactly what the user
+/// wants to see.
 pub fn submit(workspace_root: &Path, argv: &[String]) -> Result<()> {
     let str_refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
-    run_gt(workspace_root, &str_refs)
+    run_gt_streaming(workspace_root, &str_refs)
 }
 
 /// `gt sync --no-restack --force`. We always pass `--no-restack`
 /// because gt's git-rebase restack rewrites jj-tracked SHAs and
 /// confuses jj's ref reconciliation — we use `jj rebase` instead.
+///
+/// Captured (not streamed) so a sync failure surfaces gt's actual
+/// error message rather than `gt exited with status 1: ` with an
+/// empty stderr.
 pub fn sync_no_restack(workspace_root: &Path) -> Result<()> {
-    run_gt(workspace_root, &["sync", "--no-restack", "--force"])
+    run_gt_captured(workspace_root, &["sync", "--no-restack", "--force"])
 }
 
 /// Shape of the JSON gt writes to `.git/.graphite_repo_config`. Only
@@ -171,20 +196,30 @@ pub fn read_repo_config_trunk(workspace_root: &Path) -> Result<Option<String>> {
     Ok(cfg.trunk)
 }
 
-fn run_gt(workspace_root: &Path, argv: &[&str]) -> Result<()> {
-    tracing::info!("running: gt {:?}", argv);
-    let mut cmd = Command::new("gt");
-    cmd.args(argv).current_dir(workspace_root);
-    // Tests-only escape hatch: when JJ_GT_TEST_XDG_CONFIG_HOME is
-    // set, propagate it to gt as XDG_CONFIG_HOME so parallel
-    // integration tests each get their own user_config and don't
-    // race on the shared ~/.config/graphite/user_config file (gt
-    // rewrites it on every invocation; concurrent writes have been
-    // observed to truncate it mid-write). Production code never
-    // sets this variable.
+/// Apply the test-only `XDG_CONFIG_HOME` redirect so parallel
+/// integration tests each get their own gt user_config and don't
+/// race on the shared `~/.config/graphite/user_config` file (gt
+/// rewrites it on every invocation; concurrent writes have been
+/// observed to truncate it mid-write). Production code never sets
+/// `JJ_GT_TEST_XDG_CONFIG_HOME`.
+fn apply_test_xdg(cmd: &mut Command) {
     if let Ok(xdg) = std::env::var("JJ_GT_TEST_XDG_CONFIG_HOME") {
         cmd.env("XDG_CONFIG_HOME", xdg);
     }
+}
+
+/// Run gt with stdout / stderr inherited so the user sees progress
+/// output live. Used for `gt submit` where waiting until completion
+/// to print anything would make a 30-second push feel hung.
+///
+/// Trade-off: on failure, gt's stderr is gone (it streamed already)
+/// so `JjGtError::GtFailed.stderr` is empty. For commands where we
+/// want the error message, use [`run_gt_captured`] instead.
+fn run_gt_streaming(workspace_root: &Path, argv: &[&str]) -> Result<()> {
+    tracing::info!("running (streaming): gt {:?}", argv);
+    let mut cmd = Command::new("gt");
+    cmd.args(argv).current_dir(workspace_root);
+    apply_test_xdg(&mut cmd);
     let status = cmd.status().map_err(|e| JjGtError::GtFailed {
         status: -1,
         stderr: format!("failed to spawn gt: {e}"),
@@ -193,6 +228,44 @@ fn run_gt(workspace_root: &Path, argv: &[&str]) -> Result<()> {
         return Err(JjGtError::GtFailed {
             status: status.code().unwrap_or(-1),
             stderr: String::new(),
+        });
+    }
+    Ok(())
+}
+
+/// Run gt with stdout + stderr captured so a non-zero exit can
+/// surface the actual error message in `JjGtError::GtFailed.stderr`.
+/// Used for `gt track`, `gt untrack`, and `gt sync` where the call
+/// is short-running and progress output isn't load-bearing — but a
+/// failure message ("branch already tracks parent X", "parent Y
+/// does not exist", "missing graphite config") is critical signal
+/// for the user.
+///
+/// gt sometimes writes the operative error to stdout instead of
+/// stderr (depends on the subcommand), so we concatenate both into
+/// the surfaced message, with stderr first since that's where most
+/// errors land.
+fn run_gt_captured(workspace_root: &Path, argv: &[&str]) -> Result<()> {
+    tracing::info!("running (captured): gt {:?}", argv);
+    let mut cmd = Command::new("gt");
+    cmd.args(argv).current_dir(workspace_root);
+    apply_test_xdg(&mut cmd);
+    let output = cmd.output().map_err(|e| JjGtError::GtFailed {
+        status: -1,
+        stderr: format!("failed to spawn gt: {e}"),
+    })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let merged = match (stderr.trim().is_empty(), stdout.trim().is_empty()) {
+            (true, true) => String::from("(gt produced no output)"),
+            (false, true) => stderr.trim_end().to_owned(),
+            (true, false) => stdout.trim_end().to_owned(),
+            (false, false) => format!("{}\n{}", stderr.trim_end(), stdout.trim_end()),
+        };
+        return Err(JjGtError::GtFailed {
+            status: output.status.code().unwrap_or(-1),
+            stderr: merged,
         });
     }
     Ok(())
