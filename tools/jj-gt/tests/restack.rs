@@ -436,3 +436,86 @@ fn run_restack_only_bookmark_errors_when_no_stack_matches() {
         "error message should name the missing bookmark; got: {msg}",
     );
 }
+
+#[test]
+fn run_restack_reports_nonzero_conflict_count_when_rebase_conflicts() {
+    // Regression for PR 66 review (Greptile P1 / CodeRabbit Major):
+    // the conflict count used to be computed from the pre-rebase
+    // revset `{root_commit}::`, which resolves to the now-abandoned
+    // chain after rebase. The count came back as 0 even when the
+    // rebase produced real conflicts, and the summary read
+    // "rebased with 0 conflicted commits — New conflicts appeared…"
+    // — self-contradictory and useless.
+    //
+    // The fix re-anchors the conflict-count revset post-rebase via
+    // the bookmark tip name (which jj updates to the new commit).
+    //
+    // Fixture: a single-bookmark stack whose content forces a
+    // conflict when rebased onto a divergent main.
+    //
+    //   *  upper        <- `upper` bookmark, modifies shared.txt
+    //   *  bottom       <- creates shared.txt
+    //   *
+    //   ... after we move main forward independently to create a
+    //   conflicting change on the new trunk, rebasing upper's chain
+    //   onto main produces a conflict.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(cwd, &["describe", "-m", "root"]);
+    jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
+
+    // Build the upper stack on top of main.
+    jj(cwd, &["new", "-m", "bottom commit"]);
+    std::fs::write(cwd.join("shared.txt"), "from upper\n").unwrap();
+    jj(cwd, &["bookmark", "create", "upper", "-r", "@"]);
+
+    // Move main forward with conflicting content for shared.txt.
+    jj(cwd, &["new", "main", "-m", "main: conflicting commit"]);
+    std::fs::write(cwd.join("shared.txt"), "from main\n").unwrap();
+    jj(
+        cwd,
+        &["bookmark", "set", "main", "-r", "@", "--allow-backwards"],
+    );
+
+    // Park @ off the stacks so working-copy noise doesn't taint
+    // discovery.
+    jj(cwd, &["new", "main", "-m", "scratch wip"]);
+    jj(cwd, &["git", "export"]);
+
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+    let opts = jj_gt::restack::RestackOpts {
+        trunk_destination: "main".into(),
+        stop_on_conflict: false,
+        dry_run: false,
+        only_bookmark: None,
+    };
+    let results = jj_gt::restack::run_restack(&jj_cli, &opts).unwrap();
+
+    // Exactly one stack — the upper chain. It should have produced
+    // a conflicted outcome with a NONZERO conflict count. Before
+    // the fix this would have reported `commits: 0` because the
+    // pre-rebase revset resolved against the abandoned chain.
+    assert_eq!(results.len(), 1, "expected 1 result, got {results:?}");
+    match &results[0].outcome {
+        jj_gt::restack::StackOutcome::Conflicted { commits, .. } => {
+            assert!(
+                *commits >= 1,
+                "post-fix: conflict count should be >= 1; got {commits}. \
+                 Before PR 66 the count was 0 because the revset was \
+                 anchored at the pre-rebase root commit and found 0 \
+                 conflicts in the abandoned chain.",
+            );
+        }
+        other => panic!("expected Conflicted, got {other:?}"),
+    }
+}

@@ -184,8 +184,15 @@ pub fn discover_stacks(jj: &JjCli, trunk_destination: &str) -> Result<Vec<Discov
 /// - trunk itself (we never want to rebase trunk).
 /// - `gtmq_*` queue branches (Graphite's queue scratch, not user
 ///   work).
+///
+/// `trunk` may carry an `@<remote>` suffix (it's the rebase
+/// destination, not the bookmark name). Strip the suffix before
+/// comparing — bookmark names are bare. Without this, local
+/// `main` could leak into discovery when the caller passed
+/// `main@origin`, and we'd attempt to rebase trunk onto itself.
 fn is_skippable(name: &str, trunk: &str) -> bool {
-    name == trunk || name.starts_with("gtmq_")
+    let trunk_bookmark = trunk.split_once('@').map(|(b, _)| b).unwrap_or(trunk);
+    name == trunk_bookmark || name.starts_with("gtmq_")
 }
 
 /// Narrow a discovery result to only the stack containing the named
@@ -224,21 +231,34 @@ pub fn rebase_one(
         };
     };
 
-    let count = discovered.bookmarks.len();
-    let revset = format!("{root_commit}::");
+    // The rebase revset is anchored at the PRE-rebase root commit.
+    // jj rebase rewrites every commit in this range, so we don't
+    // reuse this revset afterward — it would resolve to the now-
+    // abandoned old commits. The conflict-count revset below
+    // re-anchors via the bookmark name (which the rebase updates
+    // to the new tip).
+    let rebase_revset = format!("{root_commit}::");
 
-    match jj::rebase(jj, &revset, trunk_destination) {
+    match jj::rebase(jj, &rebase_revset, trunk_destination) {
         Ok(RebaseOutcome::Clean) => StackOutcome::Rebased {
             onto: trunk_destination.to_owned(),
-            commits: count,
+            commits: count_rebased_commits(jj, trunk_destination, &discovered.tip),
         },
         Ok(RebaseOutcome::NoOp) => StackOutcome::AlreadyCurrent,
         Ok(RebaseOutcome::Conflicted { message }) => {
-            // Count the conflicted commits in the rebased range so
-            // the summary shows the user the magnitude of the
-            // resolution work. Errors here fall back to "unknown
-            // count" rather than blocking the report.
-            let conflicted_commits = jj::count_conflicts_in(jj, &revset).unwrap_or(0);
+            // Count conflicted commits in the POST-rebase range,
+            // anchored at the bookmark tip name (which jj updated to
+            // the rebased commit). Asking against the original
+            // `{root_commit}::` revset would resolve to the abandoned
+            // chain and find 0 conflicts even when the rebase
+            // actually produced them — see PR 66 review.
+            //
+            // The range `{trunk_destination}..{tip}` is "every commit
+            // above trunk reachable from the tip bookmark," which is
+            // exactly the rebased stack. Errors fall back to 0 rather
+            // than blocking the report.
+            let post_revset = format!("{trunk_destination}..{tip}", tip = discovered.tip);
+            let conflicted_commits = jj::count_conflicts_in(jj, &post_revset).unwrap_or(0);
             StackOutcome::Conflicted {
                 onto: trunk_destination.to_owned(),
                 commits: conflicted_commits,
@@ -249,6 +269,23 @@ pub fn rebase_one(
             message: format!("jj rebase failed: {e}"),
         },
     }
+}
+
+/// Count the actual number of commits in the post-rebase range —
+/// `{trunk_destination}..{tip}` — for the summary table.
+///
+/// Earlier versions used `discovered.bookmarks.len()` as a proxy.
+/// That undercounts stacks with unbookmarked intermediate commits
+/// (e.g. three commits but only two bookmarks). The bookmark count
+/// is a property of the user's labeling; the commit count is what
+/// the user actually cares about when reading "rebased N commits."
+///
+/// Falls back to the bookmark count on error so the summary still
+/// renders something useful — the precise count is informational,
+/// not load-bearing.
+fn count_rebased_commits(jj: &JjCli, trunk_destination: &str, tip: &str) -> usize {
+    let revset = format!("{trunk_destination}..{tip}");
+    jj::count_commits_in(jj, &revset).unwrap_or_default()
 }
 
 /// Drive the full discover→rebase→summarize pipeline. Returns the
@@ -280,11 +317,16 @@ pub fn run_restack(jj: &JjCli, opts: &RestackOpts) -> Result<Vec<StackResult>> {
             continue;
         }
         if opts.dry_run {
+            // In dry-run we report what the rebase WOULD do; the
+            // commit count matches what the real path would emit
+            // by querying `{trunk}..{tip}` against the un-rebased
+            // graph. The two are equivalent because dry-run
+            // doesn't mutate the graph.
             results.push(StackResult {
                 tip: ds.tip.clone(),
                 outcome: StackOutcome::Rebased {
                     onto: opts.trunk_destination.clone(),
-                    commits: ds.bookmarks.len(),
+                    commits: count_rebased_commits(jj, &opts.trunk_destination, &ds.tip),
                 },
             });
             continue;
@@ -467,5 +509,20 @@ mod tests {
         assert!(is_skippable("gtmq_anything", "main"));
         assert!(!is_skippable("feature-x", "main"));
         assert!(!is_skippable("bottom", "main"));
+    }
+
+    #[test]
+    fn is_skippable_strips_at_remote_suffix_from_trunk() {
+        // discover_stacks passes the full rebase destination
+        // (e.g. `main@origin`) as the trunk argument. The bookmark
+        // names being filtered are bare (`main`), so a literal
+        // `name == trunk` check would never match and trunk could
+        // leak into discovery. Pin the strip-then-compare contract.
+        assert!(is_skippable("main", "main@origin"));
+        assert!(is_skippable("main", "main@upstream"));
+        // Non-trunk bookmarks should still pass through regardless
+        // of the @remote suffix.
+        assert!(!is_skippable("feature-x", "main@origin"));
+        assert!(!is_skippable("not-main", "main@origin"));
     }
 }

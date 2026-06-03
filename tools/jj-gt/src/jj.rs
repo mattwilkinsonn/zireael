@@ -665,6 +665,29 @@ pub fn count_conflicts_in(jj: &JjCli, revset: &str) -> Result<usize> {
     Ok(out.lines().filter(|l| !l.trim().is_empty()).count())
 }
 
+/// Count of commits in `revset`. Used by the restack summary to
+/// report "rebased N commits" accurately — bookmark counts
+/// undercount stacks with unbookmarked intermediate commits.
+///
+/// `jj log -r <revset> --no-graph -T commit_id` emits one line per
+/// matching commit; counting lines gives the count without parsing
+/// content. Returns 0 when the revset is empty.
+pub fn count_commits_in(jj: &JjCli, revset: &str) -> Result<usize> {
+    let out = jj_run(
+        jj,
+        &[
+            "log",
+            "-r",
+            revset,
+            "--no-graph",
+            "-T",
+            "commit_id ++ \"\\n\"",
+            "--ignore-working-copy",
+        ],
+    )?;
+    Ok(out.lines().filter(|l| !l.trim().is_empty()).count())
+}
+
 /// `jj bookmark delete <name> --ignore-working-copy`.
 pub fn delete_bookmark(jj: &JjCli, name: &str) -> Result<()> {
     let _ = jj_run(jj, &["bookmark", "delete", name, "--ignore-working-copy"])?;

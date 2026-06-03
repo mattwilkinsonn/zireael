@@ -681,10 +681,22 @@ fn restack_cmd(
     let trunk = status::resolve_trunk(&workspace_root, trunk.as_deref())?;
 
     // The actual rebase destination is `<trunk>@<remote>` so we
-    // catch any post-fetch advances. Falling back to plain `<trunk>`
-    // when the user passes `--trunk` to point at a local-only ref
-    // happens in jj's rebase resolver naturally.
-    let destination = format!("{trunk}@{remote}");
+    // catch any post-fetch advances. jj's `<name>@<remote>` syntax
+    // does NOT fall back to a local bookmark when the remote
+    // tracking ref doesn't exist — so probe first, then fall back
+    // to plain `<trunk>` when the remote-tracking form fails to
+    // resolve. Covers the case where the user passes `--trunk
+    // some-local-bookmark` for a bookmark that exists locally but
+    // not on the remote.
+    let remote_form = format!("{trunk}@{remote}");
+    let destination = if jj::resolve_commit_id(jj, &remote_form).is_ok() {
+        remote_form
+    } else {
+        tracing::info!(
+            "jj-gt restack: `{remote_form}` did not resolve, falling back to local `{trunk}`"
+        );
+        trunk.clone()
+    };
 
     let opts = restack::RestackOpts {
         trunk_destination: destination.clone(),

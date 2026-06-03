@@ -223,7 +223,7 @@ snapshot per keypress (uses `--ignore-working-copy`).
 
 ## jjui integration
 
-`jj-gt init` walks you through a one-time setup that installs six
+`jj-gt init` walks you through a one-time setup that installs seven
 [jjui](https://github.com/idursun/jjui) actions + keybindings so
 the common `jj-gt` flows are reachable from inside the TUI:
 
