@@ -216,6 +216,46 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Rebase every local stack onto trunk — the explicit "rewrite
+    /// my work" sibling to `fetch`. Conflict-producing rebases land
+    /// their conflicts as commit markers (jj's conflict-in-commit
+    /// model means rebases always complete); the per-stack summary
+    /// surfaces what needs `jj resolve`.
+    ///
+    /// Default behaviour: discover every local-only bookmark
+    /// authored by the current user (`bookmarks() & mine() &
+    /// ~::main@origin`), group into independent stacks, rebase each
+    /// onto trunk. End-of-run summary lists per-stack status.
+    /// Exit non-zero if any stack ended conflicted.
+    Restack {
+        /// Restack only the stack containing this bookmark. Same
+        /// default discovery + rebase otherwise.
+        #[arg(long, short = 'b')]
+        bookmark: Option<String>,
+
+        /// Trunk to rebase onto. Default: read from gt's repo config
+        /// (.git/.graphite_repo_config), then fall back to `main`.
+        /// Resolved against the remote — the actual destination is
+        /// `<trunk>@<remote>`.
+        #[arg(long)]
+        trunk: Option<String>,
+
+        /// Remote to rebase against. Default: `origin`.
+        #[arg(long, default_value = "origin", add = clap_complete::ArgValueCompleter::new(remote_value_completer))]
+        remote: String,
+
+        /// Halt at the first conflicted stack rather than proceeding
+        /// through the rest. Cautious mode for users who want
+        /// to resolve one conflict before facing the next.
+        #[arg(long)]
+        stop_on_conflict: bool,
+
+        /// Print what would happen at every step — discover stacks
+        /// + report them, don't actually rebase.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Interactive setup: prints suggested aliases + setup
     /// reminders, then optionally installs jjui actions/bindings so
     /// `jj-gt submit / fetch / track / reconcile` are reachable
