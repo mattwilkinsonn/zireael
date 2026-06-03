@@ -8,127 +8,76 @@ import {
 	parseTime,
 } from "../../lib/date-parser";
 
+// Fixed reference: Wednesday, June 3, 2026 12:00 local time. Returned
+// as a fresh Date each call so a future mutation of the `now` argument
+// inside any date-parser function can't leak across test cases.
+const refNow = () => new Date(2026, 5, 3, 12, 0, 0, 0);
+
 describe("parseDate", () => {
 	it("returns null when date string cannot be parsed", () => {
 		// given
 		const invalidDate = "not a date";
 
 		// when
-		const result = parseDate(invalidDate);
+		const result = parseDate(invalidDate, refNow());
 
 		// then
 		expect(result).toBeNull();
 	});
 
 	it("parses 'today' and returns correct ISO date", () => {
-		// given
-		const today = new Date();
-		const expectedYear = today.getFullYear();
-		const expectedMonth = String(today.getMonth() + 1).padStart(2, "0");
-		const expectedDay = String(today.getDate()).padStart(2, "0");
-		const expected = `${expectedYear}-${expectedMonth}-${expectedDay}`;
-
 		// when
-		const result = parseDate("today");
+		const result = parseDate("today", refNow());
 
 		// then
-		expect(result).toBe(expected);
+		expect(result).toBe("2026-06-03");
 	});
 
 	it("parses 'tomorrow' and returns correct ISO date", () => {
-		// given
-		const tomorrow = new Date();
-		tomorrow.setDate(tomorrow.getDate() + 1);
-		const expectedYear = tomorrow.getFullYear();
-		const expectedMonth = String(tomorrow.getMonth() + 1).padStart(2, "0");
-		const expectedDay = String(tomorrow.getDate()).padStart(2, "0");
-		const expected = `${expectedYear}-${expectedMonth}-${expectedDay}`;
-
 		// when
-		const result = parseDate("tomorrow");
+		const result = parseDate("tomorrow", refNow());
 
 		// then
-		expect(result).toBe(expected);
+		expect(result).toBe("2026-06-04");
 	});
 
 	it("parses 'next monday' and returns correct ISO date", () => {
-		// given
-		const today = new Date();
-		const dayOfWeek = today.getDay();
-		const daysUntilMonday = (8 - dayOfWeek) % 7 || 7;
-		const nextMonday = new Date(today);
-		nextMonday.setDate(today.getDate() + daysUntilMonday);
-		const expectedYear = nextMonday.getFullYear();
-		const expectedMonth = String(nextMonday.getMonth() + 1).padStart(2, "0");
-		const expectedDay = String(nextMonday.getDate()).padStart(2, "0");
-		const expected = `${expectedYear}-${expectedMonth}-${expectedDay}`;
-
 		// when
-		const result = parseDate("next monday");
+		const result = parseDate("next monday", refNow());
 
-		// then
-		expect(result).toBe(expected);
+		// then — chrono returns the Monday of the following week (2026-06-08).
+		expect(result).toBe("2026-06-08");
 	});
 
 	it("parses 'next friday' and returns correct ISO date", () => {
-		// given
-		// chrono-node "next friday" means the upcoming Friday: 1-7 days
-		// from today, wrapping if today IS Friday (then 7 days, never 0).
-		const today = new Date();
-		const dayOfWeek = today.getDay();
-		const daysUntilNextFriday = (5 - dayOfWeek + 7) % 7 || 7;
-		const nextFriday = new Date(today);
-		nextFriday.setDate(today.getDate() + daysUntilNextFriday);
-		const expectedYear = nextFriday.getFullYear();
-		const expectedMonth = String(nextFriday.getMonth() + 1).padStart(2, "0");
-		const expectedDay = String(nextFriday.getDate()).padStart(2, "0");
-		const expected = `${expectedYear}-${expectedMonth}-${expectedDay}`;
-
 		// when
-		const result = parseDate("next friday");
+		const result = parseDate("next friday", refNow());
 
-		// then
-		expect(result).toBe(expected);
+		// then — chrono 2.x's "next friday" means next week's Friday
+		// (Sunday-anchored week), so from Wed 2026-06-03 → 2026-06-12,
+		// not the upcoming Friday (2026-06-05).
+		expect(result).toBe("2026-06-12");
 	});
 
 	it("parses 'in 3 days' and returns correct ISO date", () => {
-		// given
-		const futureDate = new Date();
-		futureDate.setDate(futureDate.getDate() + 3);
-		const expectedYear = futureDate.getFullYear();
-		const expectedMonth = String(futureDate.getMonth() + 1).padStart(2, "0");
-		const expectedDay = String(futureDate.getDate()).padStart(2, "0");
-		const expected = `${expectedYear}-${expectedMonth}-${expectedDay}`;
-
 		// when
-		const result = parseDate("in 3 days");
+		const result = parseDate("in 3 days", refNow());
 
 		// then
-		expect(result).toBe(expected);
+		expect(result).toBe("2026-06-06");
 	});
 
 	it("parses 'next week' and returns correct ISO date", () => {
-		// given
-		const futureDate = new Date();
-		futureDate.setDate(futureDate.getDate() + 7);
-		const expectedYear = futureDate.getFullYear();
-		const expectedMonth = String(futureDate.getMonth() + 1).padStart(2, "0");
-		const expectedDay = String(futureDate.getDate()).padStart(2, "0");
-		const expected = `${expectedYear}-${expectedMonth}-${expectedDay}`;
-
 		// when
-		const result = parseDate("next week");
+		const result = parseDate("next week", refNow());
 
-		// then
-		expect(result).toBe(expected);
+		// then — chrono returns the same weekday one week out (Wed → Wed).
+		expect(result).toBe("2026-06-10");
 	});
 
 	it("returns date in correct ISO format (YYYY-MM-DD)", () => {
-		// given
-		const dateString = "today";
-
 		// when
-		const result = parseDate(dateString);
+		const result = parseDate("today", refNow());
 
 		// then
 		expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -137,23 +86,16 @@ describe("parseDate", () => {
 
 describe("getTodayDate", () => {
 	it("returns today's date in ISO format", () => {
-		// given
-		const today = new Date();
-		const expectedYear = today.getFullYear();
-		const expectedMonth = String(today.getMonth() + 1).padStart(2, "0");
-		const expectedDay = String(today.getDate()).padStart(2, "0");
-		const expected = `${expectedYear}-${expectedMonth}-${expectedDay}`;
-
 		// when
-		const result = getTodayDate();
+		const result = getTodayDate(refNow());
 
 		// then
-		expect(result).toBe(expected);
+		expect(result).toBe("2026-06-03");
 	});
 
 	it("returns date in correct ISO format (YYYY-MM-DD)", () => {
 		// when
-		const result = getTodayDate();
+		const result = getTodayDate(refNow());
 
 		// then
 		expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -162,24 +104,16 @@ describe("getTodayDate", () => {
 
 describe("getTomorrowDate", () => {
 	it("returns tomorrow's date in ISO format", () => {
-		// given
-		const tomorrow = new Date();
-		tomorrow.setDate(tomorrow.getDate() + 1);
-		const expectedYear = tomorrow.getFullYear();
-		const expectedMonth = String(tomorrow.getMonth() + 1).padStart(2, "0");
-		const expectedDay = String(tomorrow.getDate()).padStart(2, "0");
-		const expected = `${expectedYear}-${expectedMonth}-${expectedDay}`;
-
 		// when
-		const result = getTomorrowDate();
+		const result = getTomorrowDate(refNow());
 
 		// then
-		expect(result).toBe(expected);
+		expect(result).toBe("2026-06-04");
 	});
 
 	it("returns date in correct ISO format (YYYY-MM-DD)", () => {
 		// when
-		const result = getTomorrowDate();
+		const result = getTomorrowDate(refNow());
 
 		// then
 		expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
