@@ -107,6 +107,16 @@ pub enum CleanupAction {
         prev_parent: String,
         message: String,
     },
+    /// Issue #68: the candidate bookmark's local name is in
+    /// conflict (different op-log lineages disagree on the target
+    /// commit). `jj rebase -s <name>` would fail with "Name
+    /// `<name>` is conflicted" — that's a name-resolution failure,
+    /// not a content conflict, and the user has to pick a side
+    /// with `jj bookmark set` before the orphan rebase can run.
+    /// `prev_parent` is the parent that triggered the orphan
+    /// shape so the message can explain why we *would* have
+    /// rebased.
+    BookmarkConflicted { prev_parent: String },
     /// PR-D / issue #2: gt sync silently moved this bookmark backward
     /// (local was ahead of remote with un-pushed commits). We
     /// restored the bookmark to its pre-pipeline position. `pre` and
@@ -942,10 +952,66 @@ pub fn orphan_rebase_phase(
         return Ok(());
     }
     let remaining = list_local_bookmarks(jj)?;
-    let remaining_names: BTreeSet<String> = remaining.iter().map(|b| b.name.clone()).collect();
+
+    // Issue #68: query the set of conflicted bookmarks once up
+    // front. If a candidate bookmark turns out to be conflicted,
+    // we surface that as a distinct action rather than blowing up
+    // mid-rebase with the cryptic "Name `<bm>` is conflicted"
+    // error.
+    let conflicted = jj::list_conflicted_bookmarks(jj)?;
+
+    // `list_local_bookmarks` filters out conflicted bookmarks
+    // (they have no `normal_target()` commit id — see
+    // `tools/jj-gt/src/jj.rs` Lines 98-104). If we computed
+    // `deleted` from just `remaining_names`, a still-present but
+    // conflicted parent would land in `deleted` and its children
+    // would get misclassified as orphaned + rebased onto trunk.
+    // Fold conflicted names back in before the deleted-set
+    // computation so conflict ≠ deletion.
+    let remaining_names: BTreeSet<String> = remaining
+        .iter()
+        .map(|b| b.name.clone())
+        .chain(conflicted.iter().cloned())
+        .collect();
     let deleted = compute_deleted_set(&pre.normal_names(), &remaining_names);
 
     for sb in &pre.stacked {
+        // Issue #68 robustness: check conflict BEFORE
+        // `plan_orphan_rebase` so a conflicted bookmark that
+        // didn't survive into `remaining_names` (jj's
+        // `bookmark list` template emits an empty commit_id for
+        // the conflicted target, which our parser filters out;
+        // the `@git` line is what usually survives, but not
+        // always) still surfaces as `BookmarkConflicted`. The
+        // pre-rebase candidate test is "was this an orphan-
+        // trigger candidate?" which is the parent-deleted check;
+        // the bookmark's own survival is irrelevant to the
+        // signal we need to surface.
+        let parent_was_deleted = match &sb.parent {
+            crate::stack::BookmarkOrTrunk::Bookmark(parent) => deleted.contains(parent),
+            crate::stack::BookmarkOrTrunk::Trunk => false,
+        };
+        if parent_was_deleted && is_bookmark_conflicted(&sb.name, &conflicted) {
+            // Construct a synthetic LocalBookmark for the action
+            // log when the bookmark didn't survive into
+            // `remaining`. Empty commit_id signals "couldn't
+            // resolve" — the action printer doesn't render it.
+            let local = remaining
+                .iter()
+                .find(|b| b.name == sb.name)
+                .cloned()
+                .unwrap_or_else(|| LocalBookmark {
+                    name: sb.name.clone(),
+                    commit_id: String::new(),
+                });
+            let prev_parent = match &sb.parent {
+                crate::stack::BookmarkOrTrunk::Bookmark(p) => p.clone(),
+                crate::stack::BookmarkOrTrunk::Trunk => continue,
+            };
+            actions.push((local, CleanupAction::BookmarkConflicted { prev_parent }));
+            continue;
+        }
+
         let Some(prev_parent) = plan_orphan_rebase(sb, &remaining_names, &deleted) else {
             continue;
         };
@@ -1093,6 +1159,15 @@ pub fn compute_deleted_set(
     after: &BTreeSet<String>,
 ) -> BTreeSet<String> {
     before.difference(after).cloned().collect()
+}
+
+/// Pure conflict-membership check for the orphan-rebase path
+/// (issue #68). Returns true if `name` appears in the
+/// `conflicted` set jj reported. Made a named function so the
+/// caller's intent is searchable from grep and so a tiny unit
+/// test can pin the contract without needing a jj subprocess.
+pub fn is_bookmark_conflicted(name: &str, conflicted: &BTreeSet<String>) -> bool {
+    conflicted.contains(name)
 }
 
 /// Plan a single orphan rebase: returns `Some((bookmark, parent))`
@@ -1526,5 +1601,21 @@ mod tests {
         let prs: Vec<PrInfo> = Vec::new();
         let post = names(&["main", "bottom", "mid"]);
         assert!(!is_backfill_target(&target, &prs, &post));
+    }
+
+    #[test]
+    fn is_bookmark_conflicted_membership_check() {
+        // Pure helper for issue #68: the orphan-rebase phase
+        // queries the conflicted-bookmark set up front and short-
+        // circuits each candidate. Pin the trivial membership
+        // semantics so a future refactor (e.g. case-insensitive
+        // matching, prefix matching) trips the test.
+        let conflicted = names(&["restack-command", "queue-1"]);
+        assert!(is_bookmark_conflicted("restack-command", &conflicted));
+        assert!(is_bookmark_conflicted("queue-1", &conflicted));
+        assert!(!is_bookmark_conflicted("main", &conflicted));
+        assert!(!is_bookmark_conflicted("Restack-Command", &conflicted));
+        let empty: BTreeSet<String> = BTreeSet::new();
+        assert!(!is_bookmark_conflicted("anything", &empty));
     }
 }

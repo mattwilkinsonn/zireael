@@ -110,6 +110,43 @@ pub fn list_local_bookmarks(jj: &JjCli) -> Result<Vec<LocalBookmark>> {
     Ok(bookmarks)
 }
 
+/// Return the set of local bookmark names whose target is
+/// conflicted (the `??` notation in `jj bookmark list` —
+/// different op-log lineages have moved the bookmark to different
+/// commits and jj can't pick one without a user decision).
+///
+/// jj's bookmark template exposes `self.conflict()` as a bool
+/// (true when the bookmark target is in conflict). We filter for
+/// `present()` first so pending-deletion zombies — gone on the
+/// remote but not yet exported to git — don't show up as
+/// "conflicted" when they're really just deleted.
+///
+/// Used by [`crate::cleanup::orphan_rebase_phase`] (issue #68):
+/// rebasing against a conflicted bookmark name fails with
+/// "Name `<bm>` is conflicted" rather than a content-conflict
+/// error. We detect the divergence up-front and emit a
+/// `BookmarkConflicted` action instead so the per-bookmark
+/// summary surfaces the actual problem.
+pub fn list_conflicted_bookmarks(jj: &JjCli) -> Result<std::collections::BTreeSet<String>> {
+    let out = jj_run(
+        jj,
+        &[
+            "bookmark",
+            "list",
+            "-T",
+            r#"if(self.present() && self.conflict(), name ++ "\n", "")"#,
+            "--ignore-working-copy",
+        ],
+    )?;
+    let names = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect();
+    Ok(names)
+}
+
 /// `jj git export --ignore-working-copy` — idempotent sync of jj
 /// bookmarks into git refs. In colocated repos jj exports on most
 /// operations, but running it explicitly is cheap and ensures gt

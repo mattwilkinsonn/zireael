@@ -747,7 +747,7 @@ fn fetch_cmd(
     if !actions.is_empty() {
         ui::section("Per-bookmark actions");
         for (bookmark, action) in &actions {
-            let (status, msg) = action_to_row(action);
+            let (status, msg) = action_to_row(&bookmark.name, action);
             ui::action_row(&bookmark.name, status, &msg);
         }
     }
@@ -841,7 +841,10 @@ fn restack_cmd(
 /// what the old `format_action` produced, just split into a
 /// glyph-color signal + a text payload so the renderer can paint
 /// each row consistently.
-fn action_to_row(action: &cleanup::CleanupAction) -> (ui::ActionStatus, String) {
+fn action_to_row(
+    bookmark_name: &str,
+    action: &cleanup::CleanupAction,
+) -> (ui::ActionStatus, String) {
     use cleanup::CleanupAction;
     match action {
         CleanupAction::GtSyncDeleted => (ui::ActionStatus::Ok, "deleted by gt sync".into()),
@@ -906,6 +909,12 @@ fn action_to_row(action: &cleanup::CleanupAction) -> (ui::ActionStatus, String) 
             ui::ActionStatus::Error,
             format!(
                 "rebase onto {onto} produced conflicts (parent `{prev_parent}` was removed earlier in fetch/sync cleanup) — {message}; run `jj resolve` to fix"
+            ),
+        ),
+        CleanupAction::BookmarkConflicted { prev_parent } => (
+            ui::ActionStatus::Error,
+            format!(
+                "bookmark target is conflicted (multiple lineages disagree) — would have been orphan-rebased because parent `{prev_parent}` was removed; resolve with `jj bookmark set {bookmark_name} -r <commit>` and re-run"
             ),
         ),
         CleanupAction::RestoredAfterRewind { pre, post } => (
