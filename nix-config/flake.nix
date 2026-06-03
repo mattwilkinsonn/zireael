@@ -98,6 +98,7 @@
     # actually hits instead of forcing a from-source build.
     nix-openclaw.url = "github:openclaw/nix-openclaw";
     codex-cli.url = "github:sadjow/codex-cli-nix";
+    llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
   outputs =
@@ -139,6 +140,7 @@
             home-manager.useUserPackages = true;
             home-manager.extraSpecialArgs = {
               codexPackage = inputs.codex-cli.packages.aarch64-darwin.codex;
+              coderabbitPackage = inputs.llm-agents.packages.aarch64-darwin.coderabbit-cli;
             };
             home-manager.users.mattwilkinson = import ./darwin/home.nix;
           }
@@ -302,6 +304,7 @@
             home-manager.extraSpecialArgs = {
               openclawPackage = inputs.nix-openclaw.packages.x86_64-linux.openclaw;
               codexPackage = inputs.codex-cli.packages.x86_64-linux.codex;
+              coderabbitPackage = inputs.llm-agents.packages.x86_64-linux.coderabbit-cli;
             };
             home-manager.users.mattw = {
               imports = [
@@ -417,6 +420,7 @@
             home-manager.extraSpecialArgs = {
               inherit inputs;
               codexPackage = inputs.codex-cli.packages.x86_64-linux.codex;
+              coderabbitPackage = inputs.llm-agents.packages.x86_64-linux.coderabbit-cli;
             };
             home-manager.users.mattw = {
               imports = [
