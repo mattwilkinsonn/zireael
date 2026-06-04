@@ -1118,3 +1118,252 @@ fn maybe_catch_up_workspace_does_not_mutate_when_dry_run() {
         "clean workspace + dry_run=false should report AlreadyCurrent (or CouldNotVerify on jj versions where the probe is flaky); got {outcome_wet:?}",
     );
 }
+
+#[test]
+fn rewind_protection_restores_locally_advanced_bookmark_after_rewind() {
+    // The wild bug shape this layer protects against: an agent
+    // advanced a bookmark to a new local commit (unpushed); some
+    // step in the fetch pipeline silently rewound it back to its
+    // pre-advance position (the @origin baseline). Pre-this-fix,
+    // the new commit was orphaned and the user had to recover
+    // via op-log. With the rewind detector wired in, the
+    // post-pipeline sweep notices and restores the advanced
+    // position.
+    //
+    // We exercise capture_rewind_snapshots + apply_rewind_protection
+    // directly here rather than the full run_fetch — the goal is
+    // to pin the detect+restore contract in isolation. The
+    // end-to-end "run_fetch in the multi-workspace race" test
+    // would need a fixture too elaborate to be reliable in CI.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_tracked_stack_with_bare_remote();
+    let cwd = tmp.path();
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+
+    // Pre-snapshot state: `bottom` is at its pushed origin commit
+    // (the fixture pushed everything). Resolve the origin
+    // baseline for the test's first assertion.
+    let origin_bottom = jj_capture(
+        cwd,
+        &[
+            "log",
+            "-r",
+            "bottom@origin",
+            "--no-graph",
+            "-T",
+            "commit_id.short(12)",
+            "--limit",
+            "1",
+            "--ignore-working-copy",
+        ],
+    )
+    .trim()
+    .to_owned();
+
+    // Agent advances `bottom` to a NEW commit beyond origin
+    // (simulating "made a fixup commit, moved the bookmark
+    // forward, didn't push yet").
+    jj(cwd, &["new", "bottom", "-m", "agent's local fixup"]);
+    jj(
+        cwd,
+        &["bookmark", "set", "bottom", "-r", "@", "--allow-backwards"],
+    );
+    let pre_fetch_bottom = jj_capture(
+        cwd,
+        &[
+            "log",
+            "-r",
+            "bottom",
+            "--no-graph",
+            "-T",
+            "commit_id.short(12)",
+            "--limit",
+            "1",
+            "--ignore-working-copy",
+        ],
+    )
+    .trim()
+    .to_owned();
+    assert_ne!(
+        pre_fetch_bottom, origin_bottom,
+        "fixture should have advanced bottom past origin"
+    );
+
+    // Snapshot — same call the fetch entry would make.
+    let opts = jj_gt::cleanup::FetchOpts {
+        remote: "origin".into(),
+        trunk: "main".into(),
+        ..jj_gt::cleanup::FetchOpts::default()
+    };
+    let snapshots = jj_gt::cleanup::capture_rewind_snapshots(&jj_cli, &opts).unwrap();
+    let bottom_snap = snapshots
+        .get("bottom")
+        .expect("bottom should be in the snapshot");
+    assert_eq!(
+        bottom_snap.pre_commit, pre_fetch_bottom,
+        "snapshot should record the advanced position",
+    );
+    assert_eq!(
+        bottom_snap.origin_baseline_commit.as_deref(),
+        Some(origin_bottom.as_str()),
+        "snapshot should record the origin baseline so the no-local-work filter has a basis to compare against",
+    );
+
+    // Simulate the silent rewind: some step in the pipeline (the
+    // exact mechanism varies — could be `gt sync --force`, an
+    // inter-workspace race during plain `jj git fetch`, or an
+    // export+import dance) reverts the local bookmark to origin.
+    jj(
+        cwd,
+        &[
+            "bookmark",
+            "set",
+            "bottom",
+            "-r",
+            "bottom@origin",
+            "--allow-backwards",
+        ],
+    );
+    let mid_fetch_bottom = jj_capture(
+        cwd,
+        &[
+            "log",
+            "-r",
+            "bottom",
+            "--no-graph",
+            "-T",
+            "commit_id.short(12)",
+            "--limit",
+            "1",
+            "--ignore-working-copy",
+        ],
+    )
+    .trim()
+    .to_owned();
+    assert_eq!(
+        mid_fetch_bottom, origin_bottom,
+        "fixture should have rewound bottom to origin",
+    );
+
+    // Run the rewind protection sweep.
+    let mut actions: Vec<(jj_gt::jj::LocalBookmark, jj_gt::cleanup::CleanupAction)> = Vec::new();
+    jj_gt::cleanup::apply_rewind_protection(
+        &jj_cli,
+        cwd,
+        &snapshots,
+        &opts,
+        jj_gt::ui::Verbosity::Quiet,
+        &mut actions,
+    )
+    .unwrap();
+
+    // bottom must be back at the advanced position.
+    let post_protection_bottom = jj_capture(
+        cwd,
+        &[
+            "log",
+            "-r",
+            "bottom",
+            "--no-graph",
+            "-T",
+            "commit_id.short(12)",
+            "--limit",
+            "1",
+            "--ignore-working-copy",
+        ],
+    )
+    .trim()
+    .to_owned();
+    assert_eq!(
+        post_protection_bottom, pre_fetch_bottom,
+        "apply_rewind_protection should have restored bottom to the pre-fetch (advanced) position",
+    );
+
+    // And the action log should record the restore.
+    let restore_action = actions
+        .iter()
+        .find(|(b, _)| b.name == "bottom")
+        .map(|(_, a)| a.clone())
+        .expect("apply_rewind_protection should emit a RewindRestored action for bottom");
+    match restore_action {
+        jj_gt::cleanup::CleanupAction::RewindRestored {
+            pre_commit,
+            post_commit,
+        } => {
+            assert_eq!(pre_commit, pre_fetch_bottom);
+            assert_eq!(post_commit, origin_bottom);
+        }
+        other => panic!("expected RewindRestored for bottom; got {other:?}"),
+    }
+}
+
+#[test]
+fn rewind_protection_does_not_restore_when_no_local_work_predates_fetch() {
+    // Negative case: bookmark equals its origin baseline at fetch
+    // start (no local-only work). A subsequent "rewind" is
+    // either a no-op or a legitimate fast-forward elsewhere;
+    // either way, the protection layer must not fire — that's
+    // what the `pre == origin_baseline` filter is for, and what
+    // keeps us from fighting the orphan-rebase / moved-sideways
+    // path over legitimate remote moves.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_tracked_stack_with_bare_remote();
+    let cwd = tmp.path();
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+
+    // `bottom` is at @origin (the fixture pushed it). No local-
+    // only work.
+    let opts = jj_gt::cleanup::FetchOpts {
+        remote: "origin".into(),
+        trunk: "main".into(),
+        ..jj_gt::cleanup::FetchOpts::default()
+    };
+    let snapshots = jj_gt::cleanup::capture_rewind_snapshots(&jj_cli, &opts).unwrap();
+    let bottom_snap = snapshots.get("bottom").unwrap();
+    assert_eq!(
+        Some(bottom_snap.pre_commit.as_str()),
+        bottom_snap.origin_baseline_commit.as_deref(),
+        "test prereq: bottom snapshot should match its origin baseline",
+    );
+
+    // Mutate `bottom` backward (e.g. to main). This wouldn't
+    // normally happen in fetch but we want to confirm the filter
+    // skips even an obvious "rewind" when pre had no local work.
+    jj(
+        cwd,
+        &[
+            "bookmark",
+            "set",
+            "bottom",
+            "-r",
+            "main",
+            "--allow-backwards",
+        ],
+    );
+
+    let mut actions: Vec<(jj_gt::jj::LocalBookmark, jj_gt::cleanup::CleanupAction)> = Vec::new();
+    jj_gt::cleanup::apply_rewind_protection(
+        &jj_cli,
+        cwd,
+        &snapshots,
+        &opts,
+        jj_gt::ui::Verbosity::Quiet,
+        &mut actions,
+    )
+    .unwrap();
+
+    // No RewindRestored action should have been emitted —
+    // pre matched origin baseline, so the filter blocked the
+    // restore.
+    let restored_action = actions.iter().find(|(b, _)| b.name == "bottom");
+    assert!(
+        restored_action.is_none(),
+        "no-local-work bookmark must not be auto-restored; got {restored_action:?}",
+    );
+}

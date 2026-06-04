@@ -77,9 +77,12 @@ pub fn filter_adjacent_targets(
 /// `submit_cmd`). They're filtered out so we don't issue redundant
 /// `gt track` calls.
 ///
-/// Only bookmarks already tracked on `remote` are considered — a
-/// brand-new local bookmark unrelated to any stack shouldn't get
-/// auto-tracked by a reconciliation that didn't mention it.
+/// Only bookmarks that gt is ALREADY tracking are considered. A
+/// brand-new local bookmark unrelated to any stack — say, another
+/// engineer's PR the user pulled down to review — shouldn't get
+/// silently registered with gt by a reconciliation that didn't
+/// mention it. First-time tracking flows through the explicit
+/// `jj-gt submit` / `jj-gt track` paths instead.
 ///
 /// Returns `(count_retracked, per_bookmark_errors)`. Per-bookmark
 /// `gt track` failures are collected but don't abort the call.
@@ -90,7 +93,20 @@ pub fn retrack_adjacent_diverged(
     candidates: &std::collections::BTreeSet<String>,
     skip: &std::collections::BTreeSet<String>,
 ) -> Result<(usize, Vec<String>)> {
-    let adjacent = filter_adjacent_targets(candidates, &opts.trunk, skip);
+    // Refine the caller's `candidates` against "the user has
+    // actually opted into gt for this branch" — `gt log short`'s
+    // enumeration. Bookmarks pulled down purely to review someone
+    // else's PR shouldn't end up registered with graphite just
+    // because they happened to live in the candidate pool.
+    let gt_known = gt::list_tracked_branches(workspace_root).unwrap_or_else(|e| {
+        tracing::warn!(
+            "jj-gt: couldn't enumerate gt-tracked branches ({e}); skipping adjacent re-track"
+        );
+        std::collections::BTreeSet::new()
+    });
+    let scoped: std::collections::BTreeSet<String> =
+        candidates.intersection(&gt_known).cloned().collect();
+    let adjacent = filter_adjacent_targets(&scoped, &opts.trunk, skip);
 
     if adjacent.is_empty() {
         return Ok((0, Vec::new()));

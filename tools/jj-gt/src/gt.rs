@@ -271,6 +271,113 @@ fn run_gt_captured(workspace_root: &Path, argv: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Run `gt` with `argv` and return its stdout. Same env handling
+/// as `run_gt_captured` but returns the output text instead of
+/// dropping it.
+fn run_gt_capture_stdout(workspace_root: &Path, argv: &[&str]) -> Result<String> {
+    tracing::info!("running (capture-stdout): gt {:?}", argv);
+    let mut cmd = Command::new("gt");
+    cmd.args(argv).current_dir(workspace_root);
+    apply_test_xdg(&mut cmd);
+    let output = cmd.output().map_err(|e| JjGtError::GtFailed {
+        status: -1,
+        stderr: format!("failed to spawn gt: {e}"),
+    })?;
+    if !output.status.success() {
+        // gt sometimes writes operative diagnostics to stdout
+        // before failing (the same shape `run_gt_captured`
+        // already handles). Merge both streams so the caller's
+        // error message carries whatever gt actually said,
+        // regardless of which fd it landed on.
+        let stderr_lossy = String::from_utf8_lossy(&output.stderr);
+        let stdout_lossy = String::from_utf8_lossy(&output.stdout);
+        let stderr_trim = stderr_lossy.trim_end();
+        let stdout_trim = stdout_lossy.trim_end();
+        let merged = match (stderr_trim.is_empty(), stdout_trim.is_empty()) {
+            (true, true) => String::from("(gt produced no output)"),
+            (false, true) => stderr_trim.to_owned(),
+            (true, false) => stdout_trim.to_owned(),
+            (false, false) => format!("{stderr_trim}\n{stdout_trim}"),
+        };
+        return Err(JjGtError::GtFailed {
+            status: output.status.code().unwrap_or(-1),
+            stderr: merged,
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Enumerate the branch names gt currently tracks via
+/// `gt log short --no-interactive`. Returns the set as a sorted
+/// `BTreeSet<String>` so callers can do `O(log n)` membership
+/// checks.
+///
+/// gt's storage backend changed in 1.8 (refs/branch-metadata/* →
+/// SQLite) so we can't read git refs directly; `gt log short` is
+/// the version-agnostic enumeration shape.
+///
+/// Used by `cleanup::backfill_phase` and
+/// `reconcile::retrack_adjacent_diverged` to scope auto-tracking
+/// to bookmarks the user has already opted into via gt. A
+/// brand-new local bookmark unrelated to any tracked stack — say,
+/// another engineer's PR the user pulled down to review — is left
+/// alone; jj-gt only fixes up things gt already cares about.
+///
+/// On a fresh repo `gt log short` outputs `◯  main` (just trunk),
+/// so the empty/trunk-only case parses to `{ "main" }` and the
+/// callers naturally short-circuit.
+pub fn list_tracked_branches(workspace_root: &Path) -> Result<std::collections::BTreeSet<String>> {
+    let out = run_gt_capture_stdout(workspace_root, &["log", "short", "--no-interactive"])?;
+    Ok(parse_gt_log_short_branches(&out))
+}
+
+/// Pure: parse `gt log short --no-interactive` output into the
+/// set of branch names it lists. The format is one branch per
+/// line, with a graph glyph + whitespace prefix and an optional
+/// trailing `(needs restack)` / `(current)` / `(PR #N)` annotation:
+///
+/// ```text
+/// ◯  top
+/// ◯  mid (needs restack)
+/// ◉  bottom (current)
+/// ◯  main
+/// ```
+///
+/// We grab the first non-whitespace, non-glyph token of each line.
+/// gt prints annotations like `(current)` / `(needs restack)` as
+/// **separate** whitespace-delimited tokens (`main (current)` →
+/// `["main", "(current)"]`), so taking `nth(1)` after the glyph
+/// already drops them — no need to chop on `(`. Multi-stack output
+/// uses the same one-branch-per-line shape with non-linear graph
+/// glyphs (`├`, `│`, etc.); the column-after-glyph parse handles
+/// those too.
+fn parse_gt_log_short_branches(stdout: &str) -> std::collections::BTreeSet<String> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            // Skip the glyph column. `split_whitespace().nth(1)`
+            // returns the first real token after the glyph
+            // (matches the same parse the gt_live integration
+            // test uses). Annotation parens are separate tokens
+            // (`nth(2)` and onward) — they get naturally dropped.
+            let tok = trimmed.split_whitespace().nth(1)?;
+            // Don't chop on `(` — a branch name `foo(bar)` is
+            // unusual but legal under git-check-ref-format, and
+            // the annotation parens are already a separate token.
+            let name = tok.trim();
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_owned())
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,5 +483,85 @@ mod tests {
         });
         let last_two = &out[out.len() - 2..];
         assert_eq!(last_two, &["--some-niche-flag", "value"]);
+    }
+
+    #[test]
+    fn parse_gt_log_short_branches_only_trunk() {
+        // Fresh repo (or one where gt knows only trunk) — the
+        // helper should return a set with just "main".
+        let out = "\n◯  main\n";
+        let parsed = parse_gt_log_short_branches(out);
+        let expected: std::collections::BTreeSet<String> =
+            ["main".to_owned()].into_iter().collect();
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn parse_gt_log_short_branches_linear_stack() {
+        let out = "\n◯  top\n◯  mid\n◯  bottom\n◯  main\n";
+        let parsed = parse_gt_log_short_branches(out);
+        let expected: std::collections::BTreeSet<String> = ["main", "bottom", "mid", "top"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn parse_gt_log_short_branches_strips_annotation_parens() {
+        // gt may suffix branches with `(needs restack)`,
+        // `(current)`, etc. The parser must drop the annotation
+        // and keep only the branch name. The annotations are
+        // SEPARATE whitespace-delimited tokens, so taking the
+        // first non-glyph token already drops them — no `(`
+        // chopping required.
+        let out = "◯  top (current)\n◯  mid (needs restack)\n◯  bottom\n◯  main\n";
+        let parsed = parse_gt_log_short_branches(out);
+        let expected: std::collections::BTreeSet<String> = ["main", "bottom", "mid", "top"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn parse_gt_log_short_branches_preserves_parens_in_branch_name() {
+        // Regression for the prior `tok.split('(').next()` shape
+        // that truncated branch names containing `(`. Branch
+        // names like `feature(foo)` are unusual but allowed by
+        // git-check-ref-format, and the annotation parens are
+        // already separated by whitespace — the parser shouldn't
+        // chop on `(` and lose data.
+        let out = "◯  feature(foo)\n◯  feature(bar) (current)\n◯  main\n";
+        let parsed = parse_gt_log_short_branches(out);
+        let expected: std::collections::BTreeSet<String> = ["feature(foo)", "feature(bar)", "main"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        assert_eq!(parsed, expected);
+    }
+
+    #[test]
+    fn parse_gt_log_short_branches_empty_input() {
+        // Defensive: gt could in principle return nothing (e.g.
+        // a repo that hasn't been gt-init'd, in which case the
+        // command would have errored and we wouldn't get here,
+        // but the pure parser should still cope).
+        let parsed = parse_gt_log_short_branches("");
+        assert!(parsed.is_empty());
+    }
+
+    #[test]
+    fn parse_gt_log_short_branches_handles_ascii_glyph() {
+        // Older gt versions render with `*` instead of `◯`.
+        // The parser is glyph-agnostic — it just takes the
+        // first non-whitespace token after the glyph column.
+        let out = "*  top\n*  bottom\n*  main\n";
+        let parsed = parse_gt_log_short_branches(out);
+        let expected: std::collections::BTreeSet<String> = ["main", "bottom", "top"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        assert_eq!(parsed, expected);
     }
 }

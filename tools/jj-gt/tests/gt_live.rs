@@ -374,3 +374,60 @@ fn read_repo_config_trunk_round_trips_through_gt_init() {
     let trunk = gt::read_repo_config_trunk(tmp.path()).unwrap();
     assert_eq!(trunk.as_deref(), Some("main"));
 }
+
+#[test]
+fn list_tracked_branches_returns_trunk_only_on_fresh_init() {
+    // Right after `gt init`, no branches are tracked beyond trunk.
+    // The helper must return the set `{ "main" }` — used by
+    // `backfill_phase` and `retrack_adjacent_diverged` to scope
+    // auto-tracking to gt-known branches.
+    if !binary_available("jj") || !binary_available("gt") {
+        eprintln!("skipping: jj or gt not on PATH");
+        return;
+    }
+    let tmp = build_three_stack_fixture();
+    gt_init(tmp.path());
+
+    let tracked = gt::list_tracked_branches(tmp.path()).unwrap();
+    assert!(
+        tracked.contains("main"),
+        "post-init tracked set must include trunk; got {tracked:?}"
+    );
+    assert!(
+        !tracked.contains("bottom"),
+        "post-init tracked set must NOT include user branches gt hasn't been told about yet; got {tracked:?}"
+    );
+}
+
+#[test]
+fn list_tracked_branches_grows_as_user_runs_gt_track() {
+    // The helper must reflect each `gt track` call. We track
+    // bottom → mid → top in order; after each call the
+    // enumeration should include every branch already tracked
+    // so far. This is the contract `backfill_phase` relies on:
+    // a brand-new bookmark only enters the set after the user
+    // explicitly tracks it.
+    if !binary_available("jj") || !binary_available("gt") {
+        eprintln!("skipping: jj or gt not on PATH");
+        return;
+    }
+    let tmp = build_three_stack_fixture();
+    gt_init(tmp.path());
+
+    gt::track(tmp.path(), "bottom", "main").unwrap();
+    let tracked = gt::list_tracked_branches(tmp.path()).unwrap();
+    assert!(tracked.contains("main"));
+    assert!(tracked.contains("bottom"));
+    assert!(!tracked.contains("mid"));
+    assert!(!tracked.contains("top"));
+
+    gt::track(tmp.path(), "mid", "bottom").unwrap();
+    gt::track(tmp.path(), "top", "mid").unwrap();
+    let tracked = gt::list_tracked_branches(tmp.path()).unwrap();
+    for expected in ["main", "bottom", "mid", "top"] {
+        assert!(
+            tracked.contains(expected),
+            "after tracking the full stack, `{expected}` should be in the set; got {tracked:?}"
+        );
+    }
+}
