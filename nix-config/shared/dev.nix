@@ -449,6 +449,32 @@
     fi
   '';
 
+  # gh-pr-review (https://github.com/agynio/gh-pr-review) — gh CLI
+  # extension for inline PR review threads. Not in nixpkgs; install
+  # via `gh extension install` and `gh extension upgrade` on
+  # subsequent rebuilds. Lets agents pull review comments + thread IDs
+  # in one shot instead of stitching together multiple `gh api`
+  # GraphQL calls (which always trip the seal permission prompt
+  # because raw GQL can hide mutations behind a generic verb).
+  #
+  # Activation PATH must include gh itself, plus git (gh extension
+  # install clones the repo to fetch the precompiled binary metadata).
+  # The home-manager activation env is stripped — same pattern the
+  # graphiteAuth block above uses.
+  home.activation.installGhPrReview = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    EXT_DIR="$HOME/.local/share/gh/extensions/gh-pr-review"
+    export PATH="${pkgs.gh}/bin:${pkgs.git}/bin:$PATH"
+    if [ -d "$EXT_DIR" ]; then
+      echo "Updating gh-pr-review extension..."
+      run ${pkgs.gh}/bin/gh extension upgrade gh-pr-review || \
+        echo "WARN: gh extension upgrade failed (gh not authed?); skipping."
+    else
+      echo "Installing gh-pr-review extension..."
+      run ${pkgs.gh}/bin/gh extension install https://github.com/agynio/gh-pr-review || \
+        echo "WARN: gh extension install failed (gh not authed? run 'gh auth login' once)."
+    fi
+  '';
+
   # jj-hooks (jj-hp): not yet in nixpkgs. Drives the pre-push hook
   # gate against the hk config at ~/hk.pkl (see flake.nix's `jj push`
   # alias + ~/hk.pkl for the hook definitions). Drop this activation
