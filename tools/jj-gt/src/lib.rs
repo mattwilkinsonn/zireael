@@ -661,35 +661,99 @@ fn submit_cmd(
 
     // 6. Track each pushed bookmark with jj so the next op doesn't
     // import the remote ref as untracked. See
-    // jj::track_bookmark_on_remote for the rationale. Single pass
-    // across all stacks — the operation is workspace-global.
+    // jj::track_bookmark_on_remote for the rationale.
+    //
+    // Workspace-wide scope (not just `all_sorted`) so the sweep
+    // also picks up bookmarks pushed in an EARLIER submit /
+    // workspace / agent flow that somehow ended up with a
+    // remote ref but no jj-side tracking link. `jj git push`
+    // normally auto-tracks the bookmark on push, but the link
+    // can get lost across workspace boundaries, intermediate
+    // import/export dances, and the gt-queue path that pushes
+    // via `gtmq_*` branches and then renames. The orphan-
+    // untracked phase in `jj-gt fetch` does the same sweep —
+    // belt-and-suspenders: submit catches it at push time;
+    // fetch backfills if submit missed any.
     if !submit.dry_run {
         let track_step = ui::Step::start("Tracking pushed bookmarks with jj", verbosity);
-        let already_tracked =
-            jj::list_tracked_bookmarks_on_remote(jj, &bookmarks.remote).unwrap_or_default();
+        let mut early_bail: Option<String> = None;
+        let already_tracked = match jj::list_tracked_bookmarks_on_remote(jj, &bookmarks.remote) {
+            Ok(s) => s,
+            Err(e) => {
+                // The whole sweep is meaningless without the
+                // tracked-set baseline — we'd `track` everything
+                // including bookmarks already tracked, polluting
+                // the output. Surface and skip.
+                early_bail = Some(format!(
+                    "couldn't enumerate `@{}`-tracked bookmarks ({e}); skipping track sweep",
+                    bookmarks.remote
+                ));
+                std::collections::BTreeSet::new()
+            }
+        };
+        let locals = if early_bail.is_some() {
+            Vec::new()
+        } else {
+            match jj::list_local_bookmarks(jj) {
+                Ok(v) => v,
+                Err(e) => {
+                    early_bail = Some(format!(
+                        "couldn't enumerate local bookmarks ({e}); skipping track sweep"
+                    ));
+                    Vec::new()
+                }
+            }
+        };
         let mut tracked = 0usize;
         let mut skipped = 0usize;
         let mut errors: Vec<String> = Vec::new();
-        for sb in &all_sorted {
-            if already_tracked.contains(&sb.name) {
+        let gtmq_prefixes = cleanup::default_gtmq_prefixes_owned();
+        for local in &locals {
+            if local.name == trunk {
+                continue;
+            }
+            if cleanup::is_gtmq_branch(&local.name, &gtmq_prefixes) {
+                continue;
+            }
+            if already_tracked.contains(&local.name) {
                 skipped += 1;
                 continue;
             }
-            match jj::track_bookmark_on_remote(jj, &sb.name, &bookmarks.remote) {
+            // Only attempt to track when the remote ref actually
+            // exists — pre-push WIP bookmarks have no `@<remote>`
+            // and would error here. Mirror the fetch-side
+            // `orphan_untracked_phase` semantics: only the
+            // unresolved-revset shape is a benign skip; any other
+            // jj failure surfaces so the user sees the real
+            // problem (network, jj crash, corrupted .jj/).
+            match jj::resolve_commit_id(jj, &format!("{}@{}", local.name, bookmarks.remote)) {
+                Ok(_) => {}
+                Err(e) if cleanup::is_revset_unresolved_error(&e) => continue,
+                Err(e) => {
+                    errors.push(format!("{}: probe failed: {e}", local.name));
+                    continue;
+                }
+            }
+            match jj::track_bookmark_on_remote(jj, &local.name, &bookmarks.remote) {
                 Ok(()) => tracked += 1,
-                Err(e) => errors.push(format!("{}@{}: {e}", sb.name, bookmarks.remote)),
+                Err(e) => errors.push(format!("{}@{}: {e}", local.name, bookmarks.remote)),
             }
         }
-        let summary = match (tracked, skipped, errors.is_empty()) {
-            (0, _, true) => "all already tracked".to_owned(),
-            (n, 0, true) => format!("{n} newly tracked"),
-            (n, m, true) => format!("{n} newly tracked, {m} already tracked"),
-            (_, _, false) => format!("{} error(s)", errors.len()),
-        };
-        if errors.is_empty() {
-            track_step.success(&summary, None);
-        } else {
-            track_step.warn(&summary, Some(&errors.join("\n")));
+        match early_bail {
+            Some(msg) => track_step.warn(&msg, None),
+            None => {
+                let summary = match (tracked, skipped, errors.is_empty()) {
+                    (0, _, true) => "all already tracked".to_owned(),
+                    (n, 0, true) => format!("{n} newly tracked"),
+                    (n, m, true) => format!("{n} newly tracked, {m} already tracked"),
+                    (_, _, false) => format!("{} error(s)", errors.len()),
+                };
+                if errors.is_empty() {
+                    track_step.success(&summary, None);
+                } else {
+                    track_step.warn(&summary, Some(&errors.join("\n")));
+                }
+            }
         }
     }
 
@@ -1095,7 +1159,7 @@ fn action_to_row(
         } => (
             ui::ActionStatus::Error,
             format!(
-                "silent rewind detected — restored to {} (something in the fetch pipeline tried to revert to {}); if the rewind was intentional, run `jj bookmark set <name> -r {}` to reapply",
+                "silent rewind detected — restored to {} (something in the fetch pipeline tried to revert to {}); if the rewind was intentional, run `jj bookmark set {bookmark_name} -r {}` to reapply",
                 &pre_commit[..pre_commit.len().min(12)],
                 &post_commit[..post_commit.len().min(12)],
                 &post_commit[..post_commit.len().min(12)],
@@ -1108,7 +1172,7 @@ fn action_to_row(
         } => (
             ui::ActionStatus::Error,
             format!(
-                "silent rewind detected from {} to {} but restore failed: {message}; run `jj bookmark set <name> -r {}` manually (or `jj op log` to recover earlier state)",
+                "silent rewind detected from {} to {} but restore failed: {message}; run `jj bookmark set {bookmark_name} -r {}` manually (or `jj op log` to recover earlier state)",
                 &pre_commit[..pre_commit.len().min(12)],
                 &post_commit[..post_commit.len().min(12)],
                 &pre_commit[..pre_commit.len().min(12)],
@@ -1117,7 +1181,7 @@ fn action_to_row(
         CleanupAction::DeletionRestored { pre_commit } => (
             ui::ActionStatus::Error,
             format!(
-                "silent deletion detected — bookmark vanished mid-fetch with local-only work; recreated at {} (if the deletion was intentional, run `jj bookmark forget <name>` to drop it again)",
+                "silent deletion detected — bookmark vanished mid-fetch with local-only work; recreated at {} (if the deletion was intentional, run `jj bookmark forget {bookmark_name}` to drop it again)",
                 &pre_commit[..pre_commit.len().min(12)],
             ),
         ),
@@ -1127,8 +1191,15 @@ fn action_to_row(
         } => (
             ui::ActionStatus::Error,
             format!(
-                "silent deletion detected — bookmark vanished mid-fetch with local-only work AND recreate failed: {message}; run `jj bookmark set <name> -r {}` manually (or `jj op log` to recover earlier state)",
+                "silent deletion detected — bookmark vanished mid-fetch with local-only work AND recreate failed: {message}; run `jj bookmark set {bookmark_name} -r {}` manually (or `jj op log` to recover earlier state)",
                 &pre_commit[..pre_commit.len().min(12)],
+            ),
+        ),
+        CleanupAction::OrphanUntrackedTracked { remote, commit_id } => (
+            ui::ActionStatus::Ok,
+            format!(
+                "had `@{remote}` ref but wasn't tracked — tracking now (was at {}); future fetches will propagate remote deletions",
+                &commit_id[..commit_id.len().min(12)],
             ),
         ),
         CleanupAction::LeftAlone => (ui::ActionStatus::Skipped, "left alone".into()),
