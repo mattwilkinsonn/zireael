@@ -24,26 +24,34 @@ fn env_lock() -> &'static Mutex<()> {
     ENV_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// RAII guard that removes a process-wide env var on drop. Pair with
-/// `env_lock()` so the cleanup runs even if the body of the test
-/// panics — leaking `JJ_GT_SKIP_UPDATE_STALE=1` (or any other
-/// jj-gt env knob) into a subsequent test in the same process
-/// would silently flip its behavior.
+/// RAII guard that restores a process-wide env var on drop. Pair
+/// with `env_lock()` so the cleanup runs even if the body of the
+/// test panics — leaking `JJ_GT_SKIP_UPDATE_STALE=1` (or any
+/// other jj-gt env knob) into a subsequent test in the same
+/// process would silently flip its behavior. The guard captures
+/// whatever value the var held before `set()` ran and restores
+/// it on drop (or removes the var if it wasn't set), so a test
+/// run that already had the var set in its outer env doesn't
+/// lose that value across the first guarded test.
 struct EnvVarGuard {
     name: &'static str,
+    previous: Option<std::ffi::OsString>,
 }
 
 impl EnvVarGuard {
-    /// Set `name=value` and arrange for `remove_var(name)` on drop.
-    /// SAFETY: caller must hold `env_lock()` for the lifetime of the
-    /// guard so no other thread observes the mutation.
+    /// Capture the prior value, set `name=value`, and arrange for
+    /// the prior value to be restored (or `remove_var(name)` if
+    /// the var was unset) on drop.
+    /// SAFETY: caller must hold `env_lock()` for the lifetime of
+    /// the guard so no other thread observes the mutation.
     unsafe fn set(name: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(name);
         // SAFETY: documented at the call site — the env_lock guard
         // serializes us against every other env-touching test.
         unsafe {
             std::env::set_var(name, value);
         }
-        Self { name }
+        Self { name, previous }
     }
 }
 
@@ -52,7 +60,10 @@ impl Drop for EnvVarGuard {
         // SAFETY: same lock invariant as `set` — the caller holds
         // `env_lock()` and therefore so do we.
         unsafe {
-            std::env::remove_var(self.name);
+            match self.previous.take() {
+                Some(value) => std::env::set_var(self.name, value),
+                None => std::env::remove_var(self.name),
+            }
         }
     }
 }
@@ -734,13 +745,58 @@ fn ensure_workspace_current_respects_skip_env_var() {
     // read or write the env while we hold the guard.
     let _lock = env_lock().lock().unwrap();
     // SAFETY: held the process-wide env lock above. `EnvVarGuard`
-    // arranges `remove_var` on drop so the cleanup runs even if
-    // `ensure_workspace_current` panics — without it, a leaked
+    // captures whatever value the var held before this test (so
+    // an outer-env setting survives the test run) and restores
+    // it on drop, even if `ensure_workspace_current` panics —
+    // without that restore-on-drop, a leaked
     // `JJ_GT_SKIP_UPDATE_STALE=1` would silently flip the next
     // test that consults the same knob.
     let _env = unsafe { EnvVarGuard::set("JJ_GT_SKIP_UPDATE_STALE", "1") };
     let outcome = jj_gt::jj::ensure_workspace_current(&jj_cli);
     assert_eq!(outcome.unwrap(), jj_gt::jj::UpdateStaleOutcome::NotStale);
+}
+
+#[test]
+fn env_var_guard_restores_prior_value_on_drop() {
+    // Regression for the PR #72 review: an earlier version of
+    // EnvVarGuard always called `remove_var` on drop, so a test
+    // run that started with `JJ_GT_SKIP_UPDATE_STALE=outer-value`
+    // would lose that outer value the first time a guarded test
+    // ran. Pin both the "had prior value → restore" and the
+    // "no prior value → clear" branches.
+    let _lock = env_lock().lock().unwrap();
+    const NAME: &str = "JJ_GT_ENV_GUARD_TEST";
+
+    // Branch 1: prior value present.
+    // SAFETY: we hold env_lock() for the rest of the test.
+    unsafe {
+        std::env::set_var(NAME, "outer-value");
+    }
+    {
+        // SAFETY: same lock held; the guard captures + restores.
+        let _g = unsafe { EnvVarGuard::set(NAME, "inner-value") };
+        assert_eq!(std::env::var(NAME).unwrap(), "inner-value");
+    }
+    assert_eq!(
+        std::env::var(NAME).unwrap(),
+        "outer-value",
+        "guard must restore the prior value on drop",
+    );
+
+    // Branch 2: no prior value.
+    // SAFETY: still under env_lock().
+    unsafe {
+        std::env::remove_var(NAME);
+    }
+    {
+        // SAFETY: same lock held.
+        let _g = unsafe { EnvVarGuard::set(NAME, "inner-value") };
+        assert_eq!(std::env::var(NAME).unwrap(), "inner-value");
+    }
+    assert!(
+        std::env::var_os(NAME).is_none(),
+        "guard must clear the var on drop when there was no prior value",
+    );
 }
 
 #[test]
