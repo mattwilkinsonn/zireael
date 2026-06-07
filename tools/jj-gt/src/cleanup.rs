@@ -1281,7 +1281,20 @@ fn reanchor_children_of_moved_parents(
     // Re-read post state since the deleted-parent loop above may
     // have mutated bookmark positions.
     let remaining = list_local_bookmarks(jj)?;
-    let remaining_names: BTreeSet<String> = remaining.iter().map(|b| b.name.clone()).collect();
+    // `list_local_bookmarks` deliberately filters out conflicted
+    // bookmarks (they have no `normal_target()` commit id — see
+    // `tools/jj-gt/src/jj.rs`). Folding `conflicted` back into
+    // `remaining_names` here keeps a conflicted child from being
+    // silently skipped by the `!remaining_names.contains(&sb.name)`
+    // gate below — without the fold, the downstream
+    // `is_bookmark_conflicted` check (and its
+    // `CleanupAction::BookmarkConflicted` emit) never fires for
+    // sideways-moved targets.
+    let remaining_names: BTreeSet<String> = remaining
+        .iter()
+        .map(|b| b.name.clone())
+        .chain(conflicted.iter().cloned())
+        .collect();
 
     // Track names we already emitted an action for in *this*
     // call so we don't double-emit if a bookmark has more than
@@ -1333,7 +1346,16 @@ fn reanchor_children_of_moved_parents(
             .iter()
             .find(|b| b.name == sb.name)
             .cloned()
-            .expect("filtered by remaining_names above");
+            // Conflicted bookmarks live in `remaining_names` (via
+            // the chain fold above) but NOT in `remaining` itself
+            // (jj's template filters them out). Synthesize a
+            // placeholder so the BookmarkConflicted action below
+            // still emits — the empty `commit_id` is harmless for
+            // the action printer's conflicted arm.
+            .unwrap_or_else(|| LocalBookmark {
+                name: sb.name.clone(),
+                commit_id: String::new(),
+            });
 
         // Issue #68: if the candidate bookmark name itself is
         // conflicted, surface as BookmarkConflicted (same
