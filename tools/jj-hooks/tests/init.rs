@@ -370,6 +370,73 @@ desc = "jj push selected bookmark(s)"
 }
 
 #[test]
+fn add_jjui_actions_preserves_user_customized_desc_on_old_managed_rename() {
+    // Regression for the PR #74 review: the OLD→NEW name rename
+    // used to blindly overwrite `desc`. If a user kept the
+    // managed lua (so the action is still classified as
+    // `OldManaged`) but edited the binding's display text, that
+    // edit was silently clobbered. The fix: only refresh `desc`
+    // when its existing value is in the managed history set
+    // (i.e. one we've installed ourselves).
+    let existing = r#"
+[[actions]]
+name = "jj-push"
+lua = """
+  jj_async("util", "exec", "--", "jj-hp", "push")
+  revisions.refresh()
+"""
+
+[[actions]]
+name = "jj-push-selected"
+lua = """
+  jj_async("util", "exec", "--", "jj-hp", "push", "-r", context.commit_id())
+  revisions.refresh()
+"""
+
+[[bindings]]
+action = "jj-push"
+seq = ["x", "p"]
+scope = "revisions"
+desc = "My custom push label"
+
+[[bindings]]
+action = "jj-push-selected"
+seq = ["x", "P"]
+scope = "revisions"
+desc = "Push just this one"
+"#;
+    let (output, _added) = add_jjui_actions(existing).unwrap();
+    let parsed: toml::Table = output.parse().unwrap();
+    let bindings = parsed["bindings"].as_array().unwrap();
+
+    let mut saw_push = false;
+    let mut saw_push_selected = false;
+    for b in bindings {
+        let action = b.get("action").and_then(|v| v.as_str()).unwrap_or("");
+        let desc = b.get("desc").and_then(|v| v.as_str()).unwrap_or("");
+        if action == "jj-hp-push" {
+            saw_push = true;
+            assert_eq!(
+                desc, "My custom push label",
+                "user-customized desc must survive the rename; got {desc}"
+            );
+        }
+        if action == "jj-hp-push-selected" {
+            saw_push_selected = true;
+            assert_eq!(
+                desc, "Push just this one",
+                "user-customized desc must survive the rename; got {desc}"
+            );
+        }
+    }
+    assert!(saw_push, "renamed jj-hp-push binding should exist");
+    assert!(
+        saw_push_selected,
+        "renamed jj-hp-push-selected binding should exist"
+    );
+}
+
+#[test]
 fn apply_writes_jjui_config_when_requested() {
     let tmp = tempfile::TempDir::new().unwrap();
     let jj_config = tmp.path().join("jj-config.toml");

@@ -285,9 +285,12 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
         .ok_or_else(|| JjHooksError::Parse("jjui config: `bindings` is not an array".into()))?;
 
     // For each binding pointing at an old action name, rename its `action`
-    // field to the new name and update `desc`. (This is independent of
-    // whether the action itself got renamed — there could be a stale
-    // binding referencing an action we already renamed.)
+    // field to the new name and refresh `desc` IF AND ONLY IF the existing
+    // desc is one we've ever installed ourselves (or absent). User-customized
+    // desc text is preserved — pinning the binding action name alone is the
+    // unsurprising migration; clobbering display text the user typed is not.
+    // (This is independent of whether the action itself got renamed — there
+    // could be a stale binding referencing an action we already renamed.)
     for b in bindings_arr.iter_mut() {
         let Some(action) = b.get("action").and_then(|v| v.as_str()) else {
             continue;
@@ -295,7 +298,10 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
         if action == OLD_PUSH_NAME && push_state == ActionState::OldManaged {
             let table = b.as_table_mut().unwrap();
             table.insert("action".into(), toml::Value::String(NEW_PUSH_NAME.into()));
-            table.insert("desc".into(), toml::Value::String(NEW_PUSH_DESC.into()));
+            let existing_desc = table.get("desc").and_then(|v| v.as_str());
+            if existing_desc.is_none_or(|d| push_desc_managed_set().contains(&d)) {
+                table.insert("desc".into(), toml::Value::String(NEW_PUSH_DESC.into()));
+            }
         } else if action == OLD_PUSH_SELECTED_NAME && push_selected_state == ActionState::OldManaged
         {
             let table = b.as_table_mut().unwrap();
@@ -303,10 +309,13 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
                 "action".into(),
                 toml::Value::String(NEW_PUSH_SELECTED_NAME.into()),
             );
-            table.insert(
-                "desc".into(),
-                toml::Value::String(NEW_PUSH_SELECTED_DESC.into()),
-            );
+            let existing_desc = table.get("desc").and_then(|v| v.as_str());
+            if existing_desc.is_none_or(|d| push_selected_desc_managed_set().contains(&d)) {
+                table.insert(
+                    "desc".into(),
+                    toml::Value::String(NEW_PUSH_SELECTED_DESC.into()),
+                );
+            }
         }
     }
 
@@ -325,6 +334,7 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
         &push_seq_history(),
         NEW_PUSH_DESC,
         &push_lua_forms(),
+        push_desc_managed_set(),
     );
     migrate_seq_for_managed_binding(
         bindings_arr,
@@ -333,6 +343,7 @@ pub fn add_jjui_actions(existing: &str) -> Result<(String, AddedItems)> {
         &push_selected_seq_history(),
         NEW_PUSH_SELECTED_DESC,
         &push_selected_lua_forms(),
+        push_selected_desc_managed_set(),
     );
 
     // Migrate `desc` independently of seq — when an action's lua
@@ -437,6 +448,29 @@ fn push_desc_history() -> Vec<&'static str> {
     ]
 }
 
+/// Every binding `desc` we have ever installed for the OLD push
+/// action name (`jj-push`) before the 2026-06 rename, plus every
+/// desc we have ever installed for the new name. Used by the
+/// rename-time desc migration to recognise an unmodified
+/// managed desc (which we may safely overwrite) vs a
+/// user-customized desc (which we must preserve).
+///
+/// Order doesn't matter — this is membership-tested, not
+/// preference-ordered like `push_desc_history`.
+fn push_desc_managed_set() -> &'static [&'static str] {
+    &[
+        // Pre-2026-06 default desc on the old `jj-push` binding.
+        "jj push",
+        // Every desc we've ever installed for the new name. The
+        // current `jj-hp-push` action shouldn't show up on a
+        // still-OLD-name binding in practice, but including it
+        // keeps the rename idempotent if a user manually edited
+        // the action name without touching the desc.
+        NEW_PUSH_DESC,
+        "jj-hp push",
+    ]
+}
+
 /// Every binding `desc` we have ever installed for
 /// `jj-hp-push-selected`, most-recent first.
 fn push_selected_desc_history() -> Vec<&'static str> {
@@ -445,6 +479,20 @@ fn push_selected_desc_history() -> Vec<&'static str> {
         // operates on the single focused bookmark.
         NEW_PUSH_SELECTED_DESC,
         // Pre-2026-06 form.
+        "jj-hp push selected bookmark(s)",
+    ]
+}
+
+/// Counterpart to `push_desc_managed_set` for the
+/// `jj-hp-push-selected` action — desc strings we may safely
+/// overwrite during the OLD→NEW name rename.
+fn push_selected_desc_managed_set() -> &'static [&'static str] {
+    &[
+        // Pre-2026-06 default on the old `jj-push-selected`
+        // binding.
+        "jj push selected bookmark(s)",
+        // Current and intermediate forms.
+        NEW_PUSH_SELECTED_DESC,
         "jj-hp push selected bookmark(s)",
     ]
 }
@@ -654,6 +702,7 @@ fn migrate_seq_for_managed_binding(
     seq_history: &[Vec<&'static str>],
     desc: &str,
     lua_history: &[&str],
+    managed_desc_set: &[&str],
 ) {
     if seq_history.len() < 2 {
         return; // No prior versions to migrate from.
@@ -695,6 +744,14 @@ fn migrate_seq_for_managed_binding(
             // picked a custom key. Either way, no migration.
             continue;
         }
+        // Refresh `desc` only when it matches one we've installed
+        // ourselves. A user-customized label (action managed but
+        // display text edited) survives the seq migration.
+        let existing_desc = b
+            .as_table()
+            .and_then(|t| t.get("desc"))
+            .and_then(|v| v.as_str());
+        let desc_is_managed = existing_desc.is_none_or(|d| managed_desc_set.contains(&d));
         let table = b.as_table_mut().unwrap();
         table.insert(
             "seq".into(),
@@ -705,7 +762,9 @@ fn migrate_seq_for_managed_binding(
                     .collect(),
             ),
         );
-        table.insert("desc".into(), toml::Value::String(desc.into()));
+        if desc_is_managed {
+            table.insert("desc".into(), toml::Value::String(desc.into()));
+        }
     }
 }
 
