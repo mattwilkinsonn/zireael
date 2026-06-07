@@ -1517,18 +1517,45 @@ fn orphan_untracked_phase_skips_pre_push_wip_bookmark() {
     // because the orphan-vs-WIP shapes both matched. The new
     // "track-only-when-remote-ref-exists" rule cleanly
     // distinguishes them.
+    //
+    // We deliberately set up an EMPTY `origin` remote here so
+    // `jj::list_tracked_bookmarks_on_remote("origin")` succeeds
+    // with an empty set — without that, the phase's prologue
+    // would early-bail on the missing-remote error and the
+    // per-bookmark `@origin` probe (the actual guard we're
+    // pinning) would never run.
     if !jj_available() {
         eprintln!("skipping: jj not on PATH");
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
+    let bare_remote = tempfile::tempdir().unwrap();
+    // Initialize a bare git repo as the `origin` remote so jj
+    // can resolve it. No bookmarks are pushed; we want
+    // `list_tracked_bookmarks_on_remote("origin")` to succeed
+    // with an empty set, exercising the per-bookmark probe.
+    std::process::Command::new("git")
+        .args(["init", "--bare"])
+        .arg(bare_remote.path())
+        .output()
+        .expect("git init --bare must succeed");
     jj(cwd, &["git", "init", "--colocate"]);
     jj(
         cwd,
         &["config", "set", "--repo", "user.email", "test@example.com"],
     );
     jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(
+        cwd,
+        &[
+            "git",
+            "remote",
+            "add",
+            "origin",
+            bare_remote.path().to_str().unwrap(),
+        ],
+    );
     jj(cwd, &["describe", "-m", "root"]);
     jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
     // Create `wip` purely locally — never pushed.
@@ -1538,8 +1565,20 @@ fn orphan_untracked_phase_skips_pre_push_wip_bookmark() {
 
     let jj_cli = JjCli::new(cwd.to_path_buf());
 
-    // Run the phase. With no remote configured (so no `@origin`
-    // ref can possibly resolve), `wip` MUST be skipped.
+    // Sanity check: the remote exists and is reachable (so the
+    // phase's prologue doesn't early-bail). Whether `main` shows
+    // up as tracked already (jj's colocated semantics) doesn't
+    // matter — what we need is for `wip` to NOT be in the
+    // tracked set so the per-bookmark probe runs.
+    let pre_tracked = jj_gt::jj::list_tracked_bookmarks_on_remote(&jj_cli, "origin").unwrap();
+    assert!(
+        !pre_tracked.contains("wip"),
+        "fixture intent: `wip` must not be tracked yet so the phase reaches the per-bookmark probe; got: {pre_tracked:?}",
+    );
+
+    // Run the phase. With no remote bookmarks at all, every
+    // local bookmark hits the per-bookmark `@origin` probe;
+    // `wip` resolves as unresolved-revset and gets skipped.
     let opts = jj_gt::cleanup::FetchOpts {
         remote: "origin".into(),
         trunk: "main".into(),
@@ -1569,8 +1608,8 @@ fn orphan_untracked_phase_skips_pre_push_wip_bookmark() {
     .unwrap();
 
     // No action should have been emitted for `wip` — the
-    // existence check on `@origin` failed (the ref doesn't
-    // exist) and the phase bailed.
+    // per-bookmark `@origin` probe got an unresolved-revset
+    // error and the phase bailed on the WIP bookmark.
     let wip_action = actions.iter().find(|(b, _)| b.name == "wip");
     assert!(
         wip_action.is_none(),

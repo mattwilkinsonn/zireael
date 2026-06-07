@@ -706,6 +706,7 @@ fn submit_cmd(
         };
         let mut tracked = 0usize;
         let mut skipped = 0usize;
+        let mut unresolved_skipped = 0usize;
         let mut errors: Vec<String> = Vec::new();
         let gtmq_prefixes = cleanup::default_gtmq_prefixes_owned();
         for local in &locals {
@@ -728,7 +729,15 @@ fn submit_cmd(
             // problem (network, jj crash, corrupted .jj/).
             match jj::resolve_commit_id(jj, &format!("{}@{}", local.name, bookmarks.remote)) {
                 Ok(_) => {}
-                Err(e) if cleanup::is_revset_unresolved_error(&e) => continue,
+                Err(e) if cleanup::is_revset_unresolved_error(&e) => {
+                    // Bookmark exists locally but has no remote
+                    // ref — pre-push WIP. Count separately so
+                    // the summary doesn't collapse the
+                    // nothing-to-track case into a misleading
+                    // "all already tracked".
+                    unresolved_skipped += 1;
+                    continue;
+                }
                 Err(e) => {
                     errors.push(format!("{}: probe failed: {e}", local.name));
                     continue;
@@ -742,11 +751,19 @@ fn submit_cmd(
         match early_bail {
             Some(msg) => track_step.warn(&msg, None),
             None => {
-                let summary = match (tracked, skipped, errors.is_empty()) {
-                    (0, _, true) => "all already tracked".to_owned(),
-                    (n, 0, true) => format!("{n} newly tracked"),
-                    (n, m, true) => format!("{n} newly tracked, {m} already tracked"),
-                    (_, _, false) => format!("{} error(s)", errors.len()),
+                let summary = match (tracked, skipped, unresolved_skipped, errors.is_empty()) {
+                    (0, 0, 0, true) => "nothing to track".to_owned(),
+                    (0, 0, u, true) if u > 0 => {
+                        format!("{u} pre-push WIP skipped, nothing tracked")
+                    }
+                    (0, _, _, true) => "all already tracked".to_owned(),
+                    (n, 0, 0, true) => format!("{n} newly tracked"),
+                    (n, 0, u, true) => format!("{n} newly tracked, {u} pre-push WIP skipped"),
+                    (n, m, 0, true) => format!("{n} newly tracked, {m} already tracked"),
+                    (n, m, u, true) => {
+                        format!("{n} newly tracked, {m} already tracked, {u} pre-push WIP skipped")
+                    }
+                    (_, _, _, false) => format!("{} error(s)", errors.len()),
                 };
                 if errors.is_empty() {
                     track_step.success(&summary, None);
