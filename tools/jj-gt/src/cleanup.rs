@@ -229,6 +229,16 @@ pub enum CleanupAction {
     /// the deletion-with-local-work case where the recreate
     /// `jj bookmark set` failed. User must recover manually.
     DeletionDetectedButRestoreFailed { pre_commit: String, message: String },
+    /// Local bookmark had a matching `@<remote>` ref but wasn't
+    /// tracked by jj. The `[deleted] propagate` path jj would
+    /// normally apply on the next fetch never fires for
+    /// untracked bookmarks, so a merged-PR cleanup leaves them
+    /// dangling. The auto-track sweep flips the tracking on so
+    /// the standard mechanism takes over going forward — no
+    /// destructive action, just a metadata correction. Next
+    /// fetch handles the actual deletion when the remote ref
+    /// disappears.
+    OrphanUntrackedTracked { remote: String, commit_id: String },
     /// PR still open and local matches pushed; leave alone.
     LeftAlone,
 }
@@ -476,6 +486,20 @@ pub fn run_fetch(
         &mut actions,
     )?;
     gtmq_prune_phase(jj, workspace_root, &pre, opts, verbosity, &mut actions)?;
+
+    // Auto-track every local bookmark whose `@<remote>` ref
+    // exists but isn't tracked yet. After this phase, the
+    // standard jj propagation handles merge/delete cleanup
+    // automatically on subsequent fetches. Pre-push WIP
+    // bookmarks (no `@<remote>` ref) are skipped — they have
+    // nothing to track against.
+    //
+    // Runs AFTER gt sync (so any deletions gt did get picked up
+    // by import first) and BEFORE the orphan-rebase phase (so
+    // children of bookmarks that get tracked-then-deleted on
+    // the NEXT fetch end up consistent without an extra cycle).
+    orphan_untracked_phase(jj, &pre, opts, verbosity, &mut actions)?;
+
     orphan_rebase_phase(jj, &pre, &post, opts, &mut actions)?;
 
     // After every pipeline mutation has run, sweep for silent
@@ -612,7 +636,7 @@ pub fn capture_rewind_snapshots(
 /// "No such revision" wording. Other error variants (Io, GtFailed,
 /// etc.) are NOT this — those mean something actually went wrong
 /// and the caller should bubble out.
-fn is_revset_unresolved_error(err: &crate::error::JjGtError) -> bool {
+pub fn is_revset_unresolved_error(err: &crate::error::JjGtError) -> bool {
     use crate::error::JjGtError;
     match err {
         JjGtError::Invalid(msg) => msg.contains("resolved to no commits"),
@@ -1399,6 +1423,189 @@ fn gtmq_prune_phase(
             }
         }
         actions.push((branch.clone(), action));
+    }
+    Ok(())
+}
+
+/// Track-on-discovery sweep. Catches the wild bug shape where
+/// a local bookmark has a matching `@<remote>` ref but isn't yet
+/// tracked by jj — meaning the remote-side `[deleted]`
+/// propagation jj would normally apply on the next fetch never
+/// fires for it. After this phase, every locally-present
+/// bookmark whose remote ref exists is also tracked, so the
+/// standard jj propagation handles merge/delete cleanup
+/// automatically on subsequent fetches.
+///
+/// The shape this addresses:
+///
+///   1. Agent (or human) created bookmark `X` and pushed it via
+///      `jj git push --bookmark X`. jj does NOT auto-track the
+///      remote ref on push, so there's no `X@<remote>` tracking
+///      link.
+///   2. PR merged via Graphite's merge queue → original branch
+///      deleted on origin.
+///   3. Next `jj git fetch` logs `[deleted] untracked` for
+///      `X@<remote>` but doesn't propagate to local because no
+///      tracking link exists.
+///   4. `gt sync` skips `X` because it's not in gt's tracked
+///      branch set.
+///   5. Net: local `X` carries on pointing at the abandoned
+///      pre-merge commit forever.
+///
+/// We address (5) at the SOURCE: track every local bookmark
+/// that has a matching `@<remote>` ref. Once tracked, jj's
+/// standard `git fetch` → "propagate remote-side deletion to
+/// local" path takes over on the next fetch, and the bookmark
+/// gets removed naturally — same flow that already works for
+/// the bookmarks Matt explicitly tracked via
+/// [`crate::jj::track_bookmark_on_remote`] after `jj-gt
+/// submit`. No destructive sweep, no risk to pre-push WIP.
+///
+/// Pre-push WIP bookmarks (local-only, no `@<remote>` ref) are
+/// SKIPPED by definition — they wouldn't have a remote ref to
+/// track against, so the existence check filters them out
+/// before we touch anything. The earlier `forget` design got
+/// burned here: it auto-deleted a sibling-stack pre-push
+/// bookmark because "no `@<remote>` + not tracked + not on
+/// `::@`" matched both the orphan AND the WIP shape.
+///
+/// Safety filters:
+///
+///   - Trunk is excluded (already tracked by definition).
+///   - `gtmq_*` queue branches are excluded.
+///   - Bookmarks that ARE already tracked are skipped (no-op).
+///   - Bookmarks whose `@<remote>` ref DOESN'T resolve are
+///     skipped — those are pre-push WIP; we have nothing to
+///     track them against.
+///   - dry-run is a no-op.
+pub fn orphan_untracked_phase(
+    jj: &JjCli,
+    pre: &PreFetchSnapshot,
+    opts: &FetchOpts,
+    verbosity: crate::ui::Verbosity,
+    actions: &mut Vec<(LocalBookmark, CleanupAction)>,
+) -> Result<()> {
+    if opts.dry_run {
+        return Ok(());
+    }
+
+    let step = crate::ui::Step::start(
+        "Auto-tracking untracked bookmarks with remote refs",
+        verbosity,
+    );
+
+    let tracked: BTreeSet<String> = match jj::list_tracked_bookmarks_on_remote(jj, &opts.remote) {
+        Ok(s) => s,
+        Err(e) => {
+            step.warn(
+                &format!(
+                    "couldn't enumerate `@{}`-tracked bookmarks ({e}); skipping auto-track sweep",
+                    opts.remote
+                ),
+                None,
+            );
+            return Ok(());
+        }
+    };
+
+    // Re-read the live local bookmark set. This phase runs after
+    // fetch/sync/prune, so `pre.normal` is potentially stale —
+    // bookmarks could have been deleted by an earlier phase.
+    // Acting on the stale snapshot would probe / track a name
+    // that's no longer local AND log a success row for a
+    // bookmark that doesn't exist anymore. Take the intersection
+    // with the live list (and use the live commit_id when we
+    // record the action) so the sweep stays accurate.
+    let live: Vec<jj::LocalBookmark> = match jj::list_local_bookmarks(jj) {
+        Ok(v) => v,
+        Err(e) => {
+            step.warn(
+                &format!(
+                    "couldn't enumerate live local bookmarks ({e}); skipping auto-track sweep"
+                ),
+                None,
+            );
+            return Ok(());
+        }
+    };
+    let live_by_name: BTreeMap<String, &jj::LocalBookmark> =
+        live.iter().map(|b| (b.name.clone(), b)).collect();
+
+    let mut tracked_now = 0usize;
+    let mut warnings: Vec<String> = Vec::new();
+    let mut to_override: BTreeSet<String> = BTreeSet::new();
+
+    for snap in &pre.normal {
+        let Some(local) = live_by_name.get(&snap.name) else {
+            // Bookmark went away during this fetch pipeline —
+            // some earlier phase handled it. Skip; we have
+            // nothing live to track or report on.
+            continue;
+        };
+        if local.name == opts.trunk {
+            continue;
+        }
+        if is_gtmq_branch(&local.name, &opts.gtmq_prefixes) {
+            continue;
+        }
+        if tracked.contains(&local.name) {
+            continue;
+        }
+
+        // Probe whether `@<remote>` exists. If it doesn't, this
+        // is a pre-push WIP bookmark — skip; we have nothing to
+        // track it against. This is the key guardrail that
+        // protects sibling-stack WIP from being touched.
+        match jj::resolve_commit_id(jj, &format!("{}@{}", local.name, opts.remote)) {
+            Ok(_) => {
+                // Remote ref exists — proceed to track.
+            }
+            Err(e) if is_revset_unresolved_error(&e) => {
+                // No remote ref — pre-push WIP. Leave it alone.
+                continue;
+            }
+            Err(e) => {
+                warnings.push(format!("{}: probe failed: {e}", local.name));
+                continue;
+            }
+        }
+
+        match jj::track_bookmark_on_remote(jj, &local.name, &opts.remote) {
+            Ok(()) => {
+                tracked_now += 1;
+                to_override.insert(local.name.clone());
+                actions.push((
+                    (*local).clone(),
+                    CleanupAction::OrphanUntrackedTracked {
+                        remote: opts.remote.clone(),
+                        commit_id: local.commit_id.clone(),
+                    },
+                ));
+            }
+            Err(e) => {
+                warnings.push(format!("{}: track failed: {e}", local.name));
+            }
+        }
+    }
+
+    // Replace any prior `LeftAlone` action for the newly-tracked
+    // bookmarks so the summary table shows the more specific
+    // tracking action instead.
+    if !to_override.is_empty() {
+        actions.retain(|(bm, action)| {
+            !(matches!(action, CleanupAction::LeftAlone) && to_override.contains(&bm.name))
+        });
+    }
+
+    let summary = match (tracked_now, warnings.is_empty()) {
+        (0, true) => "none needed tracking".to_owned(),
+        (n, true) => format!("{n} newly tracked"),
+        (n, false) => format!("{n} newly tracked, {} warning(s)", warnings.len()),
+    };
+    if warnings.is_empty() {
+        step.success(&summary, None);
+    } else {
+        step.warn(&summary, Some(&warnings.join("\n")));
     }
     Ok(())
 }

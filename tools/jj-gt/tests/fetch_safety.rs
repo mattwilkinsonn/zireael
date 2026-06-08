@@ -1367,3 +1367,268 @@ fn rewind_protection_does_not_restore_when_no_local_work_predates_fetch() {
         "no-local-work bookmark must not be auto-restored; got {restored_action:?}",
     );
 }
+
+#[test]
+fn orphan_untracked_phase_tracks_local_bookmark_with_matching_remote_ref() {
+    // The shape this phase catches in the wild (PR #74 → SEA-732
+    // follow-up): an agent created bookmark `X` via
+    // `jj bookmark create X -r @` + `jj git push --bookmark X`,
+    // never ran `jj bookmark track X@origin`. Without the
+    // tracking link, jj's standard "remote ref deleted →
+    // propagate to local" path never fires when the PR merges
+    // and origin deletes the ref. The result is a dangling
+    // local bookmark forever.
+    //
+    // The phase's contract: find local bookmarks that have a
+    // matching `@<remote>` ref but no tracking link, and
+    // `jj bookmark track <name>@<remote>` them. After this,
+    // jj's normal propagation handles future merge/delete
+    // cleanup automatically. Surface as `OrphanUntrackedTracked`
+    // action so the user sees the metadata correction.
+    //
+    // Fixture: minimal `main → orphan` workspace + bare remote.
+    // `orphan` is pushed to origin via plain `git push` so the
+    // remote ref exists, but we deliberately skip
+    // `jj bookmark track orphan@origin` — that's the bug-shape
+    // ingredient.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(cwd, &["describe", "-m", "root"]);
+    jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
+    jj(cwd, &["new", "-m", "orphan content"]);
+    jj(cwd, &["bookmark", "create", "orphan", "-r", "@"]);
+    jj(cwd, &["git", "export"]);
+
+    let remote_path = cwd.join("remote.git");
+    let bare = std::process::Command::new("git")
+        .args(["init", "--bare", "-q"])
+        .arg(&remote_path)
+        .output()
+        .unwrap();
+    assert!(bare.status.success());
+    let add_remote = std::process::Command::new("git")
+        .args(["remote", "add", "origin"])
+        .arg(format!("file://{}", remote_path.display()))
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(add_remote.status.success());
+
+    // Push BOTH main and orphan via plain git. Then `jj git
+    // import` so jj's view sees the remote refs, but DON'T
+    // track orphan explicitly — that's the bug-shape ingredient.
+    // `main` will be tracked separately so we can verify the
+    // phase skips the already-tracked case.
+    for bookmark in ["main", "orphan"] {
+        let push = std::process::Command::new("git")
+            .args(["push", "origin", bookmark])
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            push.status.success(),
+            "git push {bookmark} failed: {}",
+            String::from_utf8_lossy(&push.stderr)
+        );
+    }
+    jj(cwd, &["git", "import"]);
+
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+    jj_gt::jj::track_bookmark_on_remote(&jj_cli, "main", "origin").unwrap();
+
+    // Sanity: orphan is locally present, has an @origin ref,
+    // but isn't yet tracked.
+    let tracked_pre = jj_gt::jj::list_tracked_bookmarks_on_remote(&jj_cli, "origin").unwrap();
+    assert!(
+        !tracked_pre.contains("orphan"),
+        "fixture should leave `orphan` untracked; got tracked={tracked_pre:?}",
+    );
+
+    // Run the phase.
+    let opts = jj_gt::cleanup::FetchOpts {
+        remote: "origin".into(),
+        trunk: "main".into(),
+        ..jj_gt::cleanup::FetchOpts::default()
+    };
+    let pre_all = jj_gt::jj::list_local_bookmarks(&jj_cli).unwrap();
+    let (gtmq_pre, normal_pre): (Vec<_>, Vec<_>) = pre_all
+        .into_iter()
+        .partition(|b| b.name.starts_with("gtmq_"));
+    let pre = jj_gt::cleanup::snapshot_pre_fetch_with_prs(
+        &jj_cli,
+        &opts,
+        gtmq_pre,
+        normal_pre,
+        Vec::new(),
+    )
+    .unwrap();
+
+    let mut actions: Vec<(jj_gt::jj::LocalBookmark, jj_gt::cleanup::CleanupAction)> = Vec::new();
+    jj_gt::cleanup::orphan_untracked_phase(
+        &jj_cli,
+        &pre,
+        &opts,
+        jj_gt::ui::Verbosity::Quiet,
+        &mut actions,
+    )
+    .unwrap();
+
+    // The phase must have emitted an `OrphanUntrackedTracked`
+    // action for orphan.
+    let orphan_action = actions
+        .iter()
+        .find(|(b, _)| b.name == "orphan")
+        .map(|(_, a)| a.clone())
+        .expect("phase should emit an action for the orphan bookmark");
+    match orphan_action {
+        jj_gt::cleanup::CleanupAction::OrphanUntrackedTracked { remote, .. } => {
+            assert_eq!(remote, "origin");
+        }
+        other => panic!("expected OrphanUntrackedTracked; got {other:?}"),
+    }
+
+    // And the bookmark must now be tracked.
+    let tracked_post = jj_gt::jj::list_tracked_bookmarks_on_remote(&jj_cli, "origin").unwrap();
+    assert!(
+        tracked_post.contains("orphan"),
+        "orphan bookmark should be tracked post-phase; got tracked={tracked_post:?}",
+    );
+}
+
+#[test]
+fn orphan_untracked_phase_skips_pre_push_wip_bookmark() {
+    // The safety guardrail: a local-only WIP bookmark that
+    // hasn't been pushed yet has no `@<remote>` ref. The phase
+    // MUST skip it — there's nothing to track against, and
+    // attempting to track would either error or do nothing.
+    //
+    // This is the case the earlier "forget" design got burned
+    // on: it auto-deleted a sibling-stack pre-push bookmark
+    // because the orphan-vs-WIP shapes both matched. The new
+    // "track-only-when-remote-ref-exists" rule cleanly
+    // distinguishes them.
+    //
+    // We deliberately set up an EMPTY `origin` remote here so
+    // `jj::list_tracked_bookmarks_on_remote("origin")` succeeds
+    // with an empty set — without that, the phase's prologue
+    // would early-bail on the missing-remote error and the
+    // per-bookmark `@origin` probe (the actual guard we're
+    // pinning) would never run.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    let bare_remote = tempfile::tempdir().unwrap();
+    // Initialize a bare git repo as the `origin` remote so jj
+    // can resolve it. No bookmarks are pushed; we want
+    // `list_tracked_bookmarks_on_remote("origin")` to succeed
+    // with an empty set, exercising the per-bookmark probe.
+    std::process::Command::new("git")
+        .args(["init", "--bare"])
+        .arg(bare_remote.path())
+        .output()
+        .expect("git init --bare must succeed");
+    jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(
+        cwd,
+        &[
+            "git",
+            "remote",
+            "add",
+            "origin",
+            bare_remote.path().to_str().unwrap(),
+        ],
+    );
+    jj(cwd, &["describe", "-m", "root"]);
+    jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
+    // Create `wip` purely locally — never pushed.
+    jj(cwd, &["new", "-m", "wip content"]);
+    jj(cwd, &["bookmark", "create", "wip", "-r", "@"]);
+    jj(cwd, &["git", "export"]);
+
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+
+    // Sanity check: the remote exists and is reachable (so the
+    // phase's prologue doesn't early-bail). Whether `main` shows
+    // up as tracked already (jj's colocated semantics) doesn't
+    // matter — what we need is for `wip` to NOT be in the
+    // tracked set so the per-bookmark probe runs.
+    let pre_tracked = jj_gt::jj::list_tracked_bookmarks_on_remote(&jj_cli, "origin").unwrap();
+    assert!(
+        !pre_tracked.contains("wip"),
+        "fixture intent: `wip` must not be tracked yet so the phase reaches the per-bookmark probe; got: {pre_tracked:?}",
+    );
+
+    // Run the phase. With no remote bookmarks at all, every
+    // local bookmark hits the per-bookmark `@origin` probe;
+    // `wip` resolves as unresolved-revset and gets skipped.
+    let opts = jj_gt::cleanup::FetchOpts {
+        remote: "origin".into(),
+        trunk: "main".into(),
+        ..jj_gt::cleanup::FetchOpts::default()
+    };
+    let pre_all = jj_gt::jj::list_local_bookmarks(&jj_cli).unwrap();
+    let (gtmq_pre, normal_pre): (Vec<_>, Vec<_>) = pre_all
+        .into_iter()
+        .partition(|b| b.name.starts_with("gtmq_"));
+    let pre = jj_gt::cleanup::snapshot_pre_fetch_with_prs(
+        &jj_cli,
+        &opts,
+        gtmq_pre,
+        normal_pre,
+        Vec::new(),
+    )
+    .unwrap();
+
+    let mut actions: Vec<(jj_gt::jj::LocalBookmark, jj_gt::cleanup::CleanupAction)> = Vec::new();
+    jj_gt::cleanup::orphan_untracked_phase(
+        &jj_cli,
+        &pre,
+        &opts,
+        jj_gt::ui::Verbosity::Quiet,
+        &mut actions,
+    )
+    .unwrap();
+
+    // No action should have been emitted for `wip` — the
+    // per-bookmark `@origin` probe got an unresolved-revset
+    // error and the phase bailed on the WIP bookmark.
+    let wip_action = actions.iter().find(|(b, _)| b.name == "wip");
+    assert!(
+        wip_action.is_none(),
+        "pre-push WIP bookmark must NOT be touched; got {wip_action:?}",
+    );
+
+    // And the bookmark must still be present locally.
+    let post_bookmarks = jj_capture(
+        cwd,
+        &[
+            "bookmark",
+            "list",
+            "-T",
+            r#"if(self.present() && self.normal_target() && !remote, name ++ "\n", "")"#,
+            "--ignore-working-copy",
+        ],
+    );
+    assert!(
+        post_bookmarks.contains("wip"),
+        "pre-push WIP bookmark must survive the phase; got: {post_bookmarks:?}",
+    );
+}
