@@ -84,18 +84,21 @@ pub enum CleanupAction {
     /// linear. The previous parent name is preserved for the user
     /// to see why the rebase happened.
     Rebased { onto: String, prev_parent: String },
-    /// Parent was deleted, but `gt sync` / the import step had
-    /// already moved this bookmark past the deleted parent before
-    /// orphan_rebase_phase ran (typically: parent's PR merged
-    /// while Graphite's pre-merge rebase pushed this bookmark
-    /// forward onto the new tip of trunk). No rebase was needed.
-    /// Emitted instead of `Rebased` so the action log distinguishes
-    /// "we rebased it" from "we noticed it was already where it
-    /// should be." Also acts as a guard rail against the
-    /// `parent_commit..bookmark` revset accidentally sweeping in
-    /// immutable trunk commits when the deleted parent's commit
-    /// is no longer on trunk.
-    OrphanRebaseNoOpAlreadyOnTrunk { prev_parent: String },
+    /// Parent was deleted, but by the time `orphan_rebase_phase`
+    /// ran the live bookmark was no longer a descendant of the
+    /// deleted parent's commit — the most common cause is
+    /// Graphite's pre-merge rebase + the import step pulling
+    /// the bookmark forward onto a new trunk tip, but any
+    /// mutation that moves the bookmark off the deleted
+    /// parent's history (manual `jj bookmark set`, an out-of-
+    /// band `gt move`, …) routes here too. Emitted instead of
+    /// `Rebased` so the action log distinguishes "we rebased
+    /// it" from "we noticed it was already where it should be."
+    /// Also acts as a guard rail against the
+    /// `parent_commit..bookmark` revset accidentally sweeping
+    /// in immutable trunk commits when the deleted parent's
+    /// commit is no longer reachable from the bookmark.
+    OrphanRebaseNoOpAlreadyAdvancedPastParent { prev_parent: String },
     /// Same trigger as `Rebased`, but the rebase produced
     /// conflicts. We rolled it back via `jj op restore` so the
     /// user's working state isn't littered with conflict markers
@@ -1810,7 +1813,7 @@ pub fn orphan_rebase_phase(
                 Ok(false) => {
                     actions.push((
                         local,
-                        CleanupAction::OrphanRebaseNoOpAlreadyOnTrunk { prev_parent },
+                        CleanupAction::OrphanRebaseNoOpAlreadyAdvancedPastParent { prev_parent },
                     ));
                     continue;
                 }

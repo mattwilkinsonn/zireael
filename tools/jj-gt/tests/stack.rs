@@ -1809,7 +1809,7 @@ fn orphan_rebase_phase_emits_no_op_when_bookmark_already_advanced_past_deleted_p
     //
     // The fix: late-check via `is_ancestor(OLD-parent, child)`.
     // When false, skip the rebase entirely and emit
-    // `OrphanRebaseNoOpAlreadyOnTrunk` so the user sees that
+    // `OrphanRebaseNoOpAlreadyAdvancedPastParent` so the user sees that
     // the cleanup noticed the situation and chose not to act.
     if !jj_available() {
         eprintln!("skipping: jj not on PATH");
@@ -1898,7 +1898,7 @@ fn orphan_rebase_phase_emits_no_op_when_bookmark_already_advanced_past_deleted_p
     //
     // The key shape: `child` is NOT a descendant of
     // `old_parent_commit` anymore. The is_ancestor check should
-    // return false → emit OrphanRebaseNoOpAlreadyOnTrunk.
+    // return false → emit OrphanRebaseNoOpAlreadyAdvancedPastParent.
 
     // Move main to a new commit (simulating PR #71's merge +
     // any commits pushed to main while child was in review).
@@ -1968,9 +1968,9 @@ fn orphan_rebase_phase_emits_no_op_when_bookmark_already_advanced_past_deleted_p
     assert!(
         matches!(
             child_action,
-            jj_gt::cleanup::CleanupAction::OrphanRebaseNoOpAlreadyOnTrunk { .. }
+            jj_gt::cleanup::CleanupAction::OrphanRebaseNoOpAlreadyAdvancedPastParent { .. }
         ),
-        "expected OrphanRebaseNoOpAlreadyOnTrunk; got {child_action:?}",
+        "expected OrphanRebaseNoOpAlreadyAdvancedPastParent; got {child_action:?}",
     );
 
     // And the bookmark should still be on its rebased position
