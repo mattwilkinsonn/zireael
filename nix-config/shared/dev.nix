@@ -55,6 +55,18 @@
     # not yet automated via op-cli because gt auth is a one-time
     # action and the token is durable.
     graphite-cli
+    # Buildkite CLI (`bk`) — for triggering builds, viewing
+    # logs, and downloading artifacts from the terminal.
+    # Consume Buildkite via the GitHub App + per-pipeline
+    # orchestrator YAML (`.buildkite/pipelines/` in seal/), not
+    # self-hosted agents — so the agent binary is NOT included
+    # here. Auth is one-time per host: `bk configure` walks
+    # through an OAuth flow (token from
+    # https://buildkite.com/user/api-access-tokens; scopes
+    # `read_builds`, `read_pipelines`, `read_artifacts` cover
+    # the read-only inspection workflow; add `write_builds`
+    # only if you'll trigger builds locally).
+    buildkite-cli
     # Nix / shell / toml linters — invoked by the hk pre-push hook
     # (~/hk.pkl). Cheap to keep on dev boxes for one-off CLI use too.
     deadnix # unused let bindings / function args in Nix
