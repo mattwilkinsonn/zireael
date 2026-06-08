@@ -1157,3 +1157,154 @@ fn orphan_rebase_phase_defers_via_op_restore_on_conflict() {
         "post-phase: no conflicts should remain anywhere",
     );
 }
+
+#[test]
+fn orphan_rebase_phase_emits_bookmark_conflicted_when_target_has_divergent_heads() {
+    // Issue #68: when the candidate bookmark itself is in
+    // conflict (two op-log lineages disagree on the target
+    // commit), the rebase invocation fails with "Name `<bm>` is
+    // conflicted" — not a content conflict. The phase should
+    // detect the divergence up front and emit
+    // `BookmarkConflicted` instead of attempting a doomed rebase
+    // and surfacing a misleading "produced conflicts" message.
+    //
+    // Fixture: main → bottom → upper, then simulate bottom's
+    // deletion (orphan trigger) AND give `upper` a divergent
+    // target by setting it concurrently to two distinct commits
+    // via `--at-op`. Run the phase; expect a
+    // `BookmarkConflicted { prev_parent: "bottom" }` action.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(cwd, &["describe", "-m", "root"]);
+    jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
+    jj(cwd, &["new", "-m", "bottom"]);
+    jj(cwd, &["bookmark", "create", "bottom", "-r", "@"]);
+    jj(cwd, &["new", "-m", "upper"]);
+    jj(cwd, &["bookmark", "create", "upper", "-r", "@"]);
+    jj(cwd, &["git", "export"]);
+
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+
+    // Snapshot pre-fetch state so the orphan-rebase phase sees
+    // upper → bottom as the relevant edge.
+    let opts = jj_gt::cleanup::FetchOpts {
+        remote: "origin".into(),
+        trunk: "main".into(),
+        no_backfill: true,
+        no_rebase: false,
+        no_gtmq_prune: true,
+        ..jj_gt::cleanup::FetchOpts::default()
+    };
+    let pre_all = jj_gt::jj::list_local_bookmarks(&jj_cli).unwrap();
+    let (gtmq_pre, normal_pre): (Vec<_>, Vec<_>) = pre_all
+        .into_iter()
+        .partition(|b| b.name.starts_with("gtmq_"));
+    let pre = jj_gt::cleanup::snapshot_pre_fetch_with_prs(
+        &jj_cli,
+        &opts,
+        gtmq_pre,
+        normal_pre,
+        Vec::new(),
+    )
+    .unwrap();
+
+    // Simulate the orphan trigger: bottom's remote ref was
+    // deleted upstream and fetch propagated the deletion.
+    jj(cwd, &["bookmark", "delete", "bottom"]);
+
+    // Make `upper` conflicted: race two `jj bookmark set` calls
+    // via --at-op on the same parent op so jj's auto-merge
+    // produces a divergent target. Both moves must change the
+    // target — pointing at the current location is a no-op and
+    // won't create a divergent op-log branch.
+    jj(cwd, &["new", "main", "-m", "alt-upper"]);
+    let alt_upper_change = jj_capture(cwd, &["log", "-r", "@", "--no-graph", "-T", "change_id"])
+        .trim()
+        .to_owned();
+    let main_change = jj_capture(cwd, &["log", "-r", "main", "--no-graph", "-T", "change_id"])
+        .trim()
+        .to_owned();
+
+    let parent_op = jj_capture(
+        cwd,
+        &["op", "log", "--no-graph", "-T", "id", "--limit", "1"],
+    )
+    .trim()
+    .to_owned();
+    // Branch 1: point upper at main.
+    jj(
+        cwd,
+        &[
+            "--at-op",
+            &parent_op,
+            "bookmark",
+            "set",
+            "upper",
+            "-r",
+            &main_change,
+            "--allow-backwards",
+        ],
+    );
+    // Branch 2: point upper at alt-upper (concurrent with branch 1
+    // — same --at-op parent).
+    jj(
+        cwd,
+        &[
+            "--at-op",
+            &parent_op,
+            "bookmark",
+            "set",
+            "upper",
+            "-r",
+            &alt_upper_change,
+            "--allow-backwards",
+        ],
+    );
+    // Force the op-log merge so the conflict is materialized.
+    jj(cwd, &["status"]);
+
+    // Sanity: confirm jj sees `upper` as conflicted.
+    let conflicted_now = jj_gt::jj::list_conflicted_bookmarks(&jj_cli).unwrap();
+    assert!(
+        conflicted_now.contains("upper"),
+        "fixture failed to produce a conflicted `upper`: {conflicted_now:?}",
+    );
+
+    // Run the phase. The conflict-detect arm should fire.
+    let mut actions: Vec<(jj_gt::jj::LocalBookmark, jj_gt::cleanup::CleanupAction)> = Vec::new();
+    jj_gt::cleanup::orphan_rebase_phase(&jj_cli, &pre, &opts, &mut actions).unwrap();
+
+    let upper_action = actions
+        .iter()
+        .find(|(b, _)| b.name == "upper")
+        .map(|(_, a)| a.clone())
+        .expect("phase should emit an action for upper");
+    match upper_action {
+        jj_gt::cleanup::CleanupAction::BookmarkConflicted { prev_parent } => {
+            assert_eq!(
+                prev_parent, "bottom",
+                "BookmarkConflicted should preserve the orphan trigger parent",
+            );
+        }
+        other => panic!("expected BookmarkConflicted; got {other:?}"),
+    }
+
+    // The phase must NOT have left conflict markers in the
+    // workspace — short-circuit means no rebase invocation,
+    // which means no `jj resolve` to clean up.
+    assert_eq!(
+        jj_gt::jj::count_conflicts_in(&jj_cli, "all()").unwrap(),
+        0,
+        "BookmarkConflicted path must not leave content conflicts behind",
+    );
+}

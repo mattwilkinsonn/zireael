@@ -201,10 +201,69 @@ fn dispatch(cli: Cli) -> Result<ExitCode, JjGtError> {
 /// Skipped when `JJ_GT_SKIP_UPDATE_STALE=1` is set — escape hatch
 /// for the rare debug case where you specifically want jj's
 /// staleness error to fire.
-pub(crate) fn maybe_catch_up_workspace(
+///
+/// Skipped when `dry_run` is true. `jj workspace update-stale`
+/// is a mutation (it moves `@` from the stale snapshot to the
+/// new one), and dry-run callers (`jj-gt submit --dry-run`,
+/// `jj-gt fetch --dry-run`, `jj-gt restack --dry-run`) promise
+/// not to mutate state. The trade-off: a dry-run run on a stale
+/// workspace will hit jj's "working copy is stale" error from
+/// the first subsequent `jj` invocation — but that's the
+/// correct surface for "your workspace needs a real run to
+/// reconcile," and the alternative (silently mutating during
+/// dry-run) breaks the dry-run contract more deeply than the
+/// error message is worth.
+/// What [`maybe_catch_up_workspace`] did on a given call. Returned
+/// so callers (and tests) can tell whether the helper actually
+/// ran `jj workspace update-stale` or skipped it for one of the
+/// documented reasons.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatchUpOutcome {
+    /// `dry_run` was true → no jj invocation happened. Skipped
+    /// to preserve the dry-run contract.
+    SkippedDryRun,
+    /// `JJ_GT_SKIP_UPDATE_STALE=1` was set → no jj invocation
+    /// happened. Skipped to preserve the debug escape hatch.
+    SkippedEnvVar,
+    /// `jj workspace update-stale` ran and reported the
+    /// workspace was already current.
+    AlreadyCurrent,
+    /// `jj workspace update-stale` ran and `@` moved from
+    /// `from` to `to`. Sibling workspace advanced the op log.
+    Updated {
+        from_change_id: String,
+        to_change_id: String,
+    },
+    /// `jj workspace update-stale` ran but the before/after
+    /// probe couldn't read `@`. We can't verify whether
+    /// anything moved.
+    CouldNotVerify,
+    /// `jj workspace update-stale` errored. Logged as a warn
+    /// step; the caller treats this as non-fatal.
+    UpdateStaleFailed { message: String },
+}
+
+pub fn maybe_catch_up_workspace(
     jj: &JjCli,
     verbosity: ui::Verbosity,
-) -> Result<(), JjGtError> {
+    dry_run: bool,
+) -> Result<CatchUpOutcome, JjGtError> {
+    // Honor the dry-run contract first. The update-stale call
+    // would otherwise advance `@` from one change to another,
+    // which is a mutation and dry-run callers explicitly promise
+    // not to make. Surface a short skip line so the user sees
+    // we deliberately bypassed catch-up.
+    if dry_run {
+        ui::Step::start(
+            "Catching up workspace (jj workspace update-stale)",
+            verbosity,
+        )
+        .skip(
+            "skipped (--dry-run mutates nothing; run without --dry-run if `@` is stale)",
+            None,
+        );
+        return Ok(CatchUpOutcome::SkippedDryRun);
+    }
     // Honor the escape hatch BEFORE rendering the step. Without
     // this early-return the user gets a "ran update-stale →
     // already current" line in the per-step log even though we
@@ -213,7 +272,7 @@ pub(crate) fn maybe_catch_up_workspace(
     // check inside `jj::ensure_workspace_current` is kept as a
     // defense-in-depth for direct callers of the helper.
     if std::env::var("JJ_GT_SKIP_UPDATE_STALE").as_deref() == Ok("1") {
-        return Ok(());
+        return Ok(CatchUpOutcome::SkippedEnvVar);
     }
     let step = ui::Step::start(
         "Catching up workspace (jj workspace update-stale)",
@@ -222,7 +281,7 @@ pub(crate) fn maybe_catch_up_workspace(
     match jj::ensure_workspace_current(jj) {
         Ok(jj::UpdateStaleOutcome::NotStale) => {
             step.skip("already current", None);
-            Ok(())
+            Ok(CatchUpOutcome::AlreadyCurrent)
         }
         Ok(jj::UpdateStaleOutcome::Updated {
             from_change_id,
@@ -239,7 +298,10 @@ pub(crate) fn maybe_catch_up_workspace(
                 ),
                 None,
             );
-            Ok(())
+            Ok(CatchUpOutcome::Updated {
+                from_change_id,
+                to_change_id,
+            })
         }
         Ok(jj::UpdateStaleOutcome::CouldNotVerify) => {
             // `update-stale` succeeded but the before/after
@@ -253,15 +315,16 @@ pub(crate) fn maybe_catch_up_workspace(
                 "update-stale ran but couldn't verify @ moved (probe failed)",
                 None,
             );
-            Ok(())
+            Ok(CatchUpOutcome::CouldNotVerify)
         }
         Err(e) => {
             // Don't hard-error the run when update-stale itself
             // misbehaves — the next jj command will surface a
             // clearer error if the workspace is still actually
             // stale. Log a warning so the user knows we tried.
-            step.warn(&format!("update-stale failed: {e}"), None);
-            Ok(())
+            let message = format!("{e}");
+            step.warn(&format!("update-stale failed: {message}"), None);
+            Ok(CatchUpOutcome::UpdateStaleFailed { message })
         }
     }
 }
@@ -286,7 +349,7 @@ fn submit_cmd(
     // Step 0a: catch up the workspace before any subprocess that
     // would otherwise fail with "working copy is stale" — see
     // `maybe_catch_up_workspace` for the rationale.
-    maybe_catch_up_workspace(jj, verbosity)?;
+    maybe_catch_up_workspace(jj, verbosity, submit.dry_run)?;
 
     // Resolve bookmark selection + derive parents up front (these
     // are fast, no subprocess noise to report). Errors here abort
@@ -740,14 +803,14 @@ fn fetch_cmd(
     // Step 0a: catch up the workspace before any subprocess that
     // would otherwise fail with "working copy is stale" — see
     // `maybe_catch_up_workspace` for the rationale.
-    maybe_catch_up_workspace(jj, verbosity)?;
+    maybe_catch_up_workspace(jj, verbosity, dry_run)?;
 
     let actions = cleanup::run_fetch(jj, &workspace_root, &opts, verbosity)?;
 
     if !actions.is_empty() {
         ui::section("Per-bookmark actions");
         for (bookmark, action) in &actions {
-            let (status, msg) = action_to_row(action);
+            let (status, msg) = action_to_row(&bookmark.name, action);
             ui::action_row(&bookmark.name, status, &msg);
         }
     }
@@ -771,7 +834,7 @@ fn restack_cmd(
     // Step 0a: catch up the workspace before any subprocess that
     // would otherwise fail with "working copy is stale" — see
     // `maybe_catch_up_workspace` for the rationale.
-    maybe_catch_up_workspace(jj, verbosity)?;
+    maybe_catch_up_workspace(jj, verbosity, dry_run)?;
 
     // The actual rebase destination is `<trunk>@<remote>` so we
     // catch any post-fetch advances. jj's `<name>@<remote>` syntax
@@ -841,7 +904,10 @@ fn restack_cmd(
 /// what the old `format_action` produced, just split into a
 /// glyph-color signal + a text payload so the renderer can paint
 /// each row consistently.
-fn action_to_row(action: &cleanup::CleanupAction) -> (ui::ActionStatus, String) {
+fn action_to_row(
+    bookmark_name: &str,
+    action: &cleanup::CleanupAction,
+) -> (ui::ActionStatus, String) {
     use cleanup::CleanupAction;
     match action {
         CleanupAction::GtSyncDeleted => (ui::ActionStatus::Ok, "deleted by gt sync".into()),
@@ -906,6 +972,12 @@ fn action_to_row(action: &cleanup::CleanupAction) -> (ui::ActionStatus, String) 
             ui::ActionStatus::Error,
             format!(
                 "rebase onto {onto} produced conflicts (parent `{prev_parent}` was removed earlier in fetch/sync cleanup) — {message}; run `jj resolve` to fix"
+            ),
+        ),
+        CleanupAction::BookmarkConflicted { prev_parent } => (
+            ui::ActionStatus::Error,
+            format!(
+                "bookmark target is conflicted (multiple lineages disagree) — would have been orphan-rebased because parent `{prev_parent}` was removed; resolve with `jj bookmark set {bookmark_name} -r <commit>` and re-run"
             ),
         ),
         CleanupAction::RestoredAfterRewind { pre, post } => (

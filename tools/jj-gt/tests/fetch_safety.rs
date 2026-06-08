@@ -24,6 +24,50 @@ fn env_lock() -> &'static Mutex<()> {
     ENV_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// RAII guard that restores a process-wide env var on drop. Pair
+/// with `env_lock()` so the cleanup runs even if the body of the
+/// test panics — leaking `JJ_GT_SKIP_UPDATE_STALE=1` (or any
+/// other jj-gt env knob) into a subsequent test in the same
+/// process would silently flip its behavior. The guard captures
+/// whatever value the var held before `set()` ran and restores
+/// it on drop (or removes the var if it wasn't set), so a test
+/// run that already had the var set in its outer env doesn't
+/// lose that value across the first guarded test.
+struct EnvVarGuard {
+    name: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    /// Capture the prior value, set `name=value`, and arrange for
+    /// the prior value to be restored (or `remove_var(name)` if
+    /// the var was unset) on drop.
+    /// SAFETY: caller must hold `env_lock()` for the lifetime of
+    /// the guard so no other thread observes the mutation.
+    unsafe fn set(name: &'static str, value: &str) -> Self {
+        let previous = std::env::var_os(name);
+        // SAFETY: documented at the call site — the env_lock guard
+        // serializes us against every other env-touching test.
+        unsafe {
+            std::env::set_var(name, value);
+        }
+        Self { name, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: same lock invariant as `set` — the caller holds
+        // `env_lock()` and therefore so do we.
+        unsafe {
+            match self.previous.take() {
+                Some(value) => std::env::set_var(self.name, value),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
+}
+
 fn jj_available() -> bool {
     Command::new("jj")
         .arg("--version")
@@ -699,24 +743,64 @@ fn ensure_workspace_current_respects_skip_env_var() {
     // the lock makes the operation safe from a data-race
     // standpoint — no other thread in this process is allowed to
     // read or write the env while we hold the guard.
-    let _guard = env_lock().lock().unwrap();
-    // SAFETY: held the process-wide env lock above; the only
-    // observer of this mutation is the synchronous read inside
-    // `ensure_workspace_current` two lines below. We always
-    // remove the var before releasing the guard.
-    unsafe {
-        std::env::set_var("JJ_GT_SKIP_UPDATE_STALE", "1");
-    }
+    let _lock = env_lock().lock().unwrap();
+    // SAFETY: held the process-wide env lock above. `EnvVarGuard`
+    // captures whatever value the var held before this test (so
+    // an outer-env setting survives the test run) and restores
+    // it on drop, even if `ensure_workspace_current` panics —
+    // without that restore-on-drop, a leaked
+    // `JJ_GT_SKIP_UPDATE_STALE=1` would silently flip the next
+    // test that consults the same knob.
+    let _env = unsafe { EnvVarGuard::set("JJ_GT_SKIP_UPDATE_STALE", "1") };
     let outcome = jj_gt::jj::ensure_workspace_current(&jj_cli);
-    // SAFETY: see comment above the matching set_var.
-    unsafe {
-        std::env::remove_var("JJ_GT_SKIP_UPDATE_STALE");
-    }
     assert_eq!(outcome.unwrap(), jj_gt::jj::UpdateStaleOutcome::NotStale);
 }
 
 #[test]
-fn ensure_workspace_current_reports_update_after_sibling_workspace_advances() {
+fn env_var_guard_restores_prior_value_on_drop() {
+    // Regression for the PR #72 review: an earlier version of
+    // EnvVarGuard always called `remove_var` on drop, so a test
+    // run that started with `JJ_GT_SKIP_UPDATE_STALE=outer-value`
+    // would lose that outer value the first time a guarded test
+    // ran. Pin both the "had prior value → restore" and the
+    // "no prior value → clear" branches.
+    let _lock = env_lock().lock().unwrap();
+    const NAME: &str = "JJ_GT_ENV_GUARD_TEST";
+
+    // Branch 1: prior value present.
+    // SAFETY: we hold env_lock() for the rest of the test.
+    unsafe {
+        std::env::set_var(NAME, "outer-value");
+    }
+    {
+        // SAFETY: same lock held; the guard captures + restores.
+        let _g = unsafe { EnvVarGuard::set(NAME, "inner-value") };
+        assert_eq!(std::env::var(NAME).unwrap(), "inner-value");
+    }
+    assert_eq!(
+        std::env::var(NAME).unwrap(),
+        "outer-value",
+        "guard must restore the prior value on drop",
+    );
+
+    // Branch 2: no prior value.
+    // SAFETY: still under env_lock().
+    unsafe {
+        std::env::remove_var(NAME);
+    }
+    {
+        // SAFETY: same lock held.
+        let _g = unsafe { EnvVarGuard::set(NAME, "inner-value") };
+        assert_eq!(std::env::var(NAME).unwrap(), "inner-value");
+    }
+    assert!(
+        std::env::var_os(NAME).is_none(),
+        "guard must clear the var on drop when there was no prior value",
+    );
+}
+
+#[test]
+fn ensure_workspace_current_does_not_error_after_sibling_workspace_advances() {
     // The interesting path: a second workspace sharing the same
     // `.jj/` advances the op log past what this workspace has on
     // disk. The next call to `ensure_workspace_current` from the
@@ -728,6 +812,15 @@ fn ensure_workspace_current_reports_update_after_sibling_workspace_advances() {
     // routinely race the op log. Auto-running update-stale at the
     // top of every jj-gt command absorbs the resulting
     // "working copy is stale" error.
+    //
+    // The contract this test pins is "doesn't error" — jj's
+    // stale-detection has version-dependent edges (the
+    // abandoned-change-with-no-descendants case doesn't fire on
+    // every jj version), so `NotStale` and `CouldNotVerify` are
+    // both acceptable terminal states. The original name claimed
+    // the test pinned the `Updated` variant; it never did. The
+    // separate `not_stale_on_clean_workspace` test covers the
+    // negative case deterministically.
     if !jj_available() {
         eprintln!("skipping: jj not on PATH");
         return;
@@ -787,8 +880,9 @@ fn ensure_workspace_current_reports_update_after_sibling_workspace_advances() {
 
     // Sanity: secondary's op-log advance should have made
     // primary's @ recorded change-id no longer the canonical
-    // working-copy for primary. `ensure_workspace_current` should
-    // surface that as Updated{from, to}.
+    // working-copy for primary. `ensure_workspace_current` MUST
+    // succeed (not return Err) regardless of which terminal
+    // variant it picks.
     //
     // Hold `env_lock()` because the skip-env-var sibling test
     // could otherwise race in and make us return NotStale via the
@@ -806,16 +900,221 @@ fn ensure_workspace_current_reports_update_after_sibling_workspace_advances() {
             );
         }
         jj_gt::jj::UpdateStaleOutcome::NotStale | jj_gt::jj::UpdateStaleOutcome::CouldNotVerify => {
-            // jj's stale detection has some version-dependent
-            // edges (e.g. it doesn't always fire when the
-            // abandoned change had no descendants). If the
-            // fixture didn't trigger staleness on this jj
-            // version, that's fine — the contract being pinned
-            // is "doesn't error", not "always fires". The
-            // single-workspace `not_stale` test covers the
-            // negative case independently. `CouldNotVerify`
-            // similarly indicates the probe was ambiguous, which
-            // is acceptable for the same reason.
+            // Either is acceptable — see test docstring.
         }
     }
+}
+
+#[test]
+fn list_conflicted_bookmarks_returns_empty_on_clean_workspace() {
+    // The cheap path: no bookmark divergence → empty set. Pins
+    // the contract that the helper doesn't false-positive on a
+    // normal workspace (the case 99% of jj-gt invocations hit).
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_workspace();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    let conflicted = jj_gt::jj::list_conflicted_bookmarks(&jj_cli).unwrap();
+    assert!(
+        conflicted.is_empty(),
+        "clean workspace should report no conflicted bookmarks, got {conflicted:?}"
+    );
+}
+
+#[test]
+fn list_conflicted_bookmarks_detects_divergent_target() {
+    // Issue #68 contract: when the same bookmark name has been
+    // set to different commits from concurrent op-log lineages,
+    // jj's `bookmark list` template `self.conflict()` returns
+    // true and `list_conflicted_bookmarks` includes the name.
+    //
+    // Fixture strategy: create two distinct commits, then race
+    // two `jj bookmark set <name>` invocations via `--at-op`
+    // pointing at the same parent op. Each invocation produces
+    // a divergent op-log branch; jj merges them on the next
+    // command and the bookmark target ends up conflicted.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_workspace();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    // Create two distinct commits to race the bookmark across.
+    // `right` branches off `main` (sibling of `left`) so the two
+    // are unrelated revisions, not a chain — that way `racy`
+    // pointing at one vs the other is a real divergence.
+    jj(tmp.path(), &["new", "-m", "left side"]);
+    let left = jj_capture(
+        tmp.path(),
+        &["log", "-r", "@", "--no-graph", "-T", "change_id"],
+    )
+    .trim()
+    .to_owned();
+    jj(tmp.path(), &["new", "@-", "-m", "right side"]);
+    let right = jj_capture(
+        tmp.path(),
+        &["log", "-r", "@", "--no-graph", "-T", "change_id"],
+    )
+    .trim()
+    .to_owned();
+
+    // Snapshot the parent op so the two bookmark-set invocations
+    // both fork from it (creating two divergent op-log
+    // branches).
+    let parent_op = jj_capture(
+        tmp.path(),
+        &["op", "log", "--no-graph", "-T", "id", "--limit", "1"],
+    )
+    .trim()
+    .to_owned();
+
+    // Branch 1: set `racy` to the left commit.
+    jj(
+        tmp.path(),
+        &[
+            "--at-op",
+            &parent_op,
+            "bookmark",
+            "set",
+            "racy",
+            "-r",
+            &left,
+            "--allow-backwards",
+        ],
+    );
+    // Branch 2: set `racy` to the right commit (same parent op
+    // — concurrent with branch 1).
+    jj(
+        tmp.path(),
+        &[
+            "--at-op",
+            &parent_op,
+            "bookmark",
+            "set",
+            "racy",
+            "-r",
+            &right,
+            "--allow-backwards",
+        ],
+    );
+
+    // Force jj to merge the divergent op-log branches by running
+    // any benign command without --at-op.
+    jj(tmp.path(), &["status"]);
+
+    let conflicted = jj_gt::jj::list_conflicted_bookmarks(&jj_cli).unwrap();
+    assert!(
+        conflicted.contains("racy"),
+        "concurrent set should produce a conflicted bookmark; got {conflicted:?}"
+    );
+    // Sanity: `main` (untouched) shouldn't be flagged.
+    assert!(
+        !conflicted.contains("main"),
+        "untouched bookmark must not be reported as conflicted; got {conflicted:?}"
+    );
+}
+
+#[test]
+fn list_conflicted_bookmarks_filters_out_pending_deletion_zombies() {
+    // Regression: jj's bookmark template iterates one entry per
+    // (bookmark, remote) pair, INCLUDING entries where the
+    // remote ref is gone but the deletion hasn't been exported
+    // yet ("zombies"). Those zombies satisfy `self.conflict()`
+    // because the local view of the target diverges from the
+    // (missing) remote view. The `present()` guard in
+    // `list_conflicted_bookmarks` is what keeps them out — pin
+    // it so a future template tweak that drops `present()`
+    // can't silently regress the cleanup pipeline into
+    // misreporting deleted bookmarks as conflicted.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = build_workspace();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    // Create + delete a bookmark without exporting. jj keeps the
+    // tombstone around until the next `jj git export` propagates
+    // the deletion to git refs.
+    jj(tmp.path(), &["bookmark", "create", "zombie", "-r", "@"]);
+    jj(tmp.path(), &["bookmark", "delete", "zombie"]);
+    // Snapshot to flush state. We deliberately DON'T run `jj git
+    // export` — that would clear the zombie.
+
+    let conflicted = jj_gt::jj::list_conflicted_bookmarks(&jj_cli).unwrap();
+    assert!(
+        !conflicted.contains("zombie"),
+        "pending-deletion zombie must not be reported as conflicted; got {conflicted:?}"
+    );
+}
+
+#[test]
+fn maybe_catch_up_workspace_does_not_mutate_when_dry_run() {
+    // Regression for the PR #72 CR review: `jj-gt submit --dry-run`
+    // (and the same flag on fetch / restack / reconcile) promises
+    // not to mutate workspace state. Before this fix,
+    // `maybe_catch_up_workspace` would still call
+    // `jj workspace update-stale` on a stale primary workspace,
+    // advancing `@` to a new change.
+    //
+    // The function returns a `CatchUpOutcome` enum describing
+    // which branch fired. Test contract:
+    //   - dry_run=true → `SkippedDryRun` (no jj invocation at all)
+    //   - dry_run=false on a clean workspace → `AlreadyCurrent`
+    //
+    // jj's stale-detection has version-dependent edges (the
+    // existing
+    // `ensure_workspace_current_does_not_error_after_sibling_workspace_advances`
+    // test documents that) so we can't reliably trigger the
+    // Updated path; we exercise the gate via the enum's
+    // distinguishability instead.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+
+    let tmp = build_workspace();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    // Hold env_lock + clear the skip-env-var so the dry-run gate
+    // is the ONLY thing that can fire the SkippedDryRun outcome.
+    // Without this, a stale `JJ_GT_SKIP_UPDATE_STALE=1` could
+    // route us to `SkippedEnvVar` instead.
+    let _lock = env_lock().lock().unwrap();
+    // SAFETY: env_lock held above.
+    let _env = unsafe { EnvVarGuard::set("JJ_GT_SKIP_UPDATE_STALE", "0") };
+
+    // dry_run=true → must report SkippedDryRun.
+    let outcome_dry = jj_gt::maybe_catch_up_workspace(&jj_cli, jj_gt::ui::Verbosity::Quiet, true)
+        .expect("maybe_catch_up_workspace should not error on dry-run");
+    assert_eq!(
+        outcome_dry,
+        jj_gt::CatchUpOutcome::SkippedDryRun,
+        "dry_run=true must short-circuit to SkippedDryRun",
+    );
+
+    // dry_run=false on a clean workspace → must NOT be
+    // SkippedDryRun (must actually invoke the underlying
+    // ensure_workspace_current). On a clean workspace the
+    // expected terminal is AlreadyCurrent; if jj is in an odd
+    // state CouldNotVerify is also acceptable. The contract
+    // we're pinning is "the gate didn't fire for non-dry-run."
+    let outcome_wet = jj_gt::maybe_catch_up_workspace(&jj_cli, jj_gt::ui::Verbosity::Quiet, false)
+        .expect("maybe_catch_up_workspace should not error on a clean workspace");
+    assert_ne!(
+        outcome_wet,
+        jj_gt::CatchUpOutcome::SkippedDryRun,
+        "dry_run=false must reach the update-stale path (not collapse to SkippedDryRun)",
+    );
+    assert!(
+        matches!(
+            outcome_wet,
+            jj_gt::CatchUpOutcome::AlreadyCurrent | jj_gt::CatchUpOutcome::CouldNotVerify
+        ),
+        "clean workspace + dry_run=false should report AlreadyCurrent (or CouldNotVerify on jj versions where the probe is flaky); got {outcome_wet:?}",
+    );
 }

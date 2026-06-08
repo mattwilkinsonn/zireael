@@ -333,7 +333,7 @@ pub fn run_reconcile_subcommand(
     // Step 0a: catch up the workspace before any subprocess that
     // would otherwise fail with "working copy is stale" — see
     // `crate::maybe_catch_up_workspace` for the rationale.
-    crate::maybe_catch_up_workspace(jj, verbosity)?;
+    crate::maybe_catch_up_workspace(jj, verbosity, dry_run)?;
 
     let opts = ReconcileOpts {
         remote,
