@@ -117,6 +117,65 @@ pub enum CleanupAction {
     /// shape so the message can explain why we *would* have
     /// rebased.
     BookmarkConflicted { prev_parent: String },
+    /// Issue #69 (Shape A): the bookmark's parent was rewritten
+    /// on the remote (e.g. Graphite pre-merge rebase) and the
+    /// local child was re-anchored onto the new parent. `pre`
+    /// and `post` are the parent's pre-fetch / post-fetch commit
+    /// ids so the user sees the move.
+    RebasedAfterParentMoved {
+        parent_bookmark: String,
+        pre_commit: String,
+        post_commit: String,
+    },
+    /// Issue #69 (Shape A), conflict-defer variant: rebasing the
+    /// child onto the new parent commit produced content
+    /// conflicts; we rolled back via `jj op restore` and surface
+    /// the deferred action so the user can resolve via
+    /// `jj-gt restack` or manual rebase. `message` is jj's
+    /// conflict stderr line.
+    RebaseAfterParentMovedDeferred {
+        parent_bookmark: String,
+        pre_commit: String,
+        post_commit: String,
+        message: String,
+    },
+    /// Issue #69 (Shape A), live-conflicts variant: rebasing the
+    /// child onto the new parent produced conflicts AND we
+    /// couldn't roll back (either the pre-rebase op snapshot
+    /// failed or `jj op restore` itself errored). The user's
+    /// workspace now carries conflict markers from a mutation
+    /// they didn't ask for and needs to run `jj resolve`
+    /// directly — `jj-gt restack` won't help here.
+    RebaseAfterParentMovedConflicted {
+        parent_bookmark: String,
+        pre_commit: String,
+        post_commit: String,
+        message: String,
+    },
+    /// Issue #69 (Shape B): the bookmark itself moved sideways
+    /// on the remote and we had local commits on top; we rebased
+    /// the local-only commits onto the new remote tip.
+    RebasedAfterRemoteMoved {
+        bookmark: String,
+        pre_commit: String,
+        post_commit: String,
+    },
+    /// Issue #69 (Shape B), conflict-defer variant.
+    RebaseAfterRemoteMovedDeferred {
+        bookmark: String,
+        pre_commit: String,
+        post_commit: String,
+        message: String,
+    },
+    /// Issue #69 (Shape B), live-conflicts variant: same shape as
+    /// [`Self::RebaseAfterParentMovedConflicted`] but for the
+    /// bookmark-itself-moved-sideways case.
+    RebaseAfterRemoteMovedConflicted {
+        bookmark: String,
+        pre_commit: String,
+        post_commit: String,
+        message: String,
+    },
     /// PR-D / issue #2: gt sync silently moved this bookmark backward
     /// (local was ahead of remote with un-pushed commits). We
     /// restored the bookmark to its pre-pipeline position. `pre` and
@@ -339,7 +398,7 @@ pub fn run_fetch(
         &mut actions,
     )?;
     gtmq_prune_phase(jj, workspace_root, &pre, opts, verbosity, &mut actions)?;
-    orphan_rebase_phase(jj, &pre, opts, &mut actions)?;
+    orphan_rebase_phase(jj, &pre, &post, opts, &mut actions)?;
 
     Ok(actions)
 }
@@ -945,6 +1004,7 @@ fn gtmq_prune_phase(
 pub fn orphan_rebase_phase(
     jj: &JjCli,
     pre: &PreFetchSnapshot,
+    post: &PostFetchSnapshot,
     opts: &FetchOpts,
     actions: &mut Vec<(LocalBookmark, CleanupAction)>,
 ) -> Result<()> {
@@ -974,6 +1034,48 @@ pub fn orphan_rebase_phase(
         .chain(conflicted.iter().cloned())
         .collect();
     let deleted = compute_deleted_set(&pre.normal_names(), &remaining_names);
+
+    // Issue #69 (Shape A): compute the moved-sideways set —
+    // bookmarks present in both pre and post-FETCH snapshots whose
+    // commit_id changed AND whose post commit-id is NOT a
+    // fast-forward of the pre commit-id. A fast-forward isn't a
+    // re-anchor signal (existing ancestry still resolves), but a
+    // divergent move (e.g. Graphite's pre-merge rebase) leaves
+    // any downstream bookmark anchored to a now-orphan commit.
+    //
+    // We compare `pre.normal` against the post-FETCH snapshot
+    // (`post.all`), NOT against `remaining` (which reflects state
+    // AFTER `gt sync`, import, and prune have already mutated
+    // local refs). If we used `remaining`, a later in-pipeline
+    // mutation could mask or fake a remote sideways move and
+    // either surprise-rebase the wrong child or skip a genuine
+    // re-anchor.
+    let workspace_root = jj.cwd();
+    let moved_candidates = compute_moved_set(&pre.normal, &post.all);
+    let mut sideways = std::collections::BTreeMap::<String, (String, String)>::new();
+    for (name, (pre_commit, post_commit)) in &moved_candidates {
+        match jj::is_ancestor(workspace_root, pre_commit, post_commit) {
+            Ok(true) => {
+                // Fast-forward — existing ancestry holds; nothing
+                // for the re-anchor logic to do.
+            }
+            Ok(false) => {
+                // Genuine sideways move.
+                sideways.insert(name.clone(), (pre_commit.clone(), post_commit.clone()));
+            }
+            Err(e) => {
+                // Couldn't classify (typically a bad/transient git
+                // failure or a GC'd SHA). Skip re-anchoring for
+                // this candidate — surprise-rebasing children
+                // off an ambiguous result is worse than failing
+                // to surface a genuine sideways move (the user
+                // can run `jj-gt restack` to catch it).
+                tracing::warn!(
+                    "jj-gt: couldn't classify whether `{name}` moved sideways ({e}); skipping re-anchor detection",
+                );
+            }
+        }
+    }
 
     for sb in &pre.stacked {
         // Issue #68 robustness: check conflict BEFORE
@@ -1145,6 +1247,234 @@ pub fn orphan_rebase_phase(
             }
         }
     }
+
+    // Issue #69 (Shape A): re-anchor children whose parent moved
+    // sideways. We do this in a second pass after the deleted-
+    // parent loop above so an orphan-rebased child doesn't get
+    // double-rebased here. (The deleted-parent path already
+    // rebases onto trunk; if the same bookmark also showed up
+    // here we'd re-rebase, which is at best wasteful and at
+    // worst introduces a fresh conflict.)
+    if !sideways.is_empty() {
+        reanchor_children_of_moved_parents(jj, pre, actions, &sideways, &conflicted)?;
+    }
+
+    Ok(())
+}
+
+/// Issue #69 (Shape A): re-anchor each `StackedBookmark` whose
+/// parent appears in the moved-sideways set. The new rebase
+/// destination is the parent's post-fetch commit; the revset is
+/// the same `(parent_old, sb.name]` shape the orphan-deleted path
+/// uses so multi-commit stacks move as a unit.
+///
+/// Conflict semantics mirror the deleted-parent path: snapshot
+/// the op id, attempt the rebase, op-restore on conflict, emit
+/// the corresponding deferred-vs-applied action.
+fn reanchor_children_of_moved_parents(
+    jj: &JjCli,
+    pre: &PreFetchSnapshot,
+    actions: &mut Vec<(LocalBookmark, CleanupAction)>,
+    sideways: &std::collections::BTreeMap<String, (String, String)>,
+    conflicted: &BTreeSet<String>,
+) -> Result<()> {
+    // Re-read post state since the deleted-parent loop above may
+    // have mutated bookmark positions.
+    let remaining = list_local_bookmarks(jj)?;
+    // `list_local_bookmarks` deliberately filters out conflicted
+    // bookmarks (they have no `normal_target()` commit id — see
+    // `tools/jj-gt/src/jj.rs`). Folding `conflicted` back into
+    // `remaining_names` here keeps a conflicted child from being
+    // silently skipped by the `!remaining_names.contains(&sb.name)`
+    // gate below — without the fold, the downstream
+    // `is_bookmark_conflicted` check (and its
+    // `CleanupAction::BookmarkConflicted` emit) never fires for
+    // sideways-moved targets.
+    let remaining_names: BTreeSet<String> = remaining
+        .iter()
+        .map(|b| b.name.clone())
+        .chain(conflicted.iter().cloned())
+        .collect();
+
+    // Track names we already emitted an action for in *this*
+    // call so we don't double-emit if a bookmark has more than
+    // one parent edge entry (shouldn't happen given the dedup
+    // upstream, but defensive).
+    let mut already_emitted = BTreeSet::<String>::new();
+
+    for sb in &pre.stacked {
+        // Only consider bookmark→bookmark edges; trunk parents
+        // can't move sideways in the same sense.
+        let parent_name = match &sb.parent {
+            crate::stack::BookmarkOrTrunk::Bookmark(p) => p.clone(),
+            crate::stack::BookmarkOrTrunk::Trunk => continue,
+        };
+
+        let Some((pre_parent_commit, post_parent_commit)) = sideways.get(&parent_name) else {
+            continue;
+        };
+
+        // Parent moved sideways on remote AND has since been
+        // deleted post-sync (the narrow race window: Graphite's
+        // pre-merge rebase pushed a new OID, the merged PR's
+        // branch deletion got picked up by the same `gt sync`
+        // run). The orphan-rebase loop above has already
+        // re-anchored this child onto trunk via the
+        // parent-deleted code path; falling through here would
+        // fire a SECOND rebase that moves the child back off
+        // trunk onto the (now abandoned) sideways commit. Bail
+        // — the deleted-parent loop is the right handler for
+        // this case.
+        if !remaining_names.contains(&parent_name) {
+            continue;
+        }
+
+        // Skip if the child bookmark isn't around anymore (a
+        // previous phase deleted it or it never existed in
+        // post-fetch state).
+        if !remaining_names.contains(&sb.name) {
+            continue;
+        }
+
+        // Skip names we already processed (defensive dedup).
+        if already_emitted.contains(&sb.name) {
+            continue;
+        }
+        already_emitted.insert(sb.name.clone());
+
+        let local = remaining
+            .iter()
+            .find(|b| b.name == sb.name)
+            .cloned()
+            // Conflicted bookmarks live in `remaining_names` (via
+            // the chain fold above) but NOT in `remaining` itself
+            // (jj's template filters them out). Synthesize a
+            // placeholder so the BookmarkConflicted action below
+            // still emits — the empty `commit_id` is harmless for
+            // the action printer's conflicted arm.
+            .unwrap_or_else(|| LocalBookmark {
+                name: sb.name.clone(),
+                commit_id: String::new(),
+            });
+
+        // Issue #68: if the candidate bookmark name itself is
+        // conflicted, surface as BookmarkConflicted (same
+        // reasoning as the deleted-parent loop).
+        if is_bookmark_conflicted(&sb.name, conflicted) {
+            actions.push((
+                local,
+                CleanupAction::BookmarkConflicted {
+                    prev_parent: parent_name,
+                },
+            ));
+            continue;
+        }
+
+        // Rebase the (old-parent-commit, sb.name] range onto the
+        // new parent commit. Using the explicit pre-fetch parent
+        // commit as the lower bound — the new commit's history
+        // is divergent, so a name-based revset would either
+        // include unrelated commits or miss commits the user
+        // had on top.
+        let rebase_revset = build_orphan_rebase_revset(pre_parent_commit, &sb.name);
+        let dest = post_parent_commit.clone();
+
+        let pre_rebase_op = match jj::current_op_id(jj) {
+            Ok(id) => Some(id),
+            Err(e) => {
+                tracing::warn!(
+                    "jj-gt: couldn't snapshot op id pre-rebase ({e}); deferred-on-conflict disabled for sideways re-anchor of {}",
+                    sb.name,
+                );
+                None
+            }
+        };
+
+        match jj::rebase(jj, &rebase_revset, &dest) {
+            Ok(jj::RebaseOutcome::Clean) | Ok(jj::RebaseOutcome::NoOp) => {
+                actions.push((
+                    local,
+                    CleanupAction::RebasedAfterParentMoved {
+                        parent_bookmark: parent_name,
+                        pre_commit: pre_parent_commit.clone(),
+                        post_commit: post_parent_commit.clone(),
+                    },
+                ));
+            }
+            Ok(jj::RebaseOutcome::Conflicted { message }) => {
+                if let Some(op_id) = pre_rebase_op.as_deref() {
+                    match jj::op_restore(jj, op_id) {
+                        Ok(()) => {
+                            // Clean rollback — workspace is back
+                            // to pre-rebase state. Surface as a
+                            // deferred action; user can resolve
+                            // via `jj-gt restack`.
+                            actions.push((
+                                local,
+                                CleanupAction::RebaseAfterParentMovedDeferred {
+                                    parent_bookmark: parent_name,
+                                    pre_commit: pre_parent_commit.clone(),
+                                    post_commit: post_parent_commit.clone(),
+                                    message,
+                                },
+                            ));
+                        }
+                        Err(restore_err) => {
+                            // Rollback itself failed — workspace
+                            // now has live conflict markers from
+                            // the rebase we attempted. Surface as
+                            // a live-conflicts action so the user
+                            // runs `jj resolve` directly rather
+                            // than the `jj-gt restack` path the
+                            // Deferred message would suggest.
+                            let combined = format!(
+                                "{message}; op_restore to roll back also failed: {restore_err}"
+                            );
+                            actions.push((
+                                local,
+                                CleanupAction::RebaseAfterParentMovedConflicted {
+                                    parent_bookmark: parent_name,
+                                    pre_commit: pre_parent_commit.clone(),
+                                    post_commit: post_parent_commit.clone(),
+                                    message: combined,
+                                },
+                            ));
+                        }
+                    }
+                } else {
+                    // Pre-rebase op snapshot failed — we couldn't
+                    // even attempt a rollback, so the workspace
+                    // has live conflicts. Same surface as the
+                    // restore-failed branch above.
+                    actions.push((
+                        local,
+                        CleanupAction::RebaseAfterParentMovedConflicted {
+                            parent_bookmark: parent_name,
+                            pre_commit: pre_parent_commit.clone(),
+                            post_commit: post_parent_commit.clone(),
+                            message,
+                        },
+                    ));
+                }
+            }
+            Err(e) => {
+                // Hard rebase failure — jj errored before
+                // mutating anything. No conflicts in the
+                // workspace; surface as Deferred so the user can
+                // retry via `jj-gt restack`.
+                actions.push((
+                    local,
+                    CleanupAction::RebaseAfterParentMovedDeferred {
+                        parent_bookmark: parent_name,
+                        pre_commit: pre_parent_commit.clone(),
+                        post_commit: post_parent_commit.clone(),
+                        message: format!("jj rebase failed: {e}"),
+                    },
+                ));
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1168,6 +1498,42 @@ pub fn compute_deleted_set(
 /// test can pin the contract without needing a jj subprocess.
 pub fn is_bookmark_conflicted(name: &str, conflicted: &BTreeSet<String>) -> bool {
     conflicted.contains(name)
+}
+
+/// Pure pre-vs-post commit-id comparison for the moved-sideways
+/// detector (issue #69). Returns a map from bookmark name to
+/// `(pre_commit, post_commit)` for every bookmark present in
+/// BOTH snapshots whose commit_id changed. Callers must filter
+/// the result further (a fast-forward isn't actually
+/// "sideways"); this helper only computes the candidate set.
+///
+/// We don't decide here whether the move is forward vs sideways
+/// — that requires `git merge-base --is-ancestor`, which the
+/// callers handle via `jj::is_ancestor`. Keeping this helper
+/// pure means it can be exhaustively unit-tested without
+/// touching a workspace.
+pub fn compute_moved_set(
+    pre: &[LocalBookmark],
+    post: &[LocalBookmark],
+) -> std::collections::BTreeMap<String, (String, String)> {
+    let post_by_name: std::collections::BTreeMap<&str, &str> = post
+        .iter()
+        .map(|b| (b.name.as_str(), b.commit_id.as_str()))
+        .collect();
+    pre.iter()
+        .filter_map(|b| {
+            post_by_name.get(b.name.as_str()).and_then(|post_commit| {
+                if *post_commit == b.commit_id {
+                    None
+                } else {
+                    Some((
+                        b.name.clone(),
+                        (b.commit_id.clone(), (*post_commit).to_owned()),
+                    ))
+                }
+            })
+        })
+        .collect()
 }
 
 /// Plan a single orphan rebase: returns `Some((bookmark, parent))`
@@ -1617,5 +1983,71 @@ mod tests {
         assert!(!is_bookmark_conflicted("Restack-Command", &conflicted));
         let empty: BTreeSet<String> = BTreeSet::new();
         assert!(!is_bookmark_conflicted("anything", &empty));
+    }
+
+    #[test]
+    fn compute_moved_set_filters_unchanged_and_missing_bookmarks() {
+        // Pure helper for issue #69. The moved-set candidate
+        // shape: pre.normal vs post.normal, returning a
+        // (pre_commit, post_commit) per bookmark whose name
+        // appears in both and whose commit_id changed. The helper
+        // is "candidate"-level — fast-forward vs sideways is the
+        // caller's call (needs git merge-base).
+        let pre = vec![
+            local("main", "aaaaaaaaaaaa"),
+            local("bottom", "bbbbbbbbbbbb"),
+            local("top", "cccccccccccc"),
+            // `deleted-before-fetch` exists only in pre.
+            local("deleted-before-fetch", "dddddddddddd"),
+        ];
+        let post = vec![
+            local("main", "aaaaaaaaaaaa"),
+            local("bottom", "bbbb22222222"), // moved
+            local("top", "cccccccccccc"),    // unchanged
+            // `appeared-after-fetch` exists only in post.
+            local("appeared-after-fetch", "eeeeeeeeeeee"),
+        ];
+
+        let moved = compute_moved_set(&pre, &post);
+        // `bottom` moved → present.
+        assert_eq!(
+            moved.get("bottom"),
+            Some(&("bbbbbbbbbbbb".to_owned(), "bbbb22222222".to_owned())),
+        );
+        // `main` unchanged → absent.
+        assert!(!moved.contains_key("main"));
+        // `top` unchanged → absent.
+        assert!(!moved.contains_key("top"));
+        // `deleted-before-fetch` missing in post → absent (the
+        // deleted-bookmark codepath handles those).
+        assert!(!moved.contains_key("deleted-before-fetch"));
+        // `appeared-after-fetch` missing in pre → absent (can't
+        // have moved if we didn't see it before).
+        assert!(!moved.contains_key("appeared-after-fetch"));
+    }
+
+    #[test]
+    fn compute_moved_set_empty_on_identical_snapshots() {
+        // Defensive: a freshly-fetched workspace where nothing
+        // upstream changed → empty set. Most common case in
+        // production.
+        let pre = vec![
+            local("main", "aaaaaaaaaaaa"),
+            local("feature", "bbbbbbbbbbbb"),
+        ];
+        let post = pre.clone();
+        let moved = compute_moved_set(&pre, &post);
+        assert!(moved.is_empty());
+    }
+
+    #[test]
+    fn compute_moved_set_empty_on_empty_inputs() {
+        // Degenerate inputs — both empty, one empty. Should not
+        // panic, should return empty.
+        let empty: Vec<LocalBookmark> = Vec::new();
+        assert!(compute_moved_set(&empty, &empty).is_empty());
+        let pre = vec![local("main", "aaaaaaaaaaaa")];
+        assert!(compute_moved_set(&pre, &empty).is_empty());
+        assert!(compute_moved_set(&empty, &pre).is_empty());
     }
 }

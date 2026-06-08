@@ -980,6 +980,82 @@ fn action_to_row(
                 "bookmark target is conflicted (multiple lineages disagree) — would have been orphan-rebased because parent `{prev_parent}` was removed; resolve with `jj bookmark set {bookmark_name} -r <commit>` and re-run"
             ),
         ),
+        CleanupAction::RebasedAfterParentMoved {
+            parent_bookmark,
+            pre_commit,
+            post_commit,
+        } => (
+            ui::ActionStatus::Ok,
+            format!(
+                "re-anchored onto `{parent_bookmark}`'s new tip (parent moved {} → {} on remote; Graphite pre-merge rebase or force-push)",
+                &pre_commit[..pre_commit.len().min(12)],
+                &post_commit[..post_commit.len().min(12)],
+            ),
+        ),
+        CleanupAction::RebaseAfterParentMovedDeferred {
+            parent_bookmark,
+            pre_commit,
+            post_commit,
+            message,
+        } => (
+            ui::ActionStatus::Warn,
+            format!(
+                "re-anchor onto `{parent_bookmark}`'s new tip would have conflicted (parent moved {} → {} on remote) — {message}; deferred to `jj-gt restack` (run manually when you're ready to resolve)",
+                &pre_commit[..pre_commit.len().min(12)],
+                &post_commit[..post_commit.len().min(12)],
+            ),
+        ),
+        CleanupAction::RebaseAfterParentMovedConflicted {
+            parent_bookmark,
+            pre_commit,
+            post_commit,
+            message,
+        } => (
+            ui::ActionStatus::Error,
+            format!(
+                "re-anchor onto `{parent_bookmark}`'s new tip produced conflicts (parent moved {} → {} on remote) — {message}; run `jj resolve` to fix",
+                &pre_commit[..pre_commit.len().min(12)],
+                &post_commit[..post_commit.len().min(12)],
+            ),
+        ),
+        CleanupAction::RebasedAfterRemoteMoved {
+            bookmark,
+            pre_commit,
+            post_commit,
+        } => (
+            ui::ActionStatus::Ok,
+            format!(
+                "re-anchored local commits on `{bookmark}` onto new remote tip ({} → {} on remote)",
+                &pre_commit[..pre_commit.len().min(12)],
+                &post_commit[..post_commit.len().min(12)],
+            ),
+        ),
+        CleanupAction::RebaseAfterRemoteMovedDeferred {
+            bookmark,
+            pre_commit,
+            post_commit,
+            message,
+        } => (
+            ui::ActionStatus::Warn,
+            format!(
+                "re-anchor of local commits on `{bookmark}` onto new remote tip would have conflicted ({} → {} on remote) — {message}; deferred to `jj-gt restack`",
+                &pre_commit[..pre_commit.len().min(12)],
+                &post_commit[..post_commit.len().min(12)],
+            ),
+        ),
+        CleanupAction::RebaseAfterRemoteMovedConflicted {
+            bookmark,
+            pre_commit,
+            post_commit,
+            message,
+        } => (
+            ui::ActionStatus::Error,
+            format!(
+                "re-anchor of local commits on `{bookmark}` onto new remote tip produced conflicts ({} → {} on remote) — {message}; run `jj resolve` to fix",
+                &pre_commit[..pre_commit.len().min(12)],
+                &post_commit[..post_commit.len().min(12)],
+            ),
+        ),
         CleanupAction::RestoredAfterRewind { pre, post } => (
             ui::ActionStatus::Warn,
             format!(

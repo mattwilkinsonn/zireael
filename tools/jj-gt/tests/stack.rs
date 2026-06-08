@@ -1121,11 +1121,19 @@ fn orphan_rebase_phase_defers_via_op_restore_on_conflict() {
     // the phase exists to handle.
     jj(cwd, &["bookmark", "delete", "bottom"]);
 
+    // Capture the post-fetch snapshot now (after the delete that
+    // simulates the fetch-side ref removal). orphan_rebase_phase
+    // uses this to compare against pre.normal for moved-sideways
+    // detection — passing a fresh snapshot here mirrors the
+    // run_fetch contract (post is captured right after `jj git
+    // fetch`, before any other mutation step).
+    let post = jj_gt::cleanup::snapshot_post_fetch(&jj_cli).unwrap();
+
     // Run the phase. The conflict-defer path should fire: snapshot
     // op id → rebase upper onto main → detect conflict → op_restore
     // → emit RebaseDeferredForConflict.
     let mut actions: Vec<(jj_gt::jj::LocalBookmark, jj_gt::cleanup::CleanupAction)> = Vec::new();
-    jj_gt::cleanup::orphan_rebase_phase(&jj_cli, &pre, &opts, &mut actions).unwrap();
+    jj_gt::cleanup::orphan_rebase_phase(&jj_cli, &pre, &post, &opts, &mut actions).unwrap();
 
     // The phase should have produced exactly one action for upper.
     let upper_action = actions
@@ -1281,8 +1289,9 @@ fn orphan_rebase_phase_emits_bookmark_conflicted_when_target_has_divergent_heads
     );
 
     // Run the phase. The conflict-detect arm should fire.
+    let post = jj_gt::cleanup::snapshot_post_fetch(&jj_cli).unwrap();
     let mut actions: Vec<(jj_gt::jj::LocalBookmark, jj_gt::cleanup::CleanupAction)> = Vec::new();
-    jj_gt::cleanup::orphan_rebase_phase(&jj_cli, &pre, &opts, &mut actions).unwrap();
+    jj_gt::cleanup::orphan_rebase_phase(&jj_cli, &pre, &post, &opts, &mut actions).unwrap();
 
     let upper_action = actions
         .iter()
@@ -1306,5 +1315,465 @@ fn orphan_rebase_phase_emits_bookmark_conflicted_when_target_has_divergent_heads
         jj_gt::jj::count_conflicts_in(&jj_cli, "all()").unwrap(),
         0,
         "BookmarkConflicted path must not leave content conflicts behind",
+    );
+}
+
+#[test]
+fn orphan_rebase_phase_reanchors_child_when_parent_moved_sideways_on_remote() {
+    // Issue #69 (Shape A): Graphite pre-merge-rebases a PR;
+    // origin's `<parent>` ref ends up at a different commit-id
+    // with the same content. `jj git fetch` propagates the move
+    // to local. The local child is still anchored to the old
+    // parent commit (now an orphan from git's view). The phase
+    // should detect the sideways move and rebase the child onto
+    // the new parent commit, emitting
+    // `RebasedAfterParentMoved`.
+    //
+    // Fixture:
+    //   1. Build main → bottom → top, push to a bare remote.
+    //   2. Manually rewrite `bottom` on the remote to a NEW
+    //      commit (different OID, simulating Graphite's
+    //      pre-merge rebase).
+    //   3. Capture the pre-fetch snapshot, run `jj git fetch`
+    //      to update local `bottom` to the new commit, then
+    //      invoke `orphan_rebase_phase`.
+    //   4. Assert: `top` was re-anchored, post-phase action is
+    //      `RebasedAfterParentMoved`, and `top`'s parent is
+    //      the new `bottom` commit.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(cwd, &["describe", "-m", "root"]);
+    jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
+    jj(cwd, &["new", "-m", "bottom"]);
+    jj(cwd, &["bookmark", "create", "bottom", "-r", "@"]);
+    jj(cwd, &["new", "-m", "top"]);
+    jj(cwd, &["bookmark", "create", "top", "-r", "@"]);
+    jj(cwd, &["new", "-m", "post-top wip"]);
+    jj(cwd, &["git", "export"]);
+
+    // Bare remote next to the workspace.
+    let remote_path = cwd.join("remote.git");
+    let bare = std::process::Command::new("git")
+        .args(["init", "--bare", "-q"])
+        .arg(&remote_path)
+        .output()
+        .unwrap();
+    assert!(bare.status.success());
+    let add_remote = std::process::Command::new("git")
+        .args(["remote", "add", "origin"])
+        .arg(format!("file://{}", remote_path.display()))
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(
+        add_remote.status.success(),
+        "git remote add failed: {}",
+        String::from_utf8_lossy(&add_remote.stderr)
+    );
+    for bookmark in ["main", "bottom", "top"] {
+        let push = std::process::Command::new("git")
+            .args(["push", "origin", bookmark])
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            push.status.success(),
+            "git push {bookmark} failed: {}",
+            String::from_utf8_lossy(&push.stderr)
+        );
+    }
+    jj(cwd, &["git", "import"]);
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+    for bookmark in ["main", "bottom", "top"] {
+        jj_gt::jj::track_bookmark_on_remote(&jj_cli, bookmark, "origin").unwrap();
+    }
+
+    let pre_bottom_commit = jj_gt::jj::resolve_commit_id(&jj_cli, "bottom").unwrap();
+    let pre_top_commit = jj_gt::jj::resolve_commit_id(&jj_cli, "top").unwrap();
+
+    // Simulate Graphite's pre-merge rebase: clone the bare remote
+    // into a scratch dir, rewrite `bottom`'s commit message
+    // (which mints a new OID), and force-push it back. The
+    // content stays effectively the same; what changes is the
+    // commit id `bottom` resolves to on origin.
+    let scratch = tempfile::tempdir().unwrap();
+    let clone = std::process::Command::new("git")
+        .args(["clone", "-q"])
+        .arg(format!("file://{}", remote_path.display()))
+        .arg(scratch.path())
+        .output()
+        .unwrap();
+    assert!(
+        clone.status.success(),
+        "git clone failed: {}",
+        String::from_utf8_lossy(&clone.stderr)
+    );
+    let scratch_cwd = scratch.path();
+    // Reset to the bottom commit, amend the message (allow-empty
+    // since the fixture commits are empty), force-push.
+    let cmds: &[&[&str]] = &[
+        &["config", "user.email", "test@example.com"],
+        &["config", "user.name", "Tester"],
+        &["checkout", "-q", "bottom"],
+        &[
+            "commit",
+            "--amend",
+            "--allow-empty",
+            "-m",
+            "bottom (graphite pre-merge rebase)",
+        ],
+        &["push", "origin", "+bottom"],
+    ];
+    for args in cmds {
+        let out = std::process::Command::new("git")
+            .args(*args)
+            .current_dir(scratch_cwd)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    // Pre-fetch snapshot (the production pipeline takes this
+    // BEFORE `jj git fetch` so the parent-edge graph captures
+    // the world as it was before the remote move).
+    let opts = jj_gt::cleanup::FetchOpts {
+        remote: "origin".into(),
+        trunk: "main".into(),
+        no_backfill: true,
+        no_rebase: false,
+        no_gtmq_prune: true,
+        ..jj_gt::cleanup::FetchOpts::default()
+    };
+    let pre_all = jj_gt::jj::list_local_bookmarks(&jj_cli).unwrap();
+    let (gtmq_pre, normal_pre): (Vec<_>, Vec<_>) = pre_all
+        .into_iter()
+        .partition(|b| b.name.starts_with("gtmq_"));
+    let pre = jj_gt::cleanup::snapshot_pre_fetch_with_prs(
+        &jj_cli,
+        &opts,
+        gtmq_pre,
+        normal_pre,
+        Vec::new(),
+    )
+    .unwrap();
+
+    // Now run the fetch — local `bottom` should advance to the
+    // new commit, `top` should still be anchored to the old
+    // commit.
+    jj(cwd, &["git", "fetch", "--remote", "origin"]);
+
+    let post_bottom_commit = jj_gt::jj::resolve_commit_id(&jj_cli, "bottom").unwrap();
+    assert_ne!(
+        pre_bottom_commit, post_bottom_commit,
+        "fetch should have advanced local `bottom` to the new commit; bug fixture"
+    );
+
+    // Run the phase. The sideways re-anchor should kick in for
+    // `top`.
+    let post = jj_gt::cleanup::snapshot_post_fetch(&jj_cli).unwrap();
+    let mut actions: Vec<(jj_gt::jj::LocalBookmark, jj_gt::cleanup::CleanupAction)> = Vec::new();
+    jj_gt::cleanup::orphan_rebase_phase(&jj_cli, &pre, &post, &opts, &mut actions).unwrap();
+
+    let top_action = actions
+        .iter()
+        .find(|(b, _)| b.name == "top")
+        .map(|(_, a)| a.clone())
+        .expect("phase should emit an action for top");
+    match top_action {
+        jj_gt::cleanup::CleanupAction::RebasedAfterParentMoved {
+            parent_bookmark,
+            pre_commit,
+            post_commit,
+        } => {
+            assert_eq!(parent_bookmark, "bottom");
+            assert!(
+                pre_bottom_commit.starts_with(&pre_commit)
+                    || pre_commit.starts_with(&pre_bottom_commit),
+                "pre_commit {pre_commit} should match pre-fetch bottom {pre_bottom_commit}",
+            );
+            assert!(
+                post_bottom_commit.starts_with(&post_commit)
+                    || post_commit.starts_with(&post_bottom_commit),
+                "post_commit {post_commit} should match post-fetch bottom {post_bottom_commit}",
+            );
+        }
+        other => panic!("expected RebasedAfterParentMoved for top; got {other:?}"),
+    }
+
+    // Verify the rebase took effect: top's parent commit should
+    // now be the post-fetch bottom commit (the new tip), not
+    // the pre-fetch one.
+    let new_top_commit = jj_gt::jj::resolve_commit_id(&jj_cli, "top").unwrap();
+    assert_ne!(
+        pre_top_commit, new_top_commit,
+        "rebase should have rewritten `top` onto the new parent",
+    );
+    // The parent-chain assertion: `top`'s direct parent commit
+    // must be the post-fetch `bottom` tip. Without this, a
+    // mistaken rebase onto `main` (or any other commit that
+    // happens to differ from pre_top_commit) would still pass
+    // the `assert_ne!` above and silently regress the contract.
+    let top_parent = jj_capture(
+        cwd,
+        &[
+            "log",
+            "-r",
+            "parents(top)",
+            "--no-graph",
+            "-T",
+            "commit_id",
+            "--limit",
+            "1",
+            "--ignore-working-copy",
+        ],
+    )
+    .trim()
+    .to_owned();
+    assert_eq!(
+        top_parent, post_bottom_commit,
+        "post-phase: top should now be parented by the fetched `bottom` tip ({post_bottom_commit}); got {top_parent}",
+    );
+
+    // No content conflicts should remain — both commits had the
+    // same content, just different commit ids.
+    assert_eq!(
+        jj_gt::jj::count_conflicts_in(&jj_cli, "all()").unwrap(),
+        0,
+        "Shape-A re-anchor against same-content rebase must not leave conflicts",
+    );
+}
+
+#[test]
+fn orphan_rebase_phase_does_not_double_rebase_when_sideways_parent_also_deleted_post_sync() {
+    // Regression for the narrow race window greptile flagged on
+    // PR #73: parent appears in BOTH the sideways set (it moved
+    // post-fetch — Graphite pre-merge rebase) AND in the deleted
+    // set (its branch got cleaned up post-sync because the PR
+    // merged in the same `gt sync` run).
+    //
+    // Without the guard, the orphan-rebase loop first re-anchors
+    // the child onto trunk (deleted-parent path), and the
+    // sideways loop then fires a SECOND rebase that moves the
+    // child off trunk and onto the now-abandoned sideways
+    // commit. The user ends up on an orphan ref and sees two
+    // confusing actions for one bookmark.
+    //
+    // The fix is a `remaining_names.contains(&parent_name)`
+    // guard inside the sideways loop: when the parent is gone
+    // post-sync, the deleted-parent path is the right handler;
+    // the sideways branch must bail.
+    //
+    // Fixture: build the moved-sideways shape (main → bottom →
+    // top, push, rewrite `bottom` on origin, fetch). Then,
+    // BEFORE running the phase, locally delete `bottom` to
+    // simulate `gt sync` having pruned it. Run the phase; assert
+    // that:
+    //   - top emits ONE action (the deleted-parent re-anchor,
+    //     RebasedAfterParentMoved with parent="bottom" but the
+    //     destination being trunk — actually emitted as a
+    //     `RebasedAfterParentDeleted`/equivalent action; assert
+    //     the count and direction);
+    //   - top's final parent is `main`, not the abandoned
+    //     pre/post sideways commits.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(cwd, &["describe", "-m", "root"]);
+    jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
+    jj(cwd, &["new", "-m", "bottom"]);
+    jj(cwd, &["bookmark", "create", "bottom", "-r", "@"]);
+    jj(cwd, &["new", "-m", "top"]);
+    jj(cwd, &["bookmark", "create", "top", "-r", "@"]);
+    jj(cwd, &["new", "-m", "post-top wip"]);
+    jj(cwd, &["git", "export"]);
+
+    // Bare remote.
+    let remote_path = cwd.join("remote.git");
+    let bare = std::process::Command::new("git")
+        .args(["init", "--bare", "-q"])
+        .arg(&remote_path)
+        .output()
+        .unwrap();
+    assert!(bare.status.success());
+    let add_remote = std::process::Command::new("git")
+        .args(["remote", "add", "origin"])
+        .arg(format!("file://{}", remote_path.display()))
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(add_remote.status.success());
+    for bookmark in ["main", "bottom", "top"] {
+        let push = std::process::Command::new("git")
+            .args(["push", "origin", bookmark])
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(push.status.success());
+    }
+    jj(cwd, &["git", "import"]);
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+    for bookmark in ["main", "bottom", "top"] {
+        jj_gt::jj::track_bookmark_on_remote(&jj_cli, bookmark, "origin").unwrap();
+    }
+
+    let pre_bottom_commit = jj_gt::jj::resolve_commit_id(&jj_cli, "bottom").unwrap();
+    let trunk_commit = jj_gt::jj::resolve_commit_id(&jj_cli, "main").unwrap();
+
+    // Rewrite `bottom` on origin (Graphite pre-merge rebase
+    // shape).
+    let scratch = tempfile::tempdir().unwrap();
+    let clone = std::process::Command::new("git")
+        .args(["clone", "-q"])
+        .arg(format!("file://{}", remote_path.display()))
+        .arg(scratch.path())
+        .output()
+        .unwrap();
+    assert!(clone.status.success());
+    let scratch_cwd = scratch.path();
+    let cmds: &[&[&str]] = &[
+        &["config", "user.email", "test@example.com"],
+        &["config", "user.name", "Tester"],
+        &["checkout", "-q", "bottom"],
+        &[
+            "commit",
+            "--amend",
+            "--allow-empty",
+            "-m",
+            "bottom (graphite pre-merge rebase)",
+        ],
+        &["push", "origin", "+bottom"],
+    ];
+    for args in cmds {
+        let out = std::process::Command::new("git")
+            .args(*args)
+            .current_dir(scratch_cwd)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    }
+
+    // Pre-fetch snapshot BEFORE the fetch (production
+    // run_fetch contract).
+    let opts = jj_gt::cleanup::FetchOpts {
+        remote: "origin".into(),
+        trunk: "main".into(),
+        no_backfill: true,
+        no_rebase: false,
+        no_gtmq_prune: true,
+        ..jj_gt::cleanup::FetchOpts::default()
+    };
+    let pre_all = jj_gt::jj::list_local_bookmarks(&jj_cli).unwrap();
+    let (gtmq_pre, normal_pre): (Vec<_>, Vec<_>) = pre_all
+        .into_iter()
+        .partition(|b| b.name.starts_with("gtmq_"));
+    let pre = jj_gt::cleanup::snapshot_pre_fetch_with_prs(
+        &jj_cli,
+        &opts,
+        gtmq_pre,
+        normal_pre,
+        Vec::new(),
+    )
+    .unwrap();
+
+    // Fetch — local `bottom` advances to the new commit.
+    jj(cwd, &["git", "fetch", "--remote", "origin"]);
+    let post_bottom_commit_before_delete = jj_gt::jj::resolve_commit_id(&jj_cli, "bottom").unwrap();
+    assert_ne!(
+        pre_bottom_commit, post_bottom_commit_before_delete,
+        "fetch should have advanced local `bottom`",
+    );
+
+    // Capture the post-fetch snapshot WHILE bottom is still
+    // present — this mirrors run_fetch's ordering: post is
+    // captured immediately after fetch, before sync/prune
+    // mutations. So bottom appears in post.all even though it'll
+    // be deleted moments later.
+    let post = jj_gt::cleanup::snapshot_post_fetch(&jj_cli).unwrap();
+
+    // Simulate `gt sync` deleting the merged PR's branch from
+    // origin (the merged-PR cleanup) and the same sync run's
+    // follow-up fetch propagating the deletion locally. By the
+    // time orphan_rebase_phase runs, `bottom` is gone from
+    // `remaining` AND gone from `remaining_names`, but the
+    // sideways detection (built from pre + post) still has it
+    // because the snapshot was taken between the first fetch and
+    // the deletion.
+    let delete_push = std::process::Command::new("git")
+        .args(["push", "origin", "--delete", "bottom"])
+        .current_dir(cwd)
+        .output()
+        .unwrap();
+    assert!(
+        delete_push.status.success(),
+        "git push --delete bottom failed: {}",
+        String::from_utf8_lossy(&delete_push.stderr)
+    );
+    jj(cwd, &["git", "fetch", "--remote", "origin"]);
+
+    let mut actions: Vec<(jj_gt::jj::LocalBookmark, jj_gt::cleanup::CleanupAction)> = Vec::new();
+    jj_gt::cleanup::orphan_rebase_phase(&jj_cli, &pre, &post, &opts, &mut actions).unwrap();
+
+    // The phase must emit EXACTLY ONE action for `top` — the
+    // deleted-parent re-anchor. The sideways branch is supposed
+    // to bail (via the parent-still-exists guard); without it,
+    // we'd see two actions and the second rebase would move top
+    // off trunk.
+    let top_actions: Vec<&jj_gt::cleanup::CleanupAction> = actions
+        .iter()
+        .filter(|(b, _)| b.name == "top")
+        .map(|(_, a)| a)
+        .collect();
+    assert_eq!(
+        top_actions.len(),
+        1,
+        "top should receive exactly one action; got {top_actions:?}",
+    );
+
+    // top's final parent must be trunk (`main`), not either of
+    // the abandoned `bottom` commits (pre or post).
+    let top_parent = jj_capture(
+        cwd,
+        &[
+            "log",
+            "-r",
+            "parents(top)",
+            "--no-graph",
+            "-T",
+            "commit_id",
+            "--limit",
+            "1",
+            "--ignore-working-copy",
+        ],
+    )
+    .trim()
+    .to_owned();
+    assert_eq!(
+        top_parent, trunk_commit,
+        "top should be re-anchored on trunk, not on either abandoned bottom commit; \
+         got {top_parent}, pre-bottom={pre_bottom_commit}, post-bottom={post_bottom_commit_before_delete}",
     );
 }
