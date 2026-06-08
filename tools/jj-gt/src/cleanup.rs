@@ -14,7 +14,7 @@
 //! separate from the orchestration so the test suite can exercise
 //! every branch without spinning up real `gh` / `gt` / `jj` invocations.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::error::Result;
@@ -188,6 +188,47 @@ pub enum CleanupAction {
     /// reconcile manually. `pre` and `post` are the commit ids
     /// before/after sync.
     DivergedFromRemote { pre: String, post: String },
+    /// Detected that a bookmark's commit_id moved BACKWARD across
+    /// the fetch pipeline (post is a strict ancestor of pre) AND
+    /// the pre-fetch position carried local-only work (pre != the
+    /// pre-fetch `@origin` baseline). We auto-restored the
+    /// bookmark to its pre-fetch position. Surfaces as Error so
+    /// the user notices: something in the pipeline (most likely
+    /// `gt sync --force`, a sibling workspace's plain `jj git
+    /// fetch` resolving against a stale view, or an unidentified
+    /// race) tried to silently rewind local-only work.
+    ///
+    /// If the rewind was intentional (the agent ran `jj bookmark
+    /// set <name> -r <earlier>` deliberately during fetch), the
+    /// `pre != origin` filter wouldn't have fired — they'd have
+    /// to re-issue the rewind. That's an acceptable cost for the
+    /// "your in-flight commits don't silently vanish" guarantee.
+    RewindRestored {
+        pre_commit: String,
+        post_commit: String,
+    },
+    /// Same trigger shape as [`Self::RewindRestored`] but the
+    /// `jj bookmark set` to restore failed (jj refused, the
+    /// commit was GC'd, …). Surfaces the original pre/post
+    /// commits plus the restore failure so the user can recover
+    /// manually with `jj bookmark set` + op-log lookup.
+    RewindDetectedButRestoreFailed {
+        pre_commit: String,
+        post_commit: String,
+        message: String,
+    },
+    /// Sibling of [`Self::RewindRestored`] for the
+    /// deletion-with-local-work case: the bookmark vanished
+    /// between pre and post snapshots, but the pre snapshot
+    /// carried commits not yet pushed to `@<remote>`. We
+    /// recreated the bookmark at the saved pre_commit. There's
+    /// no post commit to report — the bookmark didn't exist
+    /// after fetch.
+    DeletionRestored { pre_commit: String },
+    /// Sibling of [`Self::RewindDetectedButRestoreFailed`] for
+    /// the deletion-with-local-work case where the recreate
+    /// `jj bookmark set` failed. User must recover manually.
+    DeletionDetectedButRestoreFailed { pre_commit: String, message: String },
     /// PR still open and local matches pushed; leave alone.
     LeftAlone,
 }
@@ -375,6 +416,24 @@ pub fn run_fetch(
     verbosity: crate::ui::Verbosity,
 ) -> Result<Vec<(LocalBookmark, CleanupAction)>> {
     let _lock = acquire_pipeline_lock(workspace_root, opts)?;
+
+    // Snapshot every local non-trunk, non-gtmq_* bookmark's
+    // commit_id + change_id + origin baseline BEFORE any
+    // mutation step runs. Used by `apply_rewind_protection` at
+    // the end of the pipeline to detect + restore any bookmark
+    // that got silently rewound during fetch (the wild bug
+    // shape: an agent's unpushed fixup commit ends up orphaned
+    // because something in the pipeline reverted the bookmark
+    // to its remote position).
+    //
+    // Captured here, after the lock is acquired, so concurrent
+    // jj-gt fetch invocations can't race past this snapshot.
+    let rewind_snapshots = if opts.dry_run {
+        BTreeMap::new()
+    } else {
+        capture_rewind_snapshots(jj, opts)?
+    };
+
     maybe_shelter(jj, opts, verbosity)?;
 
     // Export jj's bookmark view into git's loose refs BEFORE the
@@ -418,6 +477,19 @@ pub fn run_fetch(
     )?;
     gtmq_prune_phase(jj, workspace_root, &pre, opts, verbosity, &mut actions)?;
     orphan_rebase_phase(jj, &pre, &post, opts, &mut actions)?;
+
+    // After every pipeline mutation has run, sweep for silent
+    // rewinds. See `apply_rewind_protection` for the rule set —
+    // restores any bookmark that ended up at an ancestor of its
+    // pre-fetch position AND carried local-only work pre-fetch.
+    apply_rewind_protection(
+        jj,
+        workspace_root,
+        &rewind_snapshots,
+        opts,
+        verbosity,
+        &mut actions,
+    )?;
 
     Ok(actions)
 }
@@ -471,6 +543,250 @@ fn maybe_shelter(jj: &JjCli, opts: &FetchOpts, verbosity: crate::ui::Verbosity) 
             Err(e)
         }
     }
+}
+
+/// Capture a `RewindSnapshot` per local non-trunk, non-gtmq_*
+/// bookmark, plus each bookmark's `@<remote>` commit baseline.
+/// Called at the top of `run_fetch` so the post-pipeline rewind
+/// detector can compare against this baseline.
+///
+/// The origin baseline is best-effort: if the bookmark has no
+/// remote-tracking ref (newly-created locally, never pushed),
+/// `origin_baseline_commit` is `None` and rule 3 of
+/// [`classify_rewind_protection`] doesn't fire. That's the safe
+/// default for those: a brand-new local bookmark has zero pushed
+/// state to compare against, so we treat any backward move as a
+/// genuine rewind (which it is — there's no remote we could be
+/// reverting "to" in the first place).
+pub fn capture_rewind_snapshots(
+    jj: &JjCli,
+    opts: &FetchOpts,
+) -> Result<BTreeMap<String, RewindSnapshot>> {
+    let bookmarks = jj::list_local_bookmarks_with_changes(jj)?;
+    let mut out = BTreeMap::new();
+    for b in bookmarks {
+        if b.name == opts.trunk || is_gtmq_branch(&b.name, &opts.gtmq_prefixes) {
+            continue;
+        }
+        // Read the bookmark's `@<remote>` view, truncated to the
+        // same `short(12)` form used for `pre_commit` so the
+        // rule-3 (`pre == origin_baseline`) equality check
+        // compares apples to apples — `resolve_commit_id` returns
+        // a full 40-char hash, but the bookmark template emits
+        // `commit_id.short(12)`.
+        //
+        // We only treat "the revset doesn't resolve" as a
+        // legitimate `None` (e.g. bookmark never pushed to this
+        // remote). Other failures — jj crashed, the `.jj/` is
+        // corrupted, the user lost network mid-call — get
+        // propagated. Otherwise a real fetch problem would
+        // silently turn into "no remote baseline" for every
+        // bookmark, which then makes rule 3 dead and biases the
+        // classifier toward "rewound — restore."
+        let origin_baseline_commit =
+            match jj::resolve_commit_id(jj, &format!("{}@{}", b.name, opts.remote)) {
+                Ok(c) => Some(c[..c.len().min(12)].to_owned()),
+                Err(e) if is_revset_unresolved_error(&e) => None,
+                Err(e) => return Err(e),
+            };
+        out.insert(
+            b.name.clone(),
+            RewindSnapshot {
+                pre_commit: b.commit_id,
+                pre_change_id: b.change_id,
+                origin_baseline_commit,
+            },
+        );
+    }
+    Ok(out)
+}
+
+/// True iff `err` is the "the revset resolved to no commits / a
+/// revision that doesn't exist" shape — the case
+/// `capture_rewind_snapshots` legitimately maps to `None` baseline
+/// for a bookmark that's never been pushed to the remote.
+///
+/// We sniff both `Invalid("resolved to no commits")` (the wrapper
+/// in `resolve_commit_id`) and `Hooks(JjFailed { stderr })` whose
+/// stderr contains jj's native "Revision `…` doesn't exist" /
+/// "No such revision" wording. Other error variants (Io, GtFailed,
+/// etc.) are NOT this — those mean something actually went wrong
+/// and the caller should bubble out.
+fn is_revset_unresolved_error(err: &crate::error::JjGtError) -> bool {
+    use crate::error::JjGtError;
+    match err {
+        JjGtError::Invalid(msg) => msg.contains("resolved to no commits"),
+        JjGtError::Hooks(jj_hooks::error::JjHooksError::JjFailed { stderr, .. }) => {
+            let lc = stderr.to_lowercase();
+            lc.contains("doesn't exist") || lc.contains("no such revision")
+        }
+        _ => false,
+    }
+}
+
+/// Phase that compares the post-pipeline bookmark state against
+/// the entry snapshot captured by [`capture_rewind_snapshots`]
+/// and auto-restores any bookmark that got silently rewound.
+///
+/// Runs at the END of `run_fetch` (success path). Aborted runs
+/// don't reach this phase, but that's acceptable: a phase that
+/// aborts has already returned an error to the user; the user
+/// can re-run fetch (which will re-snapshot + re-check) once
+/// they've resolved the abort cause.
+///
+/// `actions` is the action log being built up by the rest of
+/// `run_fetch`; we append `RewindRestored` /
+/// `RewindDetectedButRestoreFailed` entries so the user sees
+/// the restore as a per-bookmark row in the fetch summary.
+pub fn apply_rewind_protection(
+    jj: &JjCli,
+    workspace_root: &Path,
+    snapshots: &BTreeMap<String, RewindSnapshot>,
+    opts: &FetchOpts,
+    verbosity: crate::ui::Verbosity,
+    actions: &mut Vec<(LocalBookmark, CleanupAction)>,
+) -> Result<()> {
+    if opts.dry_run || snapshots.is_empty() {
+        return Ok(());
+    }
+    let step = crate::ui::Step::start("Checking for silent rewinds across the fetch", verbosity);
+
+    // Read current post-pipeline state once. Anything missing
+    // from this list is a deletion (handled by other phases),
+    // and we don't try to "restore" it here.
+    let post = match jj::list_local_bookmarks_with_changes(jj) {
+        Ok(b) => b,
+        Err(e) => {
+            step.warn(&format!("couldn't read post-fetch bookmarks: {e}"), None);
+            return Ok(());
+        }
+    };
+    let post_by_name: BTreeMap<String, &jj::LocalBookmarkWithChange> =
+        post.iter().map(|b| (b.name.clone(), b)).collect();
+
+    let mut restored = 0usize;
+    let mut warnings: Vec<String> = Vec::new();
+    for (name, snap) in snapshots {
+        let Some(post_entry) = post_by_name.get(name) else {
+            // Bookmark went away during fetch. If the snapshot
+            // showed local-only work (pre_commit ≠
+            // origin_baseline_commit), the deletion silently lost
+            // that work — recreate the bookmark at the snapshot's
+            // pre_commit. Otherwise it's a legitimate cleanup
+            // (merged PR / gt sync) and we leave it alone.
+            let had_local_work = match &snap.origin_baseline_commit {
+                Some(baseline) => &snap.pre_commit != baseline,
+                // No `@origin` baseline → bookmark was never pushed.
+                // Any commit it pointed at was local-only by
+                // definition.
+                None => true,
+            };
+            if !had_local_work {
+                continue;
+            }
+            let local_for_action = LocalBookmark {
+                name: name.clone(),
+                // Bookmark didn't exist after fetch — empty commit_id
+                // here just means "currently absent"; the action
+                // printer's `DeletionRestored` arm doesn't read it.
+                commit_id: String::new(),
+            };
+            match jj::bookmark_set(jj, name, &snap.pre_commit) {
+                Ok(()) => {
+                    restored += 1;
+                    actions.push((
+                        local_for_action,
+                        CleanupAction::DeletionRestored {
+                            pre_commit: snap.pre_commit.clone(),
+                        },
+                    ));
+                    warnings.push(format!(
+                        "{name}: bookmark was deleted with local-only work; recreated at {}",
+                        &snap.pre_commit[..snap.pre_commit.len().min(12)],
+                    ));
+                }
+                Err(e) => {
+                    warnings.push(format!(
+                        "{name}: bookmark was deleted with local-only work AND recreate failed ({e}); run `jj bookmark set {name} -r {}` manually",
+                        &snap.pre_commit[..snap.pre_commit.len().min(12)],
+                    ));
+                    actions.push((
+                        local_for_action,
+                        CleanupAction::DeletionDetectedButRestoreFailed {
+                            pre_commit: snap.pre_commit.clone(),
+                            message: format!("{e}"),
+                        },
+                    ));
+                }
+            }
+            continue;
+        };
+        let outcome = classify_rewind_protection(
+            snap,
+            &post_entry.commit_id,
+            &post_entry.change_id,
+            |a, b| jj::is_ancestor(workspace_root, a, b),
+        );
+        let outcome = match outcome {
+            Ok(o) => o,
+            Err(e) => {
+                warnings.push(format!("{name}: classify failed: {e}"));
+                continue;
+            }
+        };
+        match outcome {
+            RewindProtectionOutcome::NoChange
+            | RewindProtectionOutcome::ForwardMove
+            | RewindProtectionOutcome::InPlaceRewrite
+            | RewindProtectionOutcome::NoLocalWork => {
+                // Nothing to do.
+            }
+            RewindProtectionOutcome::Rewound | RewindProtectionOutcome::Divergent => {
+                // The bookmark carried local-only work and is now
+                // pointing at an ancestor (or divergent commit).
+                // Restore.
+                let local_for_action = LocalBookmark {
+                    name: name.clone(),
+                    commit_id: post_entry.commit_id.clone(),
+                };
+                match jj::bookmark_set(jj, name, &snap.pre_commit) {
+                    Ok(()) => {
+                        restored += 1;
+                        actions.push((
+                            local_for_action,
+                            CleanupAction::RewindRestored {
+                                pre_commit: snap.pre_commit.clone(),
+                                post_commit: post_entry.commit_id.clone(),
+                            },
+                        ));
+                    }
+                    Err(e) => {
+                        warnings.push(format!("{name}: restore failed: {e}"));
+                        actions.push((
+                            local_for_action,
+                            CleanupAction::RewindDetectedButRestoreFailed {
+                                pre_commit: snap.pre_commit.clone(),
+                                post_commit: post_entry.commit_id.clone(),
+                                message: format!("{e}"),
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    let summary = match (restored, warnings.is_empty()) {
+        (0, true) => "no rewinds detected".to_owned(),
+        (n, true) => format!("{n} restored"),
+        (n, false) => format!("{n} restored, {} warning(s)", warnings.len()),
+    };
+    if warnings.is_empty() {
+        step.success(&summary, None);
+    } else {
+        step.warn(&summary, Some(&warnings.join("\n")));
+    }
+    Ok(())
 }
 
 /// Snapshot of the bookmark graph captured BEFORE `jj git fetch`
@@ -656,8 +972,30 @@ fn do_fetch(jj: &JjCli, opts: &FetchOpts, verbosity: crate::ui::Verbosity) -> Re
 ///      — and that would abort the whole pipeline before the
 ///      repair phase ever runs.
 ///
-/// `BookmarkOrTrunk::Trunk` is always satisfiable: trunk by
-/// definition exists locally.
+/// Decide whether a bookmark needs `gt track` re-asserted as
+/// part of the post-fetch backfill phase.
+///
+/// Two cases produce `true`:
+///
+///   1. **Intact chain** — the bookmark has a PR, both it and
+///      its parent are present in `post_names`, and the parent
+///      isn't in the fetch-deleted set. Standard backfill.
+///   2. **Parent fetch-deleted** — the bookmark has a PR, it's
+///      present in `post_names`, but its pre-fetch parent was
+///      deleted on the remote (a merged-PR cleanup that fetch
+///      propagated). The caller will substitute trunk as the
+///      parent for the `gt track` call; mirror what
+///      `orphan_rebase_phase` will do to the commit a few steps
+///      later. Without this fallback the child's
+///      `gt track --parent <deleted-bookmark>` aborts the
+///      pipeline before the orphan-rebase repair can run.
+///
+/// Filters out:
+///   - bookmarks without a PR (gt has nothing to bind to)
+///   - bookmarks deleted during fetch (gone from `post_names`)
+///   - bookmarks whose parent is missing AND not in the deleted
+///     set (probably renamed or otherwise reshape — leave to
+///     manual intervention rather than guess)
 ///
 /// Pure function so unit tests can exhaustively cover the truth
 /// table without spinning up a workspace or stubbing `gt`.
@@ -665,24 +1003,68 @@ pub fn is_backfill_target(
     sb: &StackedBookmark,
     normal_prs: &[PrInfo],
     post_names: &BTreeSet<String>,
+    deleted: &BTreeSet<String>,
 ) -> bool {
     let has_pr = normal_prs.iter().any(|p| p.head_ref_name == sb.name);
     let child_present = post_names.contains(&sb.name);
-    let parent_present = match &sb.parent {
+    let parent_resolvable = match &sb.parent {
         BookmarkOrTrunk::Trunk => true,
-        BookmarkOrTrunk::Bookmark(parent) => post_names.contains(parent),
+        BookmarkOrTrunk::Bookmark(parent) => {
+            // Two ways the parent is resolvable: it's still
+            // around post-fetch, or it was deleted on the remote
+            // (in which case the caller will substitute trunk
+            // for the gt track invocation).
+            post_names.contains(parent) || deleted.contains(parent)
+        }
     };
-    has_pr && child_present && parent_present
+    has_pr && child_present && parent_resolvable
+}
+
+/// Compute the concrete bookmark name to pass to
+/// `gt track --parent` for `sb`. Returns `trunk` when the
+/// recorded parent was deleted during fetch (merged PR, post-
+/// merge cleanup propagated by `jj git fetch`); returns the
+/// recorded parent name otherwise.
+///
+/// Called only from `backfill_phase`; surfaced here as a named
+/// helper so the substitution rule has a single home and the
+/// unit tests can pin it.
+pub fn effective_backfill_parent(
+    sb: &StackedBookmark,
+    deleted: &BTreeSet<String>,
+    trunk: &str,
+) -> String {
+    match &sb.parent {
+        BookmarkOrTrunk::Trunk => trunk.to_owned(),
+        BookmarkOrTrunk::Bookmark(parent) => {
+            if deleted.contains(parent) {
+                trunk.to_owned()
+            } else {
+                parent.clone()
+            }
+        }
+    }
 }
 
 /// Backfill gt tracking metadata for bookmarks that have a PR.
 ///
-/// Filters to bookmarks (a) with a PR and (b) still present
-/// locally after fetch. A bookmark whose remote was just deleted
-/// by the post-merge cleanup is gone from local; gt track against
-/// a missing branch errors with "branch not found." Skipping
-/// those here is a no-op anyway — sync / orphan-rebase will
-/// handle the cleanup.
+/// Filters to bookmarks (a) with a PR, (b) still present locally
+/// after fetch, (c) whose recorded parent is either still present
+/// or was deleted in this fetch cycle, AND (d) that gt is already
+/// tracking. The deleted-parent case substitutes trunk as the
+/// `gt track --parent` argument — see
+/// [`effective_backfill_parent`] and [`is_backfill_target`] for
+/// the rationale. Without this substitution a child whose merged-
+/// PR parent just got cleaned up would abort the pipeline because
+/// `gt` rejects `--parent <untracked-bookmark>` before the
+/// orphan-rebase phase gets a chance to repair the graph.
+///
+/// The "gt already tracks it" gate (d) keeps backfill from
+/// opportunistically auto-tracking bookmarks the user pulled down
+/// to review — e.g. another engineer's PR that happens to have
+/// `head:branch` matching the PR-list search. First-time tracking
+/// only happens via the explicit `jj-gt submit` / `jj-gt track`
+/// flow, which the user opted into by name.
 fn backfill_phase(
     workspace_root: &Path,
     pre: &PreFetchSnapshot,
@@ -694,21 +1076,33 @@ fn backfill_phase(
         return Ok(());
     }
     let post_names = post.names();
+    // Same `deleted` set the orphan-rebase phase computes. Need
+    // it here so the deleted-parent substitution can fire.
+    let deleted = compute_deleted_set(&pre.normal_names(), &post_names);
+    // Scope auto-tracking to bookmarks gt already knows about. A
+    // gt enumeration failure (gt not installed, repo not gt-init'd)
+    // is treated as "gt knows nothing" — the backfill loop then
+    // skips everything, which is the right conservative answer
+    // for a workspace without gt set up.
+    let gt_known = gt::list_tracked_branches(workspace_root).unwrap_or_else(|e| {
+        tracing::warn!("jj-gt: couldn't enumerate gt-tracked branches ({e}); skipping backfill");
+        std::collections::BTreeSet::new()
+    });
     let stacked = crate::stack::sort_for_tracking(&pre.stacked);
     let backfill_targets: Vec<_> = stacked
         .iter()
-        .filter(|sb| is_backfill_target(sb, &pre.normal_prs, &post_names))
+        .filter(|sb| {
+            is_backfill_target(sb, &pre.normal_prs, &post_names, &deleted)
+                && gt_known.contains(&sb.name)
+        })
         .collect();
     if backfill_targets.is_empty() {
         let step = crate::ui::Step::start("Backfilling gt tracking metadata", verbosity);
-        step.skip("no bookmarks with PRs", None);
+        step.skip("no bookmarks with PRs that gt is tracking", None);
         return Ok(());
     }
     for sb in backfill_targets {
-        let parent = match &sb.parent {
-            BookmarkOrTrunk::Bookmark(p) => p.clone(),
-            BookmarkOrTrunk::Trunk => opts.trunk.clone(),
-        };
+        let parent = effective_backfill_parent(sb, &deleted, &opts.trunk);
         let step = crate::ui::Step::start(
             &format!("Backfilling gt track for {} (parent: {parent})", sb.name),
             verbosity,
@@ -825,8 +1219,27 @@ fn sync_and_rewind_phase(
         .collect();
 
     let rewind_step = crate::ui::Step::start("Checking for silent rewinds from gt sync", verbosity);
-    let mut restored = 0usize;
-    let mut diverged = 0usize;
+    // PR #77 follow-up: this phase used to also `jj bookmark set`
+    // bookmarks classified as `Rewound`/`Diverged` here. That
+    // restore preempted the snapshot-based protection in
+    // `apply_rewind_protection`, which uses the richer
+    // change_id + origin_baseline rules from
+    // `classify_rewind_protection` (see Rule 2 In-place rewrite
+    // and Rule 3 No-local-work) and is the authoritative
+    // restoration path. The classify-by-pre/post logic here
+    // would, for example, treat a legitimate remote-side rewrite
+    // that landed between fetch and gt sync as a "Rewound" and
+    // pin the bookmark back to the stale post-fetch commit —
+    // and then `apply_rewind_protection` would see the bookmark
+    // back at `pre_commit` (since we just restored it) and
+    // wouldn't notice the mistake.
+    //
+    // The classify_rewind classification is still useful for
+    // surfacing what happened, but the destructive restore is
+    // now deferred to `apply_rewind_protection`. Surface the
+    // classification as informational actions only.
+    let mut detected_rewound = 0usize;
+    let mut detected_diverged = 0usize;
     let mut rewind_errors: Vec<String> = Vec::new();
     for (name, pre_id) in &pre_snapshot {
         let post_id = post_by_name.get(name).map(|s| s.as_str());
@@ -842,11 +1255,7 @@ fn sync_and_rewind_phase(
         match classification {
             RewindClassification::Unchanged | RewindClassification::FastForward => {}
             RewindClassification::Rewound => {
-                if let Err(e) = jj::bookmark_set(jj, name, pre_id) {
-                    rewind_errors.push(format!("{name}: restore failed: {e}"));
-                    continue;
-                }
-                restored += 1;
+                detected_rewound += 1;
                 let local = pre
                     .normal
                     .iter()
@@ -865,11 +1274,7 @@ fn sync_and_rewind_phase(
                 ));
             }
             RewindClassification::Diverged => {
-                if let Err(e) = jj::bookmark_set(jj, name, pre_id) {
-                    rewind_errors.push(format!("{name}: restore failed: {e}"));
-                    continue;
-                }
-                diverged += 1;
+                detected_diverged += 1;
                 let local = pre
                     .normal
                     .iter()
@@ -915,11 +1320,21 @@ fn sync_and_rewind_phase(
             }
         }
     }
-    let summary = match (restored, diverged, rewind_errors.is_empty()) {
+    let summary = match (
+        detected_rewound,
+        detected_diverged,
+        rewind_errors.is_empty(),
+    ) {
         (0, 0, true) => "no rewinds detected".to_owned(),
-        (r, 0, true) => format!("{r} bookmark(s) restored from rewind"),
-        (0, d, true) => format!("{d} bookmark(s) diverged; local restored"),
-        (r, d, true) => format!("{r} restored from rewind, {d} diverged; local restored"),
+        (r, 0, true) => format!(
+            "{r} bookmark(s) flagged as rewound; restore deferred to apply_rewind_protection"
+        ),
+        (0, d, true) => format!(
+            "{d} bookmark(s) flagged as diverged; restore deferred to apply_rewind_protection"
+        ),
+        (r, d, true) => {
+            format!("{r} rewound, {d} diverged; restore deferred to apply_rewind_protection")
+        }
         (_, _, false) => format!("{} error(s)", rewind_errors.len()),
     };
     if rewind_errors.is_empty() {
@@ -1519,6 +1934,121 @@ pub fn is_bookmark_conflicted(name: &str, conflicted: &BTreeSet<String>) -> bool
     conflicted.contains(name)
 }
 
+/// Snapshot of a bookmark's state at fetch entry. Used by the
+/// pipeline's rewind detector to recover from any step that
+/// silently rewinds a bookmark with local-only work — see
+/// [`classify_rewind_protection`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RewindSnapshot {
+    /// Bookmark's commit_id at the start of fetch.
+    pub pre_commit: String,
+    /// Bookmark's change_id at the start of fetch. Used to
+    /// distinguish in-place rewrites (same change_id, new
+    /// commit_id) from genuine rewinds (different change_id,
+    /// post is ancestor of pre).
+    pub pre_change_id: String,
+    /// jj's view of the bookmark's `@<remote>` commit_id at
+    /// the start of fetch — i.e. the remote-side baseline jj
+    /// thinks the bookmark is tracking. `None` when there's no
+    /// remote-tracking ref (e.g. bookmark was created locally
+    /// and never pushed).
+    pub origin_baseline_commit: Option<String>,
+}
+
+/// Classification produced by [`classify_rewind_protection`]
+/// describing whether a bookmark needs auto-restore after the
+/// fetch pipeline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RewindProtectionOutcome {
+    /// Bookmark commit_id didn't change. No action.
+    NoChange,
+    /// Bookmark moved forward (post is descendant of pre).
+    /// Common case — agent advanced past the snapshot, or fetch
+    /// pulled a real remote advance. No action.
+    ForwardMove,
+    /// Same logical change (change_id matches) — agent ran an
+    /// in-place rewrite (jj describe / jj squash). No action.
+    InPlaceRewrite,
+    /// Pre was at origin's baseline — the bookmark didn't
+    /// carry local-only work, so even a "rewind" doesn't lose
+    /// anything. No action. Also covers the legitimate sideways
+    /// case where origin was force-pushed (Graphite pre-merge
+    /// rebase): pre matched the OLD origin, post matches the
+    /// NEW origin, and the orphan-rebase phase handles
+    /// downstream children separately.
+    NoLocalWork,
+    /// Post is a strict ancestor of pre AND pre had local-only
+    /// work AND change_id differs. Restore.
+    Rewound,
+    /// Pre and post share no ancestor relationship AND
+    /// change_id differs AND pre had local-only work.
+    /// Probably divergent move. Restore.
+    Divergent,
+}
+
+/// Decide whether `pre_snapshot`'s recorded position should be
+/// auto-restored over the current `post_commit_id` /
+/// `post_change_id`.
+///
+/// The five rules, in order:
+///
+///   1. **No change**: post_commit == pre_commit → `NoChange`.
+///   2. **In-place rewrite**: post_change_id == pre_change_id
+///      → `InPlaceRewrite`. Agent ran `jj describe` / `jj squash`
+///      against the same logical change; bookmark legitimately
+///      points at the rewritten commit.
+///   3. **No local-only work**: pre_commit == origin_baseline →
+///      `NoLocalWork`. Bookmark wasn't ahead of origin pre-fetch,
+///      so any "rewind" can't lose unpushed work. Avoids fighting
+///      with the orphan-rebase / moved-sideways paths over
+///      legitimate remote advances.
+///   4. **Forward move**: `is_ancestor(pre, post)` returns Ok(true)
+///      → `ForwardMove`. Agent advanced past the snapshot or
+///      fetch fast-forwarded.
+///   5. **Otherwise**: `Rewound` (post strict ancestor of pre) or
+///      `Divergent` (neither ancestor). Both restore.
+///
+/// `is_ancestor` is an injected oracle so the function stays
+/// pure for unit tests. Errors propagate.
+pub fn classify_rewind_protection<F>(
+    pre: &RewindSnapshot,
+    post_commit_id: &str,
+    post_change_id: &str,
+    is_ancestor: F,
+) -> Result<RewindProtectionOutcome>
+where
+    F: Fn(&str, &str) -> Result<bool>,
+{
+    // Rule 1.
+    if post_commit_id == pre.pre_commit {
+        return Ok(RewindProtectionOutcome::NoChange);
+    }
+    // Rule 2.
+    if post_change_id == pre.pre_change_id {
+        return Ok(RewindProtectionOutcome::InPlaceRewrite);
+    }
+    // Rule 3.
+    if let Some(baseline) = &pre.origin_baseline_commit
+        && baseline == &pre.pre_commit
+    {
+        return Ok(RewindProtectionOutcome::NoLocalWork);
+    }
+    // Rule 4.
+    if is_ancestor(&pre.pre_commit, post_commit_id)? {
+        return Ok(RewindProtectionOutcome::ForwardMove);
+    }
+    // Rule 5. Reverse-direction check distinguishes a strict
+    // backward rewind (`post` is an ancestor of `pre`) from a
+    // sideways/divergent move (neither direction). Both classify
+    // as "restore", but the variant feeds the action emit so the
+    // user sees the right framing in the per-bookmark row.
+    if is_ancestor(post_commit_id, &pre.pre_commit)? {
+        Ok(RewindProtectionOutcome::Rewound)
+    } else {
+        Ok(RewindProtectionOutcome::Divergent)
+    }
+}
+
 /// Pure pre-vs-post commit-id comparison for the moved-sideways
 /// detector (issue #69). Returns a map from bookmark name to
 /// `(pre_commit, post_commit)` for every bookmark present in
@@ -1931,11 +2461,13 @@ mod tests {
     #[test]
     fn is_backfill_target_accepts_intact_chain() {
         // Baseline: bookmark has a PR, both child and parent are
-        // still present locally → eligible.
+        // still present locally, parent isn't in the deleted set
+        // → eligible.
         let target = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
         let prs = vec![pr_with(1, "mid", "deadbeef", PrState::Open)];
         let post = names(&["main", "bottom", "mid", "top"]);
-        assert!(is_backfill_target(&target, &prs, &post));
+        let deleted = names(&[]);
+        assert!(is_backfill_target(&target, &prs, &post, &deleted));
     }
 
     #[test]
@@ -1945,27 +2477,41 @@ mod tests {
         let target = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
         let prs = vec![pr_with(1, "mid", "deadbeef", PrState::Open)];
         let post = names(&["main", "bottom", "top"]); // mid missing
-        assert!(!is_backfill_target(&target, &prs, &post));
+        let deleted = names(&["mid"]);
+        assert!(!is_backfill_target(&target, &prs, &post, &deleted));
     }
 
     #[test]
-    fn is_backfill_target_rejects_parent_deleted_during_fetch() {
-        // Regression for the wild bug: `bottom`'s PR squash-merged
-        // and the post-merge cleanup deleted the remote ref, which
-        // jj git fetch propagated to local. By the time
-        // backfill_phase runs, `bottom` is gone from `post_names`
-        // — calling `gt track mid --parent bottom` would error
-        // "branch not found" and abort the pipeline before
-        // orphan_rebase_phase repairs the stack.
-        //
-        // The pre-fetch snapshot intentionally preserved the
-        // `mid → bottom` edge (so orphan rebase can detect and
-        // fix it), so the orphan signal is downstream. We just
-        // need to NOT run gt track here.
+    fn is_backfill_target_accepts_when_parent_fetch_deleted() {
+        // The wild bug this regression covers: `bottom`'s PR
+        // squash-merged and the post-merge cleanup deleted the
+        // remote ref, which jj git fetch propagated to local. By
+        // the time backfill_phase runs, `bottom` is gone from
+        // `post_names` but IS in the deleted set. Previously we
+        // skipped `mid` here; now we accept it because the caller
+        // substitutes trunk as the gt-track parent (see
+        // `effective_backfill_parent`). Without this acceptance
+        // the child would not get tracked at all, leaving the
+        // graphite metadata refs stale and breaking the next
+        // `gt submit --stack` from the new tip.
         let target = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
         let prs = vec![pr_with(1, "mid", "deadbeef", PrState::Open)];
         let post = names(&["main", "mid", "top"]); // bottom missing
-        assert!(!is_backfill_target(&target, &prs, &post));
+        let deleted = names(&["bottom"]); // and in deleted set
+        assert!(is_backfill_target(&target, &prs, &post, &deleted));
+    }
+
+    #[test]
+    fn is_backfill_target_rejects_when_parent_missing_and_not_deleted() {
+        // Defensive: parent isn't in post_names AND isn't in the
+        // deleted set either (e.g. renamed via some out-of-band
+        // mutation). Don't guess — skip the bookmark; the user
+        // can `gt track` manually with the correct parent.
+        let target = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
+        let prs = vec![pr_with(1, "mid", "deadbeef", PrState::Open)];
+        let post = names(&["main", "mid", "top"]); // bottom missing
+        let deleted = names(&[]); // but not in deleted either
+        assert!(!is_backfill_target(&target, &prs, &post, &deleted));
     }
 
     #[test]
@@ -1976,7 +2522,8 @@ mod tests {
         let target = sb("bottom", BookmarkOrTrunk::Trunk);
         let prs = vec![pr_with(2, "bottom", "cafebabe", PrState::Open)];
         let post = names(&["main", "bottom"]);
-        assert!(is_backfill_target(&target, &prs, &post));
+        let deleted = names(&[]);
+        assert!(is_backfill_target(&target, &prs, &post, &deleted));
     }
 
     #[test]
@@ -1985,7 +2532,41 @@ mod tests {
         let target = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
         let prs: Vec<PrInfo> = Vec::new();
         let post = names(&["main", "bottom", "mid"]);
-        assert!(!is_backfill_target(&target, &prs, &post));
+        let deleted = names(&[]);
+        assert!(!is_backfill_target(&target, &prs, &post, &deleted));
+    }
+
+    #[test]
+    fn effective_backfill_parent_returns_trunk_when_parent_deleted() {
+        // Companion to the deleted-parent backfill-target test:
+        // when the parent went away during fetch, the helper must
+        // hand us trunk so the gt-track call has something real
+        // to bind to. Pinned as a pure function so a regression
+        // here trips without spinning up a fake gt.
+        let target = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
+        let deleted = names(&["bottom"]);
+        assert_eq!(effective_backfill_parent(&target, &deleted, "main"), "main",);
+    }
+
+    #[test]
+    fn effective_backfill_parent_returns_recorded_parent_when_present() {
+        // Happy path: parent wasn't deleted, return its name
+        // unchanged.
+        let target = sb("mid", BookmarkOrTrunk::Bookmark("bottom".into()));
+        let deleted = names(&[]);
+        assert_eq!(
+            effective_backfill_parent(&target, &deleted, "main"),
+            "bottom",
+        );
+    }
+
+    #[test]
+    fn effective_backfill_parent_returns_trunk_for_trunk_parent() {
+        // A bookmark rooted directly on trunk: helper returns
+        // the trunk name regardless of the deleted set.
+        let target = sb("bottom", BookmarkOrTrunk::Trunk);
+        let deleted = names(&["unrelated"]);
+        assert_eq!(effective_backfill_parent(&target, &deleted, "main"), "main",);
     }
 
     #[test]
@@ -2068,5 +2649,135 @@ mod tests {
         let pre = vec![local("main", "aaaaaaaaaaaa")];
         assert!(compute_moved_set(&pre, &empty).is_empty());
         assert!(compute_moved_set(&empty, &pre).is_empty());
+    }
+
+    fn snap(
+        pre_commit: &str,
+        pre_change_id: &str,
+        origin_baseline: Option<&str>,
+    ) -> RewindSnapshot {
+        RewindSnapshot {
+            pre_commit: pre_commit.into(),
+            pre_change_id: pre_change_id.into(),
+            origin_baseline_commit: origin_baseline.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn classify_rewind_protection_no_change_when_post_equals_pre() {
+        // Rule 1: identical commit_id → NoChange.
+        let pre = snap("commit_a", "change_a", Some("origin_a"));
+        let cls = classify_rewind_protection(&pre, "commit_a", "change_a", |_, _| {
+            unreachable!("is_ancestor should not be invoked when commit ids match")
+        })
+        .unwrap();
+        assert_eq!(cls, RewindProtectionOutcome::NoChange);
+    }
+
+    #[test]
+    fn classify_rewind_protection_in_place_rewrite_keeps_change_id() {
+        // Rule 2: same change_id, different commit_id (agent ran
+        // `jj describe` / `jj squash` against the same logical
+        // change). Don't restore.
+        let pre = snap("commit_a", "change_x", Some("origin_a"));
+        let cls = classify_rewind_protection(&pre, "commit_a_rewritten", "change_x", |_, _| {
+            unreachable!("is_ancestor should not be invoked when change ids match")
+        })
+        .unwrap();
+        assert_eq!(cls, RewindProtectionOutcome::InPlaceRewrite);
+    }
+
+    #[test]
+    fn classify_rewind_protection_no_local_work_when_pre_matches_origin() {
+        // Rule 3: pre matched origin's baseline → no local-only
+        // work to protect. Even a "rewind" can't lose anything.
+        // Also covers the legitimate sideways-on-origin case
+        // (Graphite pre-merge rebase): pre matched the OLD
+        // origin, post matches the NEW origin.
+        let pre = snap("origin_old", "change_a", Some("origin_old"));
+        let cls = classify_rewind_protection(&pre, "origin_new", "change_b", |_, _| {
+            unreachable!("is_ancestor should not be invoked when pre matches origin baseline")
+        })
+        .unwrap();
+        assert_eq!(cls, RewindProtectionOutcome::NoLocalWork);
+    }
+
+    #[test]
+    fn classify_rewind_protection_forward_when_pre_is_ancestor_of_post() {
+        // Rule 4: pre is ancestor of post (post is descendant).
+        // Agent advanced the bookmark, or fetch fast-forwarded
+        // because origin pulled ahead. No action.
+        let pre = snap("commit_a", "change_a", Some("origin_a"));
+        let oracle = ancestor_oracle(&[("commit_a", "commit_b")]);
+        let cls =
+            classify_rewind_protection(&pre, "commit_b", "change_b", |a, b| oracle(a, b)).unwrap();
+        assert_eq!(cls, RewindProtectionOutcome::ForwardMove);
+    }
+
+    #[test]
+    fn classify_rewind_protection_rewinds_when_post_is_ancestor_of_pre() {
+        // The wild bug: pre was the agent's fixup commit, post
+        // got rewound to origin's old position. pre had local-
+        // only work (pre != origin_baseline), so restore.
+        let pre = snap("commit_b_fixup", "change_fixup", Some("commit_a_origin"));
+        // pre is NOT an ancestor of post — but post IS an ancestor
+        // of pre, so rule 5 classifies as `Rewound` (not
+        // `Divergent`). The reverse-direction probe is what
+        // distinguishes a strict rewind from a sideways move.
+        let oracle = ancestor_oracle(&[("commit_a_origin", "commit_b_fixup")]);
+        let cls =
+            classify_rewind_protection(&pre, "commit_a_origin", "change_a", |a, b| oracle(a, b))
+                .unwrap();
+        assert_eq!(cls, RewindProtectionOutcome::Rewound);
+    }
+
+    #[test]
+    fn classify_rewind_protection_divergent_when_neither_direction_ancestor() {
+        // The sibling case to `rewinds_when_post_is_ancestor_of_pre`:
+        // pre had local-only work, fetch landed on a commit that
+        // is NEITHER ancestor nor descendant of pre. Rule 5's
+        // reverse-direction probe must distinguish this from a
+        // strict rewind so the action emit can frame it correctly
+        // ("divergent" vs "rewound").
+        let pre = snap("commit_b_fixup", "change_fixup", Some("commit_a_origin"));
+        // Empty oracle → is_ancestor returns false in both
+        // directions (the two commits are unrelated tips).
+        let oracle = ancestor_oracle(&[]);
+        let cls =
+            classify_rewind_protection(&pre, "commit_c_sideways", "change_c", |a, b| oracle(a, b))
+                .unwrap();
+        assert_eq!(cls, RewindProtectionOutcome::Divergent);
+    }
+
+    #[test]
+    fn classify_rewind_protection_propagates_oracle_errors() {
+        // is_ancestor failures (e.g. one of the commits is GC'd)
+        // propagate to the caller — they decide whether to skip
+        // restoration or surface it as a warning.
+        let pre = snap("commit_a", "change_a", Some("origin_old"));
+        let cls = classify_rewind_protection(&pre, "commit_b", "change_b", |_, _| {
+            Err(crate::error::JjGtError::Invalid(
+                "synthetic oracle failure".into(),
+            ))
+        });
+        let err = cls.unwrap_err();
+        assert!(format!("{err}").contains("synthetic oracle failure"));
+    }
+
+    #[test]
+    fn classify_rewind_protection_handles_missing_origin_baseline() {
+        // Bookmark was created locally and never pushed
+        // (origin_baseline_commit = None). Rule 3 (no-local-work)
+        // can't fire — we don't know what "no local work" looks
+        // like for an unpushed bookmark. Treat any backward move
+        // as a real rewind.
+        let pre = snap("commit_b", "change_b", None);
+        // Rule 5 reverse probe: post (commit_a) IS an ancestor of
+        // pre (commit_b) in the oracle, so this classifies as
+        // Rewound rather than Divergent.
+        let oracle = ancestor_oracle(&[("commit_a", "commit_b")]);
+        let cls =
+            classify_rewind_protection(&pre, "commit_a", "change_a", |a, b| oracle(a, b)).unwrap();
+        assert_eq!(cls, RewindProtectionOutcome::Rewound);
     }
 }

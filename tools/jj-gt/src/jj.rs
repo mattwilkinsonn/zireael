@@ -110,6 +110,72 @@ pub fn list_local_bookmarks(jj: &JjCli) -> Result<Vec<LocalBookmark>> {
     Ok(bookmarks)
 }
 
+/// Same as [`list_local_bookmarks`] but ALSO captures each
+/// bookmark's change_id alongside its commit_id. Used by the
+/// fetch pipeline's rewind detector to distinguish an in-place
+/// commit rewrite (same change_id, new commit_id — agent ran
+/// `jj describe` / `jj squash`) from an actual rewind (different
+/// change_id, post is ancestor of pre).
+///
+/// jj's change_id is the stable identifier of a "logical change"
+/// across rewrites; commit_id is the content hash. The change_id
+/// equality check is the right signal for "agent rewrote the
+/// commit but didn't move the bookmark to a different logical
+/// change."
+///
+/// Filtering / parsing rules match `list_local_bookmarks`:
+/// `present()` + non-empty `normal_target()` gate, conflict-
+/// target entries skipped, etc. The `if(remote, ...)` gate
+/// skips remote-tracking entries — `jj bookmark list` evaluates
+/// the template once per `(bookmark, remote)` pair, so a
+/// tracked local bookmark like `bottom` would otherwise emit
+/// both its local target AND its `@origin` baseline (the latter
+/// overwriting the former when callers collect into a BTreeMap
+/// keyed by name).
+pub fn list_local_bookmarks_with_changes(jj: &JjCli) -> Result<Vec<LocalBookmarkWithChange>> {
+    let out = jj_run(
+        jj,
+        &[
+            "bookmark",
+            "list",
+            "-T",
+            r#"if(self.present() && self.normal_target() && !remote, name ++ " " ++ self.normal_target().commit_id().short(12) ++ " " ++ self.normal_target().change_id().short(12), "") ++ "\n""#,
+            "--ignore-working-copy",
+        ],
+    )?;
+    let mut bookmarks = Vec::new();
+    for line in out.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let (Some(name), Some(commit_id), Some(change_id)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            // Skip lines that don't have all three fields. Same
+            // conflict-target / non-present rationale as
+            // `list_local_bookmarks`.
+            continue;
+        };
+        bookmarks.push(LocalBookmarkWithChange {
+            name: name.to_owned(),
+            commit_id: commit_id.to_owned(),
+            change_id: change_id.to_owned(),
+        });
+    }
+    Ok(bookmarks)
+}
+
+/// A local bookmark paired with its current change_id. See
+/// [`list_local_bookmarks_with_changes`] for why we capture both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBookmarkWithChange {
+    pub name: String,
+    pub commit_id: String,
+    pub change_id: String,
+}
+
 /// Return the set of local bookmark names whose target is
 /// conflicted (the `??` notation in `jj bookmark list` —
 /// different op-log lineages have moved the bookmark to different

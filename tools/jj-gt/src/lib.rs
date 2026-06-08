@@ -607,8 +607,14 @@ fn submit_cmd(
         // the focused stack); for the submit flow we keep the
         // broad sweep because submit is by definition a
         // multi-stack operation.
-        let adjacent_candidates =
-            jj::list_tracked_bookmarks_on_remote(jj, &bookmarks.remote).unwrap_or_default();
+        let adjacent_candidates = jj::list_tracked_bookmarks_on_remote(jj, &bookmarks.remote)
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "jj-gt: couldn't enumerate tracked bookmarks on `{}` ({e}); skipping adjacent re-track",
+                    bookmarks.remote
+                );
+                std::collections::BTreeSet::new()
+            });
         if let Err(e) = reconcile::reconcile(
             jj,
             &workspace_root,
@@ -1070,7 +1076,7 @@ fn action_to_row(
         CleanupAction::RestoredAfterRewind { pre, post } => (
             ui::ActionStatus::Warn,
             format!(
-                "restored after gt sync silently rewound (pre {}, gt-sync moved to {})",
+                "rewound by gt sync (was {}, now {}); restore deferred to the end-of-fetch rewind protection sweep",
                 &pre[..pre.len().min(12)],
                 &post[..post.len().min(12)],
             ),
@@ -1078,9 +1084,51 @@ fn action_to_row(
         CleanupAction::DivergedFromRemote { pre, post } => (
             ui::ActionStatus::Warn,
             format!(
-                "DIVERGED — local {} restored; remote moved to {}; reconcile manually",
+                "diverged from remote (was {}, gt sync moved to {}); restore deferred to the end-of-fetch rewind protection sweep",
                 &pre[..pre.len().min(12)],
                 &post[..post.len().min(12)],
+            ),
+        ),
+        CleanupAction::RewindRestored {
+            pre_commit,
+            post_commit,
+        } => (
+            ui::ActionStatus::Error,
+            format!(
+                "silent rewind detected — restored to {} (something in the fetch pipeline tried to revert to {}); if the rewind was intentional, run `jj bookmark set <name> -r {}` to reapply",
+                &pre_commit[..pre_commit.len().min(12)],
+                &post_commit[..post_commit.len().min(12)],
+                &post_commit[..post_commit.len().min(12)],
+            ),
+        ),
+        CleanupAction::RewindDetectedButRestoreFailed {
+            pre_commit,
+            post_commit,
+            message,
+        } => (
+            ui::ActionStatus::Error,
+            format!(
+                "silent rewind detected from {} to {} but restore failed: {message}; run `jj bookmark set <name> -r {}` manually (or `jj op log` to recover earlier state)",
+                &pre_commit[..pre_commit.len().min(12)],
+                &post_commit[..post_commit.len().min(12)],
+                &pre_commit[..pre_commit.len().min(12)],
+            ),
+        ),
+        CleanupAction::DeletionRestored { pre_commit } => (
+            ui::ActionStatus::Error,
+            format!(
+                "silent deletion detected — bookmark vanished mid-fetch with local-only work; recreated at {} (if the deletion was intentional, run `jj bookmark forget <name>` to drop it again)",
+                &pre_commit[..pre_commit.len().min(12)],
+            ),
+        ),
+        CleanupAction::DeletionDetectedButRestoreFailed {
+            pre_commit,
+            message,
+        } => (
+            ui::ActionStatus::Error,
+            format!(
+                "silent deletion detected — bookmark vanished mid-fetch with local-only work AND recreate failed: {message}; run `jj bookmark set <name> -r {}` manually (or `jj op log` to recover earlier state)",
+                &pre_commit[..pre_commit.len().min(12)],
             ),
         ),
         CleanupAction::LeftAlone => (ui::ActionStatus::Skipped, "left alone".into()),
