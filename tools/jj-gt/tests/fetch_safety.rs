@@ -1051,3 +1051,70 @@ fn list_conflicted_bookmarks_filters_out_pending_deletion_zombies() {
         "pending-deletion zombie must not be reported as conflicted; got {conflicted:?}"
     );
 }
+
+#[test]
+fn maybe_catch_up_workspace_does_not_mutate_when_dry_run() {
+    // Regression for the PR #72 CR review: `jj-gt submit --dry-run`
+    // (and the same flag on fetch / restack / reconcile) promises
+    // not to mutate workspace state. Before this fix,
+    // `maybe_catch_up_workspace` would still call
+    // `jj workspace update-stale` on a stale primary workspace,
+    // advancing `@` to a new change.
+    //
+    // The function returns a `CatchUpOutcome` enum describing
+    // which branch fired. Test contract:
+    //   - dry_run=true → `SkippedDryRun` (no jj invocation at all)
+    //   - dry_run=false on a clean workspace → `AlreadyCurrent`
+    //
+    // jj's stale-detection has version-dependent edges (the
+    // existing
+    // `ensure_workspace_current_does_not_error_after_sibling_workspace_advances`
+    // test documents that) so we can't reliably trigger the
+    // Updated path; we exercise the gate via the enum's
+    // distinguishability instead.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+
+    let tmp = build_workspace();
+    let jj_cli = JjCli::new(tmp.path().to_path_buf());
+
+    // Hold env_lock + clear the skip-env-var so the dry-run gate
+    // is the ONLY thing that can fire the SkippedDryRun outcome.
+    // Without this, a stale `JJ_GT_SKIP_UPDATE_STALE=1` could
+    // route us to `SkippedEnvVar` instead.
+    let _lock = env_lock().lock().unwrap();
+    // SAFETY: env_lock held above.
+    let _env = unsafe { EnvVarGuard::set("JJ_GT_SKIP_UPDATE_STALE", "0") };
+
+    // dry_run=true → must report SkippedDryRun.
+    let outcome_dry = jj_gt::maybe_catch_up_workspace(&jj_cli, jj_gt::ui::Verbosity::Quiet, true)
+        .expect("maybe_catch_up_workspace should not error on dry-run");
+    assert_eq!(
+        outcome_dry,
+        jj_gt::CatchUpOutcome::SkippedDryRun,
+        "dry_run=true must short-circuit to SkippedDryRun",
+    );
+
+    // dry_run=false on a clean workspace → must NOT be
+    // SkippedDryRun (must actually invoke the underlying
+    // ensure_workspace_current). On a clean workspace the
+    // expected terminal is AlreadyCurrent; if jj is in an odd
+    // state CouldNotVerify is also acceptable. The contract
+    // we're pinning is "the gate didn't fire for non-dry-run."
+    let outcome_wet = jj_gt::maybe_catch_up_workspace(&jj_cli, jj_gt::ui::Verbosity::Quiet, false)
+        .expect("maybe_catch_up_workspace should not error on a clean workspace");
+    assert_ne!(
+        outcome_wet,
+        jj_gt::CatchUpOutcome::SkippedDryRun,
+        "dry_run=false must reach the update-stale path (not collapse to SkippedDryRun)",
+    );
+    assert!(
+        matches!(
+            outcome_wet,
+            jj_gt::CatchUpOutcome::AlreadyCurrent | jj_gt::CatchUpOutcome::CouldNotVerify
+        ),
+        "clean workspace + dry_run=false should report AlreadyCurrent (or CouldNotVerify on jj versions where the probe is flaky); got {outcome_wet:?}",
+    );
+}
