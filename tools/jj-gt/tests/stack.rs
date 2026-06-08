@@ -468,7 +468,7 @@ fn orphan_rebase_moves_full_multi_commit_range() {
 
     // Run the rebase using the same revset jj-gt would build.
     let jj_cli = JjCli::new(cwd.to_path_buf());
-    let revset = jj_gt::cleanup::build_orphan_rebase_revset(&bottom_commit, "upper");
+    let revset = jj_gt::cleanup::build_orphan_rebase_revset(&bottom_commit, "upper", "main");
     let outcome = jj_gt::jj::rebase(&jj_cli, &revset, "main").unwrap();
 
     assert!(
@@ -951,7 +951,7 @@ fn fetch_orphan_rebase_defers_when_rebase_would_conflict() {
     // Snapshot the op id BEFORE the rebase — matches what
     // `orphan_rebase_phase` does in production.
     let pre_rebase_op = jj_gt::jj::current_op_id(&jj_cli).unwrap();
-    let revset = jj_gt::cleanup::build_orphan_rebase_revset(&bottom_commit, "upper");
+    let revset = jj_gt::cleanup::build_orphan_rebase_revset(&bottom_commit, "upper", "main");
     let outcome = jj_gt::jj::rebase(&jj_cli, &revset, "main").unwrap();
 
     // Confirm the rebase produced conflicts (the bug condition the
@@ -1776,4 +1776,234 @@ fn orphan_rebase_phase_does_not_double_rebase_when_sideways_parent_also_deleted_
         "top should be re-anchored on trunk, not on either abandoned bottom commit; \
          got {top_parent}, pre-bottom={pre_bottom_commit}, post-bottom={post_bottom_commit_before_delete}",
     );
+}
+
+#[test]
+fn orphan_rebase_phase_emits_no_op_when_bookmark_already_advanced_past_deleted_parent() {
+    // Regression for the wild bug Matt hit running `jj-gt fetch`
+    // right after PR #71 (`jj-gt-67-auto-update-stale`) merged.
+    //
+    // Sequence:
+    //   1. Parent PR merged → its branch deleted on origin, its
+    //      content squashed into a new merge commit on trunk.
+    //   2. Graphite's pre-merge rebase pushed the child PR's
+    //      bookmark forward onto the new tip of trunk, then
+    //      `jj git fetch` + `gt sync` + the import step pulled
+    //      that down. The local child bookmark is now sitting
+    //      on top of trunk (the OLD parent commit is no longer
+    //      an ancestor of the child).
+    //   3. `orphan_rebase_phase` runs with `pre.normal` still
+    //      remembering the OLD parent position. It sees the
+    //      parent in `deleted`, fires the orphan-rebase path,
+    //      and builds the rebase revset
+    //      `roots((OLD-parent..child) ~ ::trunk)`.
+    //
+    // Before this fix, two things went wrong:
+    //   a. The revset was `roots(OLD-parent..child)` without the
+    //      `~ ::trunk` carve-out, so it swept in every merge
+    //      commit on trunk between OLD-parent and the new tip.
+    //   b. Even with the carve-out, attempting the rebase is
+    //      semantically a no-op (the bookmark is already on
+    //      trunk) and the action log shouldn't surface a
+    //      misleading "rebased onto main" message.
+    //
+    // The fix: late-check via `is_ancestor(OLD-parent, child)`.
+    // When false, skip the rebase entirely and emit
+    // `OrphanRebaseNoOpAlreadyOnTrunk` so the user sees that
+    // the cleanup noticed the situation and chose not to act.
+    if !jj_available() {
+        eprintln!("skipping: jj not on PATH");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    jj(cwd, &["git", "init", "--colocate"]);
+    jj(
+        cwd,
+        &["config", "set", "--repo", "user.email", "test@example.com"],
+    );
+    jj(cwd, &["config", "set", "--repo", "user.name", "Tester"]);
+    jj(cwd, &["describe", "-m", "root"]);
+    jj(cwd, &["bookmark", "create", "main", "-r", "@"]);
+
+    // Build the pre-merge topology: main → OLD-parent → child.
+    jj(cwd, &["new", "-m", "OLD-parent (PR that will merge)"]);
+    let old_parent_commit = jj_capture(
+        cwd,
+        &[
+            "log",
+            "-r",
+            "@",
+            "--no-graph",
+            "-T",
+            "commit_id",
+            "--limit",
+            "1",
+        ],
+    )
+    .trim()
+    .to_owned();
+    jj(cwd, &["bookmark", "create", "old-parent", "-r", "@"]);
+    jj(cwd, &["new", "-m", "child PR commit"]);
+    jj(cwd, &["bookmark", "create", "child", "-r", "@"]);
+    jj(cwd, &["git", "export"]);
+
+    let jj_cli = JjCli::new(cwd.to_path_buf());
+
+    // Snapshot the pre-fetch state — this remembers OLD-parent
+    // at `old_parent_commit` as `child`'s parent.
+    let opts = jj_gt::cleanup::FetchOpts {
+        remote: "origin".into(),
+        trunk: "main".into(),
+        no_backfill: true,
+        no_rebase: false,
+        no_gtmq_prune: true,
+        ..jj_gt::cleanup::FetchOpts::default()
+    };
+    let pre_all = jj_gt::jj::list_local_bookmarks(&jj_cli).unwrap();
+    let (gtmq_pre, normal_pre): (Vec<_>, Vec<_>) = pre_all
+        .into_iter()
+        .partition(|b| b.name.starts_with("gtmq_"));
+    let pre = jj_gt::cleanup::snapshot_pre_fetch_with_prs(
+        &jj_cli,
+        &opts,
+        gtmq_pre,
+        normal_pre,
+        Vec::new(),
+    )
+    .unwrap();
+
+    // Sanity: the snapshot recorded child → old-parent.
+    let child_parent =
+        pre.stacked
+            .iter()
+            .find(|sb| sb.name == "child")
+            .map(|sb| match &sb.parent {
+                jj_gt::stack::BookmarkOrTrunk::Bookmark(p) => p.as_str(),
+                jj_gt::stack::BookmarkOrTrunk::Trunk => "main",
+            });
+    assert_eq!(
+        child_parent,
+        Some("old-parent"),
+        "test prereq: pre-fetch snapshot should record child → old-parent; got {child_parent:?}",
+    );
+
+    // Simulate the post-fetch state:
+    //   - main advances to a NEW commit (PR #71 merge + an
+    //     unrelated PR #70 commit on top — the immutable trunk
+    //     content that the revset bug used to sweep in).
+    //   - old-parent gets deleted (its branch is gone on origin).
+    //   - child gets moved forward onto the new tip of trunk
+    //     (Graphite's pre-merge rebase + the import step).
+    //
+    // The key shape: `child` is NOT a descendant of
+    // `old_parent_commit` anymore. The is_ancestor check should
+    // return false → emit OrphanRebaseNoOpAlreadyOnTrunk.
+
+    // Move main to a new commit (simulating PR #71's merge +
+    // any commits pushed to main while child was in review).
+    jj(
+        cwd,
+        &["new", "main", "-m", "trunk move (PR #70 + PR #71 merges)"],
+    );
+    let new_trunk_commit = jj_capture(
+        cwd,
+        &[
+            "log",
+            "-r",
+            "@",
+            "--no-graph",
+            "-T",
+            "commit_id",
+            "--limit",
+            "1",
+        ],
+    )
+    .trim()
+    .to_owned();
+    jj(
+        cwd,
+        &["bookmark", "set", "main", "-r", "@", "--allow-backwards"],
+    );
+
+    // Move child to a new commit on top of new trunk (Graphite
+    // pre-merge rebase + import).
+    jj(cwd, &["new", "main", "-m", "child PR commit (rebased)"]);
+    jj(
+        cwd,
+        &["bookmark", "set", "child", "-r", "@", "--allow-backwards"],
+    );
+
+    // Delete old-parent locally (mirrors the fetch-side deletion).
+    jj(cwd, &["bookmark", "delete", "old-parent"]);
+
+    // Verify the fixture matches the bug shape: child is NOT a
+    // descendant of old_parent_commit.
+    let workspace_root = cwd;
+    let is_anc = jj_gt::jj::is_ancestor(
+        workspace_root,
+        &old_parent_commit,
+        &jj_gt::jj::resolve_commit_id(&jj_cli, "child").unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !is_anc,
+        "fixture intent: child should NOT be a descendant of old_parent_commit after the simulated fetch; \
+         {old_parent_commit} is_ancestor of child = true (this means the test isn't reproducing the bug)",
+    );
+
+    let post = jj_gt::cleanup::snapshot_post_fetch(&jj_cli).unwrap();
+
+    let mut actions: Vec<(jj_gt::jj::LocalBookmark, jj_gt::cleanup::CleanupAction)> = Vec::new();
+    jj_gt::cleanup::orphan_rebase_phase(&jj_cli, &pre, &post, &opts, &mut actions).unwrap();
+
+    // The phase MUST emit the no-op action (not Rebased, not
+    // RebaseConflicted, not RebaseDeferredForConflict — the
+    // bookmark didn't need touching).
+    let child_action = actions
+        .iter()
+        .find(|(b, _)| b.name == "child")
+        .map(|(_, a)| a.clone())
+        .expect("phase should emit an action for child");
+    assert!(
+        matches!(
+            child_action,
+            jj_gt::cleanup::CleanupAction::OrphanRebaseNoOpAlreadyOnTrunk { .. }
+        ),
+        "expected OrphanRebaseNoOpAlreadyOnTrunk; got {child_action:?}",
+    );
+
+    // And the bookmark should still be on its rebased position
+    // (no further mutation happened).
+    let post_child = jj_gt::jj::resolve_commit_id(&jj_cli, "child").unwrap();
+    let post_child_parent = jj_capture(
+        cwd,
+        &[
+            "log",
+            "-r",
+            "child-",
+            "--no-graph",
+            "-T",
+            "commit_id",
+            "--limit",
+            "1",
+            "--ignore-working-copy",
+        ],
+    )
+    .trim()
+    .to_owned();
+    assert_eq!(
+        post_child_parent, new_trunk_commit,
+        "post-phase: child should still be parented on new_trunk_commit (no rebase happened); \
+         got parent {post_child_parent}, expected {new_trunk_commit}",
+    );
+
+    // And no conflicts in the workspace.
+    assert_eq!(
+        jj_gt::jj::count_conflicts_in(&jj_cli, "all()").unwrap(),
+        0,
+        "post-phase: no conflicts should remain",
+    );
+
+    let _ = post_child; // pin variable for clarity
 }

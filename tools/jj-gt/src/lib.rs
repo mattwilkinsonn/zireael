@@ -1052,6 +1052,12 @@ fn action_to_row(
                 "rebased onto {onto} (parent `{prev_parent}` was removed earlier in fetch/sync cleanup)"
             ),
         ),
+        CleanupAction::OrphanRebaseNoOpAlreadyOnTrunk { prev_parent } => (
+            ui::ActionStatus::Ok,
+            format!(
+                "parent `{prev_parent}` was removed earlier in fetch/sync cleanup but the bookmark was already advanced past it (gt sync / pre-merge rebase); no further rebase needed"
+            ),
+        ),
         CleanupAction::RebaseDeferredForConflict {
             onto,
             prev_parent,
