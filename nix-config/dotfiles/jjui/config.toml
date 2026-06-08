@@ -2,7 +2,23 @@
 template = "builtin_log_compact"
 # Single line: jjui's TOML reader doesn't strip leading whitespace from
 # triple-quoted strings, so a multi-line revset breaks parsing.
-revset = """present(@) | bookmarks("main") | ((bookmarks("main")..(bookmarks() | @)) & (author("matt@sealedsecurity.com") | author("mattwilki17@gmail.com"))) | parents(roots((bookmarks("main")..(bookmarks() | @)) & (author("matt@sealedsecurity.com") | author("mattwilki17@gmail.com"))))"""
+#
+# Three intentionally-separate sets unioned together:
+#   1. `working_copies()` — `@` of every workspace sharing this
+#      `.jj/`. Marker for "another agent is parked here"; needed
+#      so the log shows sibling workspaces as standalone points.
+#   2. `bookmarks()` — every bookmark as a LEAF (no range
+#      expansion). Other workspaces' bookmark tips are visible,
+#      but the commits BETWEEN them stay hidden.
+#   3. `(bookmarks("main")..@) & (author(me))` — chain from
+#      trunk to MY current `@`. This is the only range
+#      expression; anchoring on `@` (current workspace only,
+#      not `bookmarks()`) keeps sibling workspaces' in-flight
+#      chains from leaking into my log.
+#
+# `parents(roots(...))` adds the trunk-side parent of my chain
+# so the log displays the connection back to main.
+revset = """working_copies() | bookmarks() | ((bookmarks("main")..@) & (author("matt@sealedsecurity.com") | author("mattwilki17@gmail.com"))) | parents(roots((bookmarks("main")..@) & (author("matt@sealedsecurity.com") | author("mattwilki17@gmail.com"))))"""
 
 [[actions]]
 name = "jj-gt-submit-selected"
