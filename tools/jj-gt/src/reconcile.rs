@@ -330,6 +330,11 @@ pub fn run_reconcile_subcommand(
     let workspace_root = jj.workspace_root().map_err(JjGtError::Hooks)?;
     let trunk = crate::status::resolve_trunk(&workspace_root, trunk.as_deref())?;
 
+    // Step 0a: catch up the workspace before any subprocess that
+    // would otherwise fail with "working copy is stale" — see
+    // `crate::maybe_catch_up_workspace` for the rationale.
+    crate::maybe_catch_up_workspace(jj, verbosity)?;
+
     let opts = ReconcileOpts {
         remote,
         trunk: trunk.clone(),

@@ -176,6 +176,100 @@ pub fn shelter_uncommitted_edits(jj: &JjCli) -> Result<()> {
     Ok(())
 }
 
+/// Outcome of [`ensure_workspace_current`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateStaleOutcome {
+    /// `jj workspace update-stale` ran and reported nothing to do —
+    /// `@` was already current relative to the op log.
+    NotStale,
+    /// `@` moved to catch up with op-log changes made by another
+    /// workspace (or by external tooling). Carries the
+    /// before/after change-ids so the caller can surface a
+    /// one-liner like "caught up: @ moved from <pre> to <post>".
+    Updated {
+        from_change_id: String,
+        to_change_id: String,
+    },
+    /// The before/after change-id probe couldn't read `@` cleanly,
+    /// so we can't tell whether the update moved anything. The
+    /// `jj workspace update-stale` call itself succeeded — if it
+    /// hadn't, the caller would have seen an `Err`. This variant
+    /// is the explicit "we tried but the signal was muddy" answer,
+    /// distinct from `NotStale` which means "we know nothing moved."
+    CouldNotVerify,
+}
+
+/// `jj workspace update-stale` — catch this workspace up with any
+/// op-log moves made by sibling workspaces sharing the same
+/// `.jj/`. Issue #67 rationale: the agent + supervisor model
+/// shares one `.jj/` across N workspaces, so the "working copy
+/// stale" check that fires when one workspace's op log advances
+/// past another's is friction by default. Auto-running this at
+/// the top of every jj-gt command absorbs the friction without
+/// silently swallowing the signal — see the caller, which logs
+/// the catch-up explicitly.
+///
+/// `update-stale` is idempotent — when nothing is stale it prints
+/// `Attempted recovery, but the working copy is not stale` and
+/// exits 0. We detect "did anything move?" by comparing `@`'s
+/// change-id before and after the call.
+///
+/// Set `JJ_GT_SKIP_UPDATE_STALE=1` to bypass the call entirely
+/// (escape hatch for the rare debug case where you need jj's
+/// staleness error to surface). Any other value — `0`, `false`,
+/// empty, `no` — leaves the call enabled, matching the convention
+/// the rest of the codebase uses for opt-in env-var flags.
+pub fn ensure_workspace_current(jj: &JjCli) -> Result<UpdateStaleOutcome> {
+    if std::env::var("JJ_GT_SKIP_UPDATE_STALE").as_deref() == Ok("1") {
+        return Ok(UpdateStaleOutcome::NotStale);
+    }
+
+    // Capture @ before the update so we can detect a move. Read with
+    // --ignore-working-copy so we don't trigger a snapshot pass that
+    // would itself try to materialize a stale @.
+    let pre = current_change_id_ignore_stale(jj).ok();
+
+    let _ = jj_run(jj, &["workspace", "update-stale"])?;
+
+    let post = current_change_id_ignore_stale(jj).ok();
+
+    match (pre, post) {
+        (Some(p), Some(q)) if p == q => Ok(UpdateStaleOutcome::NotStale),
+        (Some(p), Some(q)) => Ok(UpdateStaleOutcome::Updated {
+            from_change_id: p,
+            to_change_id: q,
+        }),
+        // Either probe failed to read `@`. `update-stale` itself
+        // succeeded (we'd have returned `Err` above otherwise), so
+        // we don't know whether anything moved. Surface that
+        // explicitly via `CouldNotVerify` rather than papering
+        // over it with `NotStale`, which the wrapper would render
+        // as "already current" — a false-negative for the user.
+        _ => Ok(UpdateStaleOutcome::CouldNotVerify),
+    }
+}
+
+/// Read `@`'s change id with `--ignore-working-copy` so a stale
+/// working copy doesn't poison the call. Used only by
+/// [`ensure_workspace_current`] for its before/after probe.
+fn current_change_id_ignore_stale(jj: &JjCli) -> Result<String> {
+    let out = jj_run(
+        jj,
+        &[
+            "log",
+            "-r",
+            "@",
+            "--no-graph",
+            "-T",
+            "change_id",
+            "--limit",
+            "1",
+            "--ignore-working-copy",
+        ],
+    )?;
+    Ok(out.trim().to_owned())
+}
+
 /// `jj git import --ignore-working-copy`. Run after external tooling
 /// (gt sync) mutates refs on the git side so jj's view catches up.
 pub fn git_import(jj: &JjCli) -> Result<()> {
