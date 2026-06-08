@@ -84,6 +84,21 @@ pub enum CleanupAction {
     /// linear. The previous parent name is preserved for the user
     /// to see why the rebase happened.
     Rebased { onto: String, prev_parent: String },
+    /// Parent was deleted, but by the time `orphan_rebase_phase`
+    /// ran the live bookmark was no longer a descendant of the
+    /// deleted parent's commit — the most common cause is
+    /// Graphite's pre-merge rebase + the import step pulling
+    /// the bookmark forward onto a new trunk tip, but any
+    /// mutation that moves the bookmark off the deleted
+    /// parent's history (manual `jj bookmark set`, an out-of-
+    /// band `gt move`, …) routes here too. Emitted instead of
+    /// `Rebased` so the action log distinguishes "we rebased
+    /// it" from "we noticed it was already where it should be."
+    /// Also acts as a guard rail against the
+    /// `parent_commit..bookmark` revset accidentally sweeping
+    /// in immutable trunk commits when the deleted parent's
+    /// commit is no longer reachable from the bookmark.
+    OrphanRebaseNoOpAlreadyAdvancedPastParent { prev_parent: String },
     /// Same trigger as `Rebased`, but the rebase produced
     /// conflicts. We rolled it back via `jj op restore` so the
     /// user's working state isn't littered with conflict markers
@@ -1775,8 +1790,50 @@ pub fn orphan_rebase_phase(
             .find(|b| b.name == prev_parent)
             .map(|b| b.commit_id.clone());
 
+        // Late-check: did `gt sync` / the import step already
+        // move this bookmark past the deleted parent? When the
+        // parent's PR merges, Graphite's pre-merge rebase pushes
+        // the child bookmark forward onto the new tip of trunk;
+        // the subsequent `jj git fetch` + import pulls that down,
+        // so by the time orphan_rebase_phase runs the live
+        // bookmark is no longer anchored to the deleted parent.
+        // Rebasing it again is at best a no-op and at worst (if
+        // the live position is on top of new trunk while the
+        // deleted parent is now orphan-history) sweeps in
+        // immutable trunk commits via the `parent_commit..bookmark`
+        // range — `jj rebase` rejects the whole operation and
+        // the action log surfaces a "Commit ... is immutable"
+        // error the user has no way to act on.
+        //
+        // Skip the rebase when the deleted parent isn't an
+        // ancestor of the live bookmark anymore.
+        if let Some(parent_oid) = parent_commit.as_deref() {
+            match jj::is_ancestor(jj.cwd(), parent_oid, &local.commit_id) {
+                Ok(true) => { /* still anchored — proceed with rebase */ }
+                Ok(false) => {
+                    actions.push((
+                        local,
+                        CleanupAction::OrphanRebaseNoOpAlreadyAdvancedPastParent { prev_parent },
+                    ));
+                    continue;
+                }
+                Err(e) => {
+                    // is_ancestor failed (transient git error,
+                    // GC'd SHA, …). Falling back to the rebase
+                    // path is the safe call — better to attempt
+                    // and surface the rebase error than to skip
+                    // a legitimate orphan rebase. Log the
+                    // classification failure for the operator.
+                    tracing::warn!(
+                        "jj-gt: couldn't classify whether `{name}` was already advanced past deleted parent ({e}); attempting orphan-rebase anyway",
+                        name = sb.name,
+                    );
+                }
+            }
+        }
+
         let rebase_revset = match parent_commit.as_deref() {
-            Some(commit) => build_orphan_rebase_revset(commit, &sb.name),
+            Some(commit) => build_orphan_rebase_revset(commit, &sb.name, &opts.trunk),
             None => {
                 // Defensive fallback. We snapshotted pre.normal
                 // from list_local_bookmarks ourselves so a miss
@@ -1897,7 +1954,7 @@ pub fn orphan_rebase_phase(
     // here we'd re-rebase, which is at best wasteful and at
     // worst introduces a fresh conflict.)
     if !sideways.is_empty() {
-        reanchor_children_of_moved_parents(jj, pre, actions, &sideways, &conflicted)?;
+        reanchor_children_of_moved_parents(jj, pre, actions, &sideways, &conflicted, &opts.trunk)?;
     }
 
     Ok(())
@@ -1918,6 +1975,7 @@ fn reanchor_children_of_moved_parents(
     actions: &mut Vec<(LocalBookmark, CleanupAction)>,
     sideways: &std::collections::BTreeMap<String, (String, String)>,
     conflicted: &BTreeSet<String>,
+    trunk: &str,
 ) -> Result<()> {
     // Re-read post state since the deleted-parent loop above may
     // have mutated bookmark positions.
@@ -2017,7 +2075,7 @@ fn reanchor_children_of_moved_parents(
         // is divergent, so a name-based revset would either
         // include unrelated commits or miss commits the user
         // had on top.
-        let rebase_revset = build_orphan_rebase_revset(pre_parent_commit, &sb.name);
+        let rebase_revset = build_orphan_rebase_revset(pre_parent_commit, &sb.name, trunk);
         let dest = post_parent_commit.clone();
 
         let pre_rebase_op = match jj::current_op_id(jj) {
@@ -2330,19 +2388,25 @@ pub fn plan_orphan_rebase(
 /// as a "file appeared from nowhere" rebase conflict when those
 /// stranded parents are the ones that created the file.
 ///
-/// `roots(<parent_commit>..<bookmark>)` reads as: "find the
-/// lowest-level commits in the half-open range (parent_commit,
-/// bookmark]." Concretely, that's the first commit above the
-/// deleted parent. `jj rebase -s <root>` then includes that root
-/// plus every descendant up to and including the bookmark — moving
-/// the whole stack-entry as one unit.
+/// `roots((<parent_commit>..<bookmark>) ~ ::<trunk>)` reads as:
+/// "find the lowest-level commits in the half-open range
+/// (parent_commit, bookmark], EXCLUDING anything already on
+/// trunk." The trunk exclusion matters when the deleted parent
+/// was a now-orphaned commit (the parent's PR merged + Graphite
+/// pre-merge rebased the bookmark onto the new tip of trunk).
+/// In that scenario, naive `parent_commit..bookmark` sweeps in
+/// every commit between OLD-parent and NEW-trunk-tip — including
+/// every immutable merge commit on trunk — and `jj rebase`
+/// rejects the whole operation with `Commit ... is immutable`.
+/// Subtracting `::trunk` keeps the revset honest: it now resolves
+/// to just the commits unique to the local bookmark chain.
 ///
 /// We deliberately use the commit id (not the bookmark name) for
 /// the lower bound because the parent's bookmark was deleted by
 /// `gt sync` and no longer resolves as a name; the commit object
 /// itself remains addressable until jj's garbage collector runs.
-pub fn build_orphan_rebase_revset(parent_commit_id: &str, bookmark: &str) -> String {
-    format!("roots({parent_commit_id}..{bookmark})")
+pub fn build_orphan_rebase_revset(parent_commit_id: &str, bookmark: &str, trunk: &str) -> String {
+    format!("roots(({parent_commit_id}..{bookmark}) ~ ::{trunk})")
 }
 
 #[cfg(test)]
@@ -2580,12 +2644,12 @@ mod tests {
 
     #[test]
     fn build_orphan_rebase_revset_uses_roots_of_half_open_range() {
-        // The revset must include the bookmark name in its tip slot
-        // and the parent commit id in its lower-bound slot, wrapped
-        // by `roots(...)` so `jj rebase -s` picks up the lowest
-        // commit above the deleted parent.
-        let revset = build_orphan_rebase_revset("abc123def456", "sea-501--thor");
-        assert_eq!(revset, "roots(abc123def456..sea-501--thor)");
+        // The revset must include the bookmark name in its tip slot,
+        // the parent commit id in its lower-bound slot, and exclude
+        // `::trunk` so an orphaned-parent + new-main scenario can't
+        // sweep in immutable trunk commits.
+        let revset = build_orphan_rebase_revset("abc123def456", "sea-501--thor", "main");
+        assert_eq!(revset, "roots((abc123def456..sea-501--thor) ~ ::main)");
     }
 
     #[test]
@@ -2594,8 +2658,17 @@ mod tests {
         // care about length but the test pins that no truncation
         // happens.
         let full_oid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let revset = build_orphan_rebase_revset(full_oid, "upper");
-        assert_eq!(revset, format!("roots({full_oid}..upper)"));
+        let revset = build_orphan_rebase_revset(full_oid, "upper", "main");
+        assert_eq!(revset, format!("roots(({full_oid}..upper) ~ ::main)"));
+    }
+
+    #[test]
+    fn build_orphan_rebase_revset_threads_custom_trunk() {
+        // Repos with a `trunk` name other than `main` should still
+        // have their trunk excluded — the `opts.trunk` plumbing
+        // matters.
+        let revset = build_orphan_rebase_revset("deadbeef", "feature", "master");
+        assert_eq!(revset, "roots((deadbeef..feature) ~ ::master)");
     }
 
     /// `is_ancestor` oracle for classify_rewind tests. Pin a small DAG
