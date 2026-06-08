@@ -92,11 +92,15 @@ All three can be reconfigured by running `jj-hp init` again.
 | Action | Default key | What it does |
 | --- | --- | --- |
 | `jj-hp-push-selected` | `x p` | Push the bookmark at the focused commit (`jj-hp push -r context.commit_id()`) |
-| `jj-hp-push` | `x P` | Push every local bookmark (`jj-hp push`) |
+| `jj-hp-push` | `x P` | Push every local bookmark across the repo (`jj-hp push --all`) |
 
-Lowercase is the more-frequent case (selected). The 2026-05 swap moved
-the keys to this layout; `jj-hp init` migrates pre-swap configs in
-place — user-customized key sequences are left alone.
+Lowercase is the per-cursor case (just the focused bookmark);
+uppercase is the "push everything" case. The 2026-05 swap moved
+the keys to this layout and 2026-06 broadened `x P` to use
+`--all` (jjui's cursor moves freely without `@`, so an
+@-anchored "push everything" key never matched intent).
+`jj-hp init` migrates older configs in place — user-customized
+key sequences and lua bodies are left alone.
 
 If you'd rather hand-edit `~/.config/jjui/config.toml` instead of
 running `jj-hp init`, append:
@@ -112,7 +116,7 @@ lua = """
 [[actions]]
 name = "jj-hp-push"
 lua = """
-  jj_async("util", "exec", "--", "jj-hp", "push")
+  jj_async("util", "exec", "--", "jj-hp", "push", "--all")
   revisions.refresh()
 """
 
@@ -120,13 +124,13 @@ lua = """
 action = "jj-hp-push-selected"
 seq = ["x", "p"]
 scope = "revisions"
-desc = "jj-hp push selected bookmark(s)"
+desc = "jj-hp push selected bookmark"
 
 [[bindings]]
 action = "jj-hp-push"
 seq = ["x", "P"]
 scope = "revisions"
-desc = "jj-hp push"
+desc = "jj-hp push every bookmark"
 ```
 
 The `revisions.refresh()` after each `jj_async` repaints jjui's

@@ -87,10 +87,10 @@ pub fn retrack_adjacent_diverged(
     jj: &jj::JjCli,
     workspace_root: &Path,
     opts: &ReconcileOpts,
+    candidates: &std::collections::BTreeSet<String>,
     skip: &std::collections::BTreeSet<String>,
 ) -> Result<(usize, Vec<String>)> {
-    let tracked = jj::list_tracked_bookmarks_on_remote(jj, &opts.remote).unwrap_or_default();
-    let adjacent = filter_adjacent_targets(&tracked, &opts.trunk, skip);
+    let adjacent = filter_adjacent_targets(candidates, &opts.trunk, skip);
 
     if adjacent.is_empty() {
         return Ok((0, Vec::new()));
@@ -225,10 +225,19 @@ pub fn push_rebased_tips(
 /// tips. Used by both `submit_cmd` (pre-submit step) and the
 /// standalone `jj-gt reconcile` subcommand.
 ///
-/// `stack_bookmarks` lets the caller seed the "already handled"
-/// set for the adjacent step. For the submit path it's
-/// `stacked_sorted`; for the standalone `jj-gt reconcile` it's
-/// empty (process every tracked bookmark).
+/// `stack_bookmarks` is the set the caller is operating on. Used
+/// as the `skip` filter for the adjacent step — these are the
+/// bookmarks the caller has already handled (typically via an
+/// in-stack `gt track` loop) and shouldn't be re-tracked.
+///
+/// `adjacent_candidates` is the pool the adjacent step pulls
+/// from. For the submit path it's `list_tracked_bookmarks_on_remote`
+/// (every tracked bookmark on the remote — when the user submits a
+/// stack, we also want to re-track any unrelated bookmarks that
+/// drifted). For the standalone `jj-gt reconcile` it's the
+/// focused active stack — reconcile shouldn't touch unrelated
+/// stacks the user didn't ask about. When `candidates - skip` is
+/// empty the adjacent step no-ops.
 ///
 /// `push_bookmarks` lets the caller seed the set of bookmarks to
 /// `jj git push`. For the submit path it's `stacked_sorted` (push
@@ -240,6 +249,7 @@ pub fn reconcile(
     workspace_root: &Path,
     opts: &ReconcileOpts,
     stack_bookmarks: &[String],
+    adjacent_candidates: &std::collections::BTreeSet<String>,
     push_bookmarks: &[String],
     verbosity: ui::Verbosity,
 ) -> Result<ReconcileReport> {
@@ -247,7 +257,7 @@ pub fn reconcile(
 
     let adjacent_step = ui::Step::start("Re-tracking adjacent diverged bookmarks", verbosity);
     let (adjacent_retracked, adjacent_errors) =
-        match retrack_adjacent_diverged(jj, workspace_root, opts, &skip) {
+        match retrack_adjacent_diverged(jj, workspace_root, opts, adjacent_candidates, &skip) {
             Ok(out) => out,
             Err(e) => {
                 adjacent_step.fail(&format!("{e}"), None);
@@ -343,8 +353,16 @@ pub fn run_reconcile_subcommand(
 
     // Resolve the "active" stack — bookmarks on the @-ancestor
     // chain between trunk and @. Same shape `jj-gt log` uses.
+    //
+    // Reconcile is by definition a focused-stack operation: it
+    // re-tracks parents adjacent to the active stack and (with
+    // `--push`) pushes that stack to the remote. The 2026-06
+    // `--all` broadening made `BookmarkArgs { all: true, ... }`
+    // mean "every stack in the repo," which would silently widen
+    // reconcile to unrelated stacks. The bareword default
+    // (`all: false`, no `-b`/`-r`/`-c`) is the correct
+    // focused-stack selector for resolve_bookmarks.
     let args = crate::cli::BookmarkArgs {
-        all: true,
         remote: opts.remote.clone(),
         ..crate::cli::BookmarkArgs::default()
     };
@@ -352,13 +370,39 @@ pub fn run_reconcile_subcommand(
 
     ui::section(&format!("Reconciling against {}", opts.remote));
 
+    // Standalone reconcile is focused: the adjacent step's
+    // candidate pool is the focused stack itself, NOT every
+    // tracked bookmark on the remote. The submit path passes
+    // the broader tracked pool because submit is by definition a
+    // multi-stack operation.
+    //
+    // `stack_bookmarks` (the `skip` set inside `reconcile`) MUST
+    // be empty here even though the standalone command does
+    // "know" the focused stack: the standalone path has no
+    // in-stack `gt track` loop preceding `reconcile`, so nothing
+    // has been handled yet. Passing `selected` as both
+    // `stack_bookmarks` AND `adjacent_candidates` collapses
+    // `skip == candidates`, which empties the adjacent
+    // re-track target set and silently no-ops the focused
+    // stack's parent-metadata repair.
+    let adjacent_candidates: std::collections::BTreeSet<String> =
+        selected.iter().cloned().collect();
+
     // Push the active stack only when the user opted in. Reconcile
     // without `--push` is the "just re-track parents" shape; with
     // `--push` it also force-with-leases rebased SHAs to the
     // remote.
     let push_set: Vec<String> = if push { selected.clone() } else { Vec::new() };
 
-    let _ = reconcile(jj, &workspace_root, &opts, &selected, &push_set, verbosity)?;
+    let _ = reconcile(
+        jj,
+        &workspace_root,
+        &opts,
+        &[],
+        &adjacent_candidates,
+        &push_set,
+        verbosity,
+    )?;
     Ok(())
 }
 

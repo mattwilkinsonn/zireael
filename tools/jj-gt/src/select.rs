@@ -6,6 +6,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::cleanup::{default_gtmq_prefixes_owned, is_gtmq_branch};
 use crate::cli::BookmarkArgs;
 use crate::error::Result;
 use crate::jj::{JjCli, bookmarks_in_revset};
@@ -13,20 +14,37 @@ use crate::jj::{JjCli, bookmarks_in_revset};
 /// Resolve the user's bookmark-selection flags into a concrete list of
 /// local bookmark names.
 ///
-/// Precedence (matches `jj git push`):
+/// Precedence (matches `jj git push` shape, with one deliberate
+/// divergence on `--all` for the jjui-cursor workflow — see below):
 ///
-/// 1. `--all`: every local bookmark in `bookmarks() & ::@ & trunk..`.
+/// 1. `--all`: every local bookmark on ANY stack across the repo
+///    (`bookmarks() & {trunk}..`), with trunk + `gtmq_*` queue
+///    branches filtered out. This is the "submit every stack I'm
+///    working on" shape `x S` in jjui wants — pre-jjui code anchored
+///    `--all` at `@`, but jjui's cursor moves freely without `@`, so
+///    an `@`-anchored "all" no longer matches user intent.
 /// 2. `--tracked`: every local bookmark with a remote counterpart on
 ///    `--remote`.
 /// 3. Otherwise, the union of `-b` literals + `-r` / `-c` revset
 ///    expansions.
 /// 4. If the result is empty AND no flag was given, fall back to
 ///    `jj git push`'s default: bookmarks at `@` or its ancestors that
-///    need pushing.
+///    need pushing. (This is what `--all` used to mean and is the
+///    natural "operate on the focused stack" shape `jj-gt submit`
+///    bareword still provides.)
 pub fn resolve_bookmarks(jj: &JjCli, args: &BookmarkArgs, trunk: &str) -> Result<Vec<String>> {
     if args.all {
-        let revset = format!("bookmarks() & ::@ & {trunk}..");
-        return Ok(dedup_in_order(bookmarks_in_revset(jj, &revset)?));
+        // Every local bookmark on a non-trunk commit, across every
+        // stack in the repo. Filter trunk + gtmq_* queue branches so
+        // the caller gets the "real" set of work bookmarks.
+        let revset = format!("bookmarks() & {trunk}..");
+        let raw = bookmarks_in_revset(jj, &revset)?;
+        let gtmq_prefixes = default_gtmq_prefixes_owned();
+        let filtered = raw
+            .into_iter()
+            .filter(|name| !is_gtmq_branch(name, &gtmq_prefixes))
+            .collect();
+        return Ok(dedup_in_order(filtered));
     }
 
     if args.tracked {
@@ -58,8 +76,9 @@ pub fn resolve_bookmarks(jj: &JjCli, args: &BookmarkArgs, trunk: &str) -> Result
     if out.is_empty() && !any_flag_set(args) {
         // `jj git push` default: bookmarks at @ or its ancestors that
         // haven't been pushed yet. We approximate as "bookmarks on the
-        // @-ancestor chain between trunk and @" — that's the most
-        // common interpretation and matches what `--all` does.
+        // @-ancestor chain between trunk and @" — the focused-stack
+        // shape `x S` used to do (before `--all` got broadened to
+        // cover every stack).
         let revset = format!("bookmarks() & ::@ & {trunk}..");
         let fallback = bookmarks_in_revset(jj, &revset)?;
         return Ok(dedup_in_order(fallback));
