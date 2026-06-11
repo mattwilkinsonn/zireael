@@ -18,80 +18,92 @@
 # clang, gnumake + PKG_CONFIG_PATH) live in `shared/linux-build-deps.nix`
 # — Mac uses brew + Xcode CLI Tools for the equivalent.
 {
-  home.packages = with pkgs; [
-    # Language toolchains + package managers
-    uv # Python package manager
-    bun # JS runtime & package manager
-    fnm # fast node manager
-    rustup # toolchain manager (sets up rustc + cargo on demand)
+  home.packages =
+    with pkgs;
+    [
+      # Language toolchains + package managers
+      uv # Python package manager
+      bun # JS runtime & package manager
+      fnm # fast node manager
+      rustup # toolchain manager (sets up rustc + cargo on demand)
 
-    # Rust ecosystem helpers
-    # `lib.hiPrio` so the standalone rust-analyzer wins over rustup's bundled
-    # rust-analyzer shim (rustup also ships `bin/rust-analyzer` and they collide
-    # in the same profile otherwise).
-    (lib.hiPrio rust-analyzer)
-    cargo-edit # cargo add/rm/upgrade
-    cargo-nextest # faster test runner
-    cargo-binstall # install prebuilt crate binaries when nixpkgs lacks them
-    cargo-update # cargo install-update
-    sccache # compiler cache (referenced by RUSTC_WRAPPER below)
-    starship-jj # jj VCS status for the starship prompt (via nixpkgs-unstable overlay)
+      # Rust ecosystem helpers
+      # `lib.hiPrio` so the standalone rust-analyzer wins over rustup's bundled
+      # rust-analyzer shim (rustup also ships `bin/rust-analyzer` and they collide
+      # in the same profile otherwise).
+      (lib.hiPrio rust-analyzer)
+      cargo-edit # cargo add/rm/upgrade
+      cargo-nextest # faster test runner
+      cargo-binstall # install prebuilt crate binaries when nixpkgs lacks them
+      cargo-update # cargo install-update
+      sccache # compiler cache (referenced by RUSTC_WRAPPER below)
+      starship-jj # jj VCS status for the starship prompt (via nixpkgs-unstable overlay)
 
-    # Other dev tools
-    biome # JS/TS linter & formatter
-    protobuf # protocol buffers
-    awscli2 # AWS CLI v2
-    pulumi-bin # Pulumi IaC
-    wasmtime # WASM runtime
-    actionlint # GitHub Actions linter
-    markdownlint-cli2 # markdown linter (CI gate for ~/notes/*.md and tracker docs)
-    # Graphite CLI (`gt`) — stacked-PR queue layer on top of github.
-    # Evaluated as a replacement for GitHub's merge queue (SEA-557:
-    # GH's queue doesn't truly batch; Graphite does). Lives in
-    # dev.nix not home.nix because Pis don't ship PRs. Unfree (no
-    # license specified upstream); `nixpkgs.config.allowUnfree = true`
-    # already set in nixos/common.nix. One-time auth per host:
-    # `gt auth --token <token>` — token from 1Password (Dev vault),
-    # not yet automated via op-cli because gt auth is a one-time
-    # action and the token is durable.
-    graphite-cli
-    # Buildkite CLI (`bk`) — for triggering builds, viewing
-    # logs, and downloading artifacts from the terminal.
-    # Consume Buildkite via the GitHub App + per-pipeline
-    # orchestrator YAML (`.buildkite/pipelines/` in seal/), not
-    # self-hosted agents — so the agent binary is NOT included
-    # here. Auth is one-time per host: `bk configure` walks
-    # through an OAuth flow (token from
-    # https://buildkite.com/user/api-access-tokens; scopes
-    # `read_builds`, `read_pipelines`, `read_artifacts` cover
-    # the read-only inspection workflow; add `write_builds`
-    # only if you'll trigger builds locally).
-    buildkite-cli
-    # Nix / shell / toml linters — invoked by the hk pre-push hook
-    # (~/hk.pkl). Cheap to keep on dev boxes for one-off CLI use too.
-    deadnix # unused let bindings / function args in Nix
-    statix # anti-pattern lint for Nix (with-in-let, etc.)
-    shellcheck # shell script linter (invoked by hk pre-push)
-    shfmt # shell script formatter (read-only check mode in hk)
-    taplo # TOML formatter (read-only check mode in hk)
-    pkl # Apple Pkl CLI — hk's config language; required for `hk validate` etc.
-    llvm # LLVM toolchain
-    git-filter-repo # rewrite git history
-    nixd # Nix language server
+      # Other dev tools
+      biome # JS/TS linter & formatter
+      protobuf # protocol buffers
+      awscli2 # AWS CLI v2
+      pulumi-bin # Pulumi IaC
+      wasmtime # WASM runtime
+      actionlint # GitHub Actions linter
+      markdownlint-cli2 # markdown linter (CI gate for ~/notes/*.md and tracker docs)
+      # Graphite CLI (`gt`) — stacked-PR queue layer on top of github.
+      # Evaluated as a replacement for GitHub's merge queue (SEA-557:
+      # GH's queue doesn't truly batch; Graphite does). Lives in
+      # dev.nix not home.nix because Pis don't ship PRs. Unfree (no
+      # license specified upstream); `nixpkgs.config.allowUnfree = true`
+      # already set in nixos/common.nix. One-time auth per host:
+      # `gt auth --token <token>` — token from 1Password (Dev vault),
+      # not yet automated via op-cli because gt auth is a one-time
+      # action and the token is durable.
+      graphite-cli
+      # Buildkite CLI (`bk`) — for triggering builds, viewing
+      # logs, and downloading artifacts from the terminal.
+      # Consume Buildkite via the GitHub App + per-pipeline
+      # orchestrator YAML (`.buildkite/pipelines/` in seal/), not
+      # self-hosted agents — so the agent binary is NOT included
+      # here. Auth is one-time per host: `bk configure` walks
+      # through an OAuth flow (token from
+      # https://buildkite.com/user/api-access-tokens; scopes
+      # `read_builds`, `read_pipelines`, `read_artifacts` cover
+      # the read-only inspection workflow; add `write_builds`
+      # only if you'll trigger builds locally).
+      buildkite-cli
+      # Nix / shell / toml linters — invoked by the hk pre-push hook
+      # (~/hk.pkl). Cheap to keep on dev boxes for one-off CLI use too.
+      deadnix # unused let bindings / function args in Nix
+      statix # anti-pattern lint for Nix (with-in-let, etc.)
+      shellcheck # shell script linter (invoked by hk pre-push)
+      shfmt # shell script formatter (read-only check mode in hk)
+      taplo # TOML formatter (read-only check mode in hk)
+      pkl # Apple Pkl CLI — hk's config language; required for `hk validate` etc.
+      llvm # LLVM toolchain
+      git-filter-repo # rewrite git history
+      nixd # Nix language server
 
-    # AI / LLM tooling
-    codexPackage # OpenAI Codex CLI
-    coderabbitPackage # CodeRabbit CLI from numtide/llm-agents.nix
+      # AI / LLM tooling
+      codexPackage # OpenAI Codex CLI
+      coderabbitPackage # CodeRabbit CLI from numtide/llm-agents.nix
 
-    # Misc dev-machine utilities
-    rclone # Drive/Dropbox/etc remote sync (used by Berkeley Mono font activation)
-    zstd # compression — occasional CLI use
-    nmap # network scanner — occasional CLI use
-    poppler-utils # PDF CLI tooling (pdftotext, pdfinfo, ...)
+      # Misc dev-machine utilities
+      rclone # Drive/Dropbox/etc remote sync (used by Berkeley Mono font activation)
+      zstd # compression — occasional CLI use
+      nmap # network scanner — occasional CLI use
+      poppler-utils # PDF CLI tooling (pdftotext, pdfinfo, ...)
 
-    # TeX (cross-platform). ~1GB; bump to scheme-full if you need every package.
-    texlive.combined.scheme-medium
-  ];
+      # TeX (cross-platform). ~1GB; bump to scheme-full if you need every package.
+      texlive.combined.scheme-medium
+    ]
+    ++ lib.optionals pkgs.stdenv.isLinux [
+      # Filtered D-Bus session-bus proxy — seal's sandbox dispatcher
+      # (SEA-780) launches it per spawn so keyring-using CLIs
+      # (coderabbit, gh) get scoped Secret Service access inside the
+      # bwrap namespace. PATH resolution until seal's bundled-deps
+      # release embeds its own copy. Linux-only: bwrap (and thus the
+      # dbus proxy) is part of seal's Linux sandbox path; xdg-dbus-proxy
+      # has no Darwin build (meta.platforms is Linux-only in nixpkgs).
+      xdg-dbus-proxy
+    ];
 
   # Dev-tier shell additions. PATH entries for the toolchains we install
   # above, plus the RUSTC_WRAPPER export.
