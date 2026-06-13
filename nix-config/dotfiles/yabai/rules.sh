@@ -77,11 +77,10 @@ if [[ -n $laptop_bsp_space ]]; then
 fi
 
 # --- Always float -------------------------------------------------------
-# These are landed on the laptop stack by the catch-all above, then
+# Finder is landed on the laptop stack by the catch-all above, then
 # unmanaged here. Floating windows still appear on whatever space the
 # catch-all assigned, but yabai doesn't tile them.
 add_rule finder app="^Finder$" manage=off
-add_rule ghostty app="^Ghostty$" manage=off
 
 # Re-apply all rules to currently-open windows.
 yabai -m rule --apply 2>/dev/null || true

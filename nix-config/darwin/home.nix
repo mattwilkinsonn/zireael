@@ -16,7 +16,7 @@
 
   programs.zsh = {
     shellAliases = {
-      nix-switch = "sudo HOME=\"$HOME\" darwin-rebuild switch --flake \"$HOME/repos/zireael/nix-config#Matts-MacBook-Pro\" --show-trace";
+      nix-switch = "sudo HOME=\"$HOME\" /nix/var/nix/profiles/system/sw/bin/darwin-rebuild switch --flake \"$HOME/repos/zireael/nix-config#Matts-MacBook-Pro\" --show-trace";
     };
 
     profileExtra = lib.mkAfter ''

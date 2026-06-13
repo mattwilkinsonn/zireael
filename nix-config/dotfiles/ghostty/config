@@ -4,3 +4,6 @@ font-family = "IosevkaTerm Nerd Font"
 font-family = "Cascadia Code"
 font-size = 14
 shell-integration-features = "true"
+macos-option-as-alt = true
+keybind = alt+left=unbind
+keybind = alt+right=unbind
