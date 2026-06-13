@@ -128,7 +128,7 @@
       # `which zstd` resolves to the brew binary; the nixpkgs version still
       # ends up on Linux dev boxes via shared/dev.nix.
       "zstd"
-      "slp/krun/krunkit"
+      "libkrun/krun/krunkit"
       "asmvik/formulae/yabai"
       "asmvik/formulae/skhd"
     ];
