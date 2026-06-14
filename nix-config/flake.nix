@@ -138,6 +138,7 @@
           {
             home-manager.useGlobalPkgs = true;
             home-manager.useUserPackages = true;
+            home-manager.backupFileExtension = "hm-backup";
             home-manager.extraSpecialArgs = {
               codexPackage = inputs.codex-cli.packages.aarch64-darwin.codex;
               coderabbitPackage = inputs.llm-agents.packages.aarch64-darwin.coderabbit-cli;

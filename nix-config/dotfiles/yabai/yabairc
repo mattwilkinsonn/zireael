@@ -42,10 +42,14 @@ yabai -m signal --add event=display_added   action="$DISPLAY_SETUP && $RULES && 
 yabai -m signal --add event=display_removed action="$DISPLAY_SETUP && $RULES && $AW_LAYOUT"
 yabai -m signal --add event=display_moved   action="$DISPLAY_SETUP && $RULES && $AW_LAYOUT"
 
+# Ghostty uses native macOS tabs, which yabai sees as separate windows.
+# Reassert bsp when tabs are created/destroyed so the space does not drift.
+yabai -m signal --add app="^Ghostty$" event=window_created action="yabai -m space --layout bsp"
+yabai -m signal --add app="^Ghostty$" event=window_destroyed action="yabai -m space --layout bsp"
+
 # AW default layout: re-apply when one of the target apps launches or a new
 # window for it appears (script is idempotent + locked so this is cheap).
 yabai -m signal --add event=application_launched \
   action="case \"\$YABAI_PROCESS_NAME\" in Akiflow|Linear|Arc) \"$AW_LAYOUT\" ;; esac"
 yabai -m signal --add event=window_created \
   action="case \"\$YABAI_PROCESS_NAME\" in Akiflow|Linear|Arc) \"$AW_LAYOUT\" ;; esac"
-
