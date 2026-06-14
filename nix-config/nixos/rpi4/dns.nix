@@ -9,7 +9,7 @@
 #
 # Today the Pi is tailnet-only DNS (router still points clients at the
 # ISP upstream). When/if it graduates to LAN-wide DNS, switching the
-# router's DHCP DNS to 192.168.1.50 is the only change needed.
+# router's DHCP DNS to 10.0.0.50 is the only change needed.
 
 let
   # Declarative blocklists. Same lists that were in gravity.db before.

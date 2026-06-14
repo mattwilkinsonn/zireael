@@ -39,12 +39,12 @@
       ipv4.addresses = [
         {
           # .50 — the network's DNS server. Router points here for DHCP DNS.
-          address = "192.168.1.50";
+          address = "10.0.0.50";
           prefixLength = 24;
         }
       ];
     };
-    defaultGateway = "192.168.1.1";
+    defaultGateway = "10.0.0.1";
     # This Pi IS the DNS server. Loopback to local Technitium for
     # itself. Plain-DNS fallbacks listed in case Technitium is briefly
     # unhealthy during nix-switch / service restart.

@@ -50,16 +50,16 @@
       ipv4.addresses = [
         {
           # .51 — Technitium DNS lives on rpi4 (.50).
-          address = "192.168.1.51";
+          address = "10.0.0.51";
           prefixLength = 24;
         }
       ];
     };
-    defaultGateway = "192.168.1.1";
+    defaultGateway = "10.0.0.1";
     # rpi4 (.50) is now the network DNS server (Technitium).
     # Plain-DNS fallbacks listed in case rpi4 is down for maintenance.
     nameservers = [
-      "192.168.1.50"
+      "10.0.0.50"
       "9.9.9.11"
       "149.112.112.11"
       "1.1.1.1"

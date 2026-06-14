@@ -279,7 +279,7 @@ First-time setup:
   - Admin password is set from 1Password (op://Server/Technitium Admin Password).
     Default admin/admin is rotated automatically on first boot.
   - Currently tailnet-only DNS. To make it LAN-wide, point your router's
-    DHCP DNS server at 192.168.1.50.
+    DHCP DNS server at 10.0.0.50.
 EOF
 elif [ "$HOST" = "rpi5" ]; then
 	cat <<EOF
