@@ -19,6 +19,7 @@
     bottom # btm — TUI system monitor
     zellij # tmux-alike multiplexer with friendlier UX (tabs/splits in any terminal)
     nushell # structured data shell
+    helix # modal terminal editor (`hx`)
     aria2 # multi-connection downloader
     mprocs # run multiple processes in one terminal
     scc # code counter
