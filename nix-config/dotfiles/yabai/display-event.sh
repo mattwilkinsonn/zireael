@@ -30,25 +30,40 @@ date +%s >"$STAMP"
 
 # Only one waiter at a time. mkdir is atomic: if the lock dir already exists a
 # waiter is running and will observe the timestamp we just wrote, so this
-# event is accounted for and we exit immediately.
+# event is accounted for and we exit immediately — UNLESS the lock is stale.
+# The EXIT trap below can't fire if the waiter is SIGKILL'd (macOS memory
+# pressure, `kill -9`), which would otherwise wedge the lock forever and stop
+# every future cascade. Guard against that: if the recorded PID is no longer
+# alive, steal the lock instead of surrendering to a dead waiter.
 if ! mkdir "$LOCK" 2>/dev/null; then
-	exit 0
+	pid_file="$LOCK/pid"
+	if [[ -f $pid_file ]] && kill -0 "$(cat "$pid_file" 2>/dev/null)" 2>/dev/null; then
+		exit 0 # live waiter; it will observe our stamp
+	fi
+	# Stale lock from a dead waiter — reclaim it. A concurrent event may win
+	# the race and steal it first; that's fine, the cascade is idempotent.
+	rm -rf "$LOCK" 2>/dev/null || exit 0
+	mkdir "$LOCK" 2>/dev/null || exit 0
 fi
-trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+echo $$ >"$LOCK/pid"
+trap 'rm -rf "$LOCK" 2>/dev/null' EXIT
 
 while :; do
-	# Wait until no event has landed for QUIET_SECS.
+	# Wait until no event has landed for QUIET_SECS. The timestamp that
+	# satisfies the quiet condition IS the one we settled on, so capture it
+	# as acted_on directly — re-reading STAMP after the loop would reopen a
+	# race where an event landing between the break and the read silently
+	# re-anchors us to a still-settling display.
 	while :; do
-		last=$(cat "$STAMP" 2>/dev/null || echo 0)
+		acted_on=$(cat "$STAMP" 2>/dev/null || echo 0)
 		now=$(date +%s)
-		[[ $((now - last)) -ge $QUIET_SECS ]] && break
+		[[ $((now - acted_on)) -ge $QUIET_SECS ]] && break
 		sleep 1
 	done
 
-	# Snapshot the timestamp we are acting on, run the cascade, then check
-	# whether a fresh event arrived mid-cascade. If so, loop and settle
-	# again so the tail-end event isn't dropped; otherwise we're done.
-	acted_on=$(cat "$STAMP" 2>/dev/null || echo 0)
+	# Run the cascade, then check whether a fresh event arrived mid-cascade.
+	# If so, loop and settle again so the tail-end event isn't dropped;
+	# otherwise we're done.
 	"$DISPLAY_SETUP"
 	"$RULES"
 	"$AW_LAYOUT"
