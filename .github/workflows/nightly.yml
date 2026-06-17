@@ -236,11 +236,12 @@ jobs:
       HOMEBREW_NO_AUTO_UPDATE: "1"
     steps:
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@master
+        uses: Homebrew/actions/setup-homebrew@main
       - name: Tap, install, and test every formula
         run: |
           set -euo pipefail
           brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
+          brew trust mattwilkinsonn/zireael
           for formula in jj-hooks jj-gt akiflow-cli; do
             echo "::group::${formula}"
             brew install "mattwilkinsonn/zireael/${formula}"
