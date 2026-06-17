@@ -33,19 +33,19 @@ yabai -m config window_gap     0
 DISPLAY_SETUP="$HOME/.config/yabai/display-setup.sh"
 RULES="$HOME/.config/yabai/rules.sh"
 AW_LAYOUT="$HOME/.config/yabai/aw-layout.sh"
+DISPLAY_EVENT="$HOME/.config/yabai/display-event.sh"
 
 "$DISPLAY_SETUP"
 "$RULES"
 "$AW_LAYOUT"
 
-yabai -m signal --add event=display_added   action="$DISPLAY_SETUP && $RULES && $AW_LAYOUT"
-yabai -m signal --add event=display_removed action="$DISPLAY_SETUP && $RULES && $AW_LAYOUT"
-yabai -m signal --add event=display_moved   action="$DISPLAY_SETUP && $RULES && $AW_LAYOUT"
-
-# Ghostty uses native macOS tabs, which yabai sees as separate windows.
-# Reassert bsp when tabs are created/destroyed so the space does not drift.
-yabai -m signal --add app="^Ghostty$" event=window_created action="yabai -m space --layout bsp"
-yabai -m signal --add app="^Ghostty$" event=window_destroyed action="yabai -m space --layout bsp"
+# Monitor connect/disconnect fires a 10-30s burst of display events while
+# macOS settles. Route all three through the debounce wrapper so the layout
+# cascade runs ONCE after events go quiet, rather than thrashing on every
+# event in the storm.
+yabai -m signal --add event=display_added   action="$DISPLAY_EVENT"
+yabai -m signal --add event=display_removed action="$DISPLAY_EVENT"
+yabai -m signal --add event=display_moved   action="$DISPLAY_EVENT"
 
 # AW default layout: re-apply when one of the target apps launches or a new
 # window for it appears (script is idempotent + locked so this is cheap).

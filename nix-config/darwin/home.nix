@@ -203,6 +203,10 @@
     source = ../dotfiles/yabai/cycle-display.sh;
     executable = true;
   };
+  home.file.".config/yabai/display-event.sh" = {
+    source = ../dotfiles/yabai/display-event.sh;
+    executable = true;
+  };
   home.file.".config/yabai/display-setup.sh" = {
     source = ../dotfiles/yabai/display-setup.sh;
     executable = true;
