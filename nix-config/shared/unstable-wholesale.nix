@@ -55,7 +55,7 @@
         # depends on it. No-op for Mac / mattpc-wsl which never
         # reference `pkgs.openclaw`.
         permittedInsecurePackages = [
-          "openclaw-2026.4.22"
+          "openclaw-2026.6.5"
         ];
       };
     }
