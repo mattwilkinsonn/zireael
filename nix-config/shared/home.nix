@@ -197,6 +197,11 @@
   home.file.".config/ghostty/themes/NightOwlDark".source = ../dotfiles/ghostty/themes/NightOwlDark;
   home.file.".config/ghostty/themes/NightOwlLight".source = ../dotfiles/ghostty/themes/NightOwlLight;
 
+  # Zellij multiplexer. `keybinds clear-defaults=true` means the file is
+  # the full keymap — swap-layout binds are intentionally omitted so a
+  # stray Alt [ / Alt ] / tmux-space can't reshuffle the workspace.
+  home.file.".config/zellij/config.kdl".source = ../dotfiles/zellij/config.kdl;
+
   # ─── Files folded in from the old dotfiles repo ──────────────────────
   #
   # Migrated 2026-05 from the colocated git+jj at $HOME. Source content
