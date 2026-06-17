@@ -118,6 +118,14 @@
     [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
     export RUSTC_WRAPPER=sccache
 
+    # Buildkite CLI (`bk`): the org slug isn't a secret and bk reads
+    # it from ~/.config/bk.yaml — but `bk configure` writes the slug
+    # and the API token together in one keychain-backed operation that
+    # aborts on headless hosts with no Secret Service, so bk.yaml never
+    # gets created and the org has to come from the env instead. (See
+    # SEA-829.) The seal bk bundle forwards this var into the sandbox.
+    export BUILDKITE_ORGANIZATION_SLUG=sealedsecurity
+
     # fnm
     eval "$(fnm env --use-on-cd --shell zsh)"
   '';
