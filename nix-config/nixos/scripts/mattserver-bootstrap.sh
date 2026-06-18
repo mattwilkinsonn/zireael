@@ -15,15 +15,15 @@
 #   3. nixos-rebuild switch (home-manager activations need the user session).
 #   4. Password rotation — prompts the operator for new mattw + root
 #      password. (Manual rather than 1P-driven: mattserver is the
-#      runner host; we deliberately keep zero standing 1Password
+#      CI agent host; we deliberately keep zero standing 1Password
 #      service-account credentials on this box. See INSTALL.md
 #      "Security posture" for the threat-model rationale.)
-#   5. Sanity checks — SSH, Tailscale, ZFS pool, runner services.
+#   5. Sanity checks — SSH, Tailscale, ZFS pool, buildkite agents.
 #
-# GitHub runner token file is NOT written here — do that manually after
-# this script completes (see INSTALL.md "GitHub runner token" section).
-# The runner PAT is encrypted at rest via systemd-creds; the encrypt
-# script is the one-time + per-rotation operator step.
+# Buildkite agent token file is NOT written here — do that manually
+# after this script completes (see INSTALL.md "Buildkite agent token"
+# section). The agent token is encrypted at rest via systemd-creds; the
+# encrypt script is the one-time + per-rotation operator step.
 #
 # Re-runnable: each step skips if already done.
 #
@@ -116,18 +116,16 @@ else
 	warn "  zpool not on PATH — ZFS not enabled yet? Check boot.supportedFilesystems."
 fi
 
-echo "[runners]"
-for svc in github-runner-sealed \
-	github-runner-sealed-2 \
-	github-runner-sealed-3 \
-	github-runner-sealed-4; do
+echo "[buildkite-agents]"
+for svc in buildkite-agent-sealed \
+	buildkite-agent-sealed-2; do
 	if systemctl is-active --quiet "$svc" 2>/dev/null; then
 		echo "  $svc: active"
 	elif ! systemctl list-unit-files --no-legend "$svc" 2>/dev/null | grep -q "$svc"; then
-		echo "  $svc: not configured (enableRunners=false in system.nix — flip + rebuild to enable)"
+		echo "  $svc: not configured — check services.buildkite-agents in system.nix"
 	else
 		STATUS="$(systemctl is-active "$svc" 2>/dev/null || echo 'unknown')"
-		warn "  $svc: $STATUS — run mattserver-encrypt-runner-token.sh per INSTALL.md then: sudo systemctl restart $svc"
+		warn "  $svc: $STATUS — run mattserver-encrypt-agent-token.sh per INSTALL.md then: sudo systemctl restart $svc"
 	fi
 done
 
@@ -155,10 +153,10 @@ Bootstrap complete for $(hostname).
 Tailscale: $(tailscale status --json 2>/dev/null | grep -o '"DNSName":"[^"]*"' | head -1 | sed 's/"DNSName":"\(.*\).$/\1/' || echo "<run 'tailscale status'>")
 
 Next steps:
-  1. Encrypt the GitHub runner PAT into systemd-creds at
-     /etc/github-runner/sealed-token.cred (INSTALL.md "GitHub runner token"):
-       sudo bash $HOME/repos/zireael/nix-config/nixos/scripts/mattserver-encrypt-runner-token.sh
-     Then flip enableRunners=true in nixos/mattserver/system.nix and nix-switch.
+  1. Encrypt the Buildkite agent token into systemd-creds at
+     /etc/buildkite-agent/agent-token.cred (INSTALL.md "Buildkite agent token"):
+       sudo bash $HOME/repos/zireael/nix-config/nixos/scripts/mattserver-encrypt-agent-token.sh
+     Then nix-switch; the buildkite-agent units register on next boot.
   2. Create ZFS pool if not done yet (INSTALL.md "SATA SSHD — ZFS backup pool").
   3. Grant ZFS delegation to the backup user (INSTALL.md "ZFS backup receive setup").
   4. Add SSH config entry on your Mac (INSTALL.md "SSH from the Mac").

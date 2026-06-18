@@ -21,17 +21,17 @@
 #   4. Tailscale install + auth (you can now SSH in and copy-paste)
 #   5. gh install + auth + dotfiles clone
 #   6. Nix
-#   7. GitHub runner PAT → /etc/github-runner/sealed-token
-#   8. darwin-rebuild switch (runners start immediately)
+#   7. Buildkite agent token → /etc/buildkite-agent/agent-token
+#   8. darwin-rebuild switch (agents start immediately)
 #   9. Sanity checks
 #
 # Security posture: zero standing 1Password service-account tokens on
-# this host. mattmacpro runs untrusted GHA workflows via the
-# self-hosted runner pool, so any SA token on disk is a credential
-# the runner UID could exfiltrate. The runner PAT in step 7 is the
-# only secret here, and it's mode-600 root-wheel (consider
-# systemd-creds-equivalent encryption later; macOS has no direct
-# counterpart but Keychain with restricted ACL is closest).
+# this host. mattmacpro runs untrusted CI workflows via the
+# self-hosted Buildkite agent pool, so any SA token on disk is a
+# credential a compromised agent could exfiltrate. The agent token in
+# step 7 is the only secret here, and it's mode-600 root-wheel
+# (consider Keychain-with-restricted-ACL encryption later; macOS has
+# no systemd-creds counterpart).
 #
 # Re-runnable: every step skips if already done.
 #
@@ -49,7 +49,7 @@ source "$SCRIPT_DIR/../../shared/scripts/bootstrap-common.sh"
 
 ZIREAEL_REPO_SLUG="mattwilkinsonn/zireael"
 NIX_CONFIG_DIR="$HOME/repos/zireael/nix-config"
-SEALED_TOKEN_FILE="/etc/github-runner/sealed-token"
+SEALED_TOKEN_FILE="/etc/buildkite-agent/agent-token"
 TARGET_HOSTNAME="mattmacpro"
 TS_HOSTNAME="${TARGET_HOSTNAME}.tail08a5c5.ts.net"
 
@@ -280,37 +280,36 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# 7. GitHub runner PAT → /etc/github-runner/sealed-token
+# 7. Buildkite agent token → /etc/buildkite-agent/agent-token
 # ---------------------------------------------------------------------
-# Must exist BEFORE darwin-rebuild because the runner services have
-# `enable = true` unconditionally (see darwin/mattmacpro/system.nix).
-# Without the file, `darwin-rebuild` would lay down the launchd units
-# but they'd fail to start.
-step "GitHub runner token"
+# Must exist BEFORE darwin-rebuild because the agent launchd daemons
+# read it at launch (see darwin/mattmacpro/system.nix). The decrypt-
+# agent-token daemon stages it from this root-owned source into
+# /var/run/buildkite-agent/agent-token on each boot. Without the file,
+# `darwin-rebuild` lays down the daemons but they fail to register.
+step "Buildkite agent token"
 if sudo test -s "$SEALED_TOKEN_FILE"; then
 	echo "  $SEALED_TOKEN_FILE already present."
 else
-	echo "Paste your GitHub PAT for the sealed runner pool (ghp_... or"
-	echo "github_pat_...). Required scope: manage_runners:org"
-	echo "(fine-grained) or admin:org (classic)."
-	echo "Create at: https://github.com/organizations/sealedsecurity/settings/personal-access-tokens"
+	echo "Paste the Buildkite AGENT token (org Agents page → Reveal"
+	echo "Agent Token). This is the org-wide agent registration token,"
+	echo "NOT the BUILDKITE_API_TOKEN used by the bk CLI."
+	echo "Get it at: https://buildkite.com/organizations/sealedsecurity/agents"
 	echo
-	read -rsp "GH PAT: " GH_PAT
+	read -rsp "Agent token: " BK_TOKEN
 	echo
-	[ -n "$GH_PAT" ] || err "empty token"
-	sudo mkdir -p /etc/github-runner
-	sudo install -m 600 /dev/stdin "$SEALED_TOKEN_FILE" <<<"$GH_PAT"
-	unset GH_PAT
+	[ -n "$BK_TOKEN" ] || err "empty token"
+	sudo mkdir -p /etc/buildkite-agent
+	sudo install -m 600 /dev/stdin "$SEALED_TOKEN_FILE" <<<"$BK_TOKEN"
+	unset BK_TOKEN
 	echo "  $SEALED_TOKEN_FILE written."
 fi
 
-if sudo dscl . -read /Users/_github-runner >/dev/null 2>&1; then
-	sudo chown _github-runner:_github-runner "$SEALED_TOKEN_FILE"
-	echo "  owner: _github-runner:_github-runner (readable by runner LaunchDaemons)"
-else
-	sudo chown root:wheel "$SEALED_TOKEN_FILE"
-	echo "  owner: root:wheel (will re-chown to _github-runner after first darwin-rebuild)"
-fi
+# Source file stays root:wheel; the decrypt-agent-token launchd daemon
+# re-stages a group-readable copy under /var/run on every boot, so the
+# agent never reads this root-only original directly.
+sudo chown root:wheel "$SEALED_TOKEN_FILE"
+echo "  owner: root:wheel (re-staged to /var/run/buildkite-agent by decrypt-agent-token)"
 
 # ---------------------------------------------------------------------
 # 8. darwin-rebuild switch
@@ -358,22 +357,21 @@ else
 fi
 
 echo "[pf]"
-# Egress filter for the _github-runner UID — see system.nix
-# `launchd.daemons.pf-runner-egress`. We load our ruleset
-# top-level (no anchor), so `pfctl -sr` enumerates the active
-# rules; counting "user _github-runner" lines confirms our rules
-# made it in. Apple-default anchors at the top of the ruleset
-# pass through; the runner-scoped rules are the ones we care
-# about for this check.
+# Egress filter for the _buildkite-agent UID — see system.nix
+# `launchd.daemons.pf-agent-egress`. We load our ruleset top-level
+# (no anchor), so `pfctl -sr` enumerates the active rules; counting
+# "user _buildkite-agent" lines confirms our rules made it in. Apple-
+# default anchors at the top of the ruleset pass through; the agent-
+# scoped rules are the ones we care about for this check.
 if sudo pfctl -s info 2>/dev/null | grep -q "Status: Enabled"; then
-	rule_count=$(sudo pfctl -sr 2>/dev/null | grep -c "user _github-runner")
+	rule_count=$(sudo pfctl -sr 2>/dev/null | grep -c "user _buildkite-agent")
 	if [ "$rule_count" -gt 0 ]; then
-		echo "  pf enabled, $rule_count runner-egress rules loaded"
+		echo "  pf enabled, $rule_count agent-egress rules loaded"
 	else
-		warn "  pf enabled but no runner-egress rules found — re-run nix-switch"
+		warn "  pf enabled but no agent-egress rules found — re-run nix-switch"
 	fi
 else
-	warn "  pf disabled — runner-egress filter not active"
+	warn "  pf disabled — agent-egress filter not active"
 fi
 
 echo "[tailscale]"
@@ -383,9 +381,9 @@ else
 	warn "  /usr/local/bin/tailscale missing — brew install tailscale failed?"
 fi
 
-echo "[runners]"
-for svc in org.nixos.github-runner-sealed-macos \
-	org.nixos.github-runner-sealed-macos-2; do
+echo "[buildkite-agents]"
+for svc in com.sealedsecurity.buildkite-agent-sealed-macos \
+	com.sealedsecurity.buildkite-agent-sealed-macos-2; do
 	if sudo launchctl list 2>/dev/null | grep -q "$svc"; then
 		echo "  $svc: loaded"
 	else
@@ -402,22 +400,22 @@ fi
 
 echo "[secrets-hygiene]"
 # Verify no OP service-account credential is reachable from the
-# runner UID. This is a defense-in-depth check on top of the
+# agent UID. This is a defense-in-depth check on top of the
 # config-side guarantee — the system.nix postActivation +
 # bootstrap script don't write any SA token to disk, but a
 # previous version of either might have left one behind, OR
 # something added later might re-introduce one.
 #
-# Three places a runner-reachable SA could lurk:
+# Three places an agent-reachable SA could lurk:
 #   1. mattw's Keychain entry "OP_SERVICE_ACCOUNT_TOKEN" — still
-#      under mattw's UID-scoped ACL by default, so the _github-runner
+#      under mattw's UID-scoped ACL by default, so the _buildkite-agent
 #      process can't read it, BUT if something ever called
 #      `security add-generic-password -T ""` (empty trusted-apps
 #      list) it'd be world-readable on the user keychain. Probe.
-#   2. /var/lib/github-runners/*/.config/op/ — if some legacy
-#      bootstrap layered an SA token into the runner's HOME.
+#   2. /var/lib/buildkite-agents/*/.config/op/ — if some legacy
+#      bootstrap layered an SA token into the agent's HOME.
 #   3. launchctl setenv OP_SERVICE_ACCOUNT_TOKEN — global env
-#      seen by every launchd job including the runner.
+#      seen by every launchd job including the agent.
 hits=0
 if security find-generic-password -a "$USER" -s OP_SERVICE_ACCOUNT_TOKEN \
 	-w >/dev/null 2>&1; then
@@ -425,9 +423,9 @@ if security find-generic-password -a "$USER" -s OP_SERVICE_ACCOUNT_TOKEN \
 	warn "    security delete-generic-password -a \"$USER\" -s OP_SERVICE_ACCOUNT_TOKEN"
 	hits=$((hits + 1))
 fi
-if sudo find /var/lib/github-runners -name 'service-account-token*' \
+if sudo find /var/lib/buildkite-agents -name 'service-account-token*' \
 	-o -name 'team-service-account-token*' 2>/dev/null | grep -q .; then
-	warn "  found leftover OP SA token files under /var/lib/github-runners — remove manually"
+	warn "  found leftover OP SA token files under /var/lib/buildkite-agents — remove manually"
 	hits=$((hits + 1))
 fi
 if sudo launchctl getenv OP_SERVICE_ACCOUNT_TOKEN 2>/dev/null | grep -q .; then
@@ -445,9 +443,9 @@ Bootstrap complete for $(hostname).
 
 Tailscale: $(/usr/local/bin/tailscale status --json 2>/dev/null | grep -o '"DNSName":"[^"]*"' | head -1 | sed 's/"DNSName":"\(.*\).$/\1/' || echo "$TS_HOSTNAME")
 
-Verify the runners registered at:
-  https://github.com/organizations/sealedsecurity/settings/actions/runners
+Verify the agents registered at:
+  https://buildkite.com/organizations/sealedsecurity/agents
 
-They should appear with labels:
-  [self-hosted, macOS, X64, seal-macos-x64, mattmacpro]
+They should appear with the tag:
+  queue=macos-x64-selfhosted
 EOF

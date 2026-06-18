@@ -1,11 +1,11 @@
-{ pkgs, ... }:
+{ pkgs, lib, ... }:
 
 # mattmacpro — Mac Pro 2013 trashcan (Intel Xeon E5 + 64 GB DDR3 ECC,
 # FirePro D300/500/700 dual GPUs, ~512 GB Apple SSD).
 #
 # Roles:
-#   1. Self-hosted GitHub Actions runners for the sealedsecurity org
-#      (macOS x64 primary pool, label `seal-macos-x64`).
+#   1. Self-hosted Buildkite CI agents for the sealedsecurity org
+#      (macOS x64 primary pool, queue `macos-x64-selfhosted`).
 #
 # OS strategy: macOS Sonoma 14.x via OpenCore Legacy Patcher.
 # Mac Pro 2013 is natively stuck on Monterey (Apple dropped it from
@@ -24,31 +24,41 @@
 # pmset activation block below.
 
 let
-  # Two runner instances. Xeon E5 in the Mac Pro 2013 is typically
+  # Service user for the Buildkite agents. nix-darwin's github-runner
+  # module used to create `_github-runner` (uid/gid 533); we now hand-
+  # roll the agent launchd daemons (nix-darwin has no buildkite-agents
+  # module), so we declare the user ourselves. Renamed to drop the
+  # github reference; uid/gid 533 is preserved so the existing
+  # /var/lib state-dir ownership carries over without a chown sweep.
+  agentUser = "_buildkite-agent";
+  agentUid = 533;
+
+  # Two agent instances. Xeon E5 in the Mac Pro 2013 is typically
   # 6 physical / 12 logical cores (E5-1650v2 / 2697v2 variants); 2
   # instances × 6 CARGO_BUILD_JOBS = 12 threads matches that.
   # Pre-SEA-672 this was 3 instances × 4 jobs; round-3 load test
   # showed 3 concurrent cold-cache builds saturated the box 1:1 on
   # cores and stretched per-compile times ~3×, blowing past a
-  # 40min step cap. Dropping to 2 runners gives each ~6 cores avg
-  # and cuts cold-cache build duration roughly in half. If your
-  # specific SKU is a 4-core (E5-1620v2), drop further (1 runner
-  # × 4 jobs) or hold at 2 instances × 4 jobs.
+  # 40min step cap. Dropping to 2 gives each ~6 cores avg and cuts
+  # cold-cache build duration roughly in half.
   #
-  # `enable = true` unconditionally — the bootstrap script guarantees
-  # /etc/github-runner/sealed-token exists before the first
-  # darwin-rebuild runs (it prompts for the GitHub PAT and writes the
-  # file as part of step 5 of mattmacpro-bootstrap.sh). If you ever
-  # need to rebuild WITHOUT runners (debug, removing the box from the
-  # pool), comment out the services.github-runners block at the
-  # bottom of this file instead of toggling a flag here.
+  # Unlike mattserver (Linux), macOS PR jobs run NATIVELY on the
+  # agent — test-macos.yml has no docker plugin (`just
+  # nextest-macos-pr` runs directly, using the macOS-built
+  # sandbox-exec path). So the agent keeps the full toolchain
+  # (rustup, sccache, the brew/Xcode shims) and the shared sccache
+  # server, exactly as the old runner did. The only swap is the
+  # service: a hand-rolled launchd buildkite-agent daemon in place
+  # of the github-runner LaunchDaemon.
   #
-  # State lives at /var/lib/github-runners/<name>/ — nix-darwin's
-  # github-runner module on macOS uses the same layout as the NixOS
-  # module, with launchd LaunchDaemons in place of systemd units.
+  # State lives at /var/lib/buildkite-agents/<name>/ (kept as-is to
+  # preserve the warm cargo/sccache caches across the cutover).
 
-  # Homebrew wrappers for the runner PATH. nix-darwin's github-runner
-  # module curates the runner service's PATH to a fixed set (bash +
+  # Homebrew wrappers for the agent PATH. The hand-rolled launchd
+  # daemon (below) sets PATH explicitly from the package list; macOS
+  # GUI/CI tools like `brew` live under /usr/local/bin which isn't on
+  # that curated PATH, so we shim them in as Nix-managed bin scripts.
+  # SEA-640 (carried forward from the github-runner setup).
   # coreutils + git + gnutar + gzip + extraPackages). `/usr/local/bin`
   # (Intel Homebrew prefix on this box) is NOT on that PATH, so
   # workflow actions like `tecolicom/actions-use-homebrew-tools` that
@@ -114,150 +124,181 @@ let
         ];
   };
 
-  mkSealedRunner = name: {
-    enable = true;
-    url = "https://github.com/sealedsecurity";
-    tokenFile = "/etc/github-runner/sealed-token";
-    # Re-register on every service start. Without this, changing any
-    # runner registration option (workDir, extraLabels, name) leaves
-    # the old registration on GitHub and the configure script exits
-    # with "A runner exists with the same name" — the launchd daemon
-    # then sits in failed state and never picks up jobs. With
-    # `replace = true` the configure step passes `--replace` to
-    # `config.sh` which atomically replaces the previous
-    # registration. SEA-640.
-    replace = true;
-    extraLabels = [
-      # Canonical pool label — seal workflows target this via
-      # `runs-on: seal-macos-x64`. Any macOS x64 runner registered
-      # with this label is eligible; future second macOS host would
-      # share the label and load-balance via GitHub's scheduler.
-      "seal-macos-x64"
-      # Host-specific override label for pinning: `runs-on:
-      # [seal-macos-x64, mattmacpro]`. Rarely needed; useful for
-      # debugging a runner-specific issue without disabling the box.
-      "mattmacpro"
-    ];
-    extraPackages = with pkgs; [
-      # Rust toolchain — CI installs the pinned nightly via `rustup
-      # show active-toolchain`. Pre-install rustup so the CI step
-      # doesn't have to curl-install it on every job.
-      rustup
+  # Packages on the agent's PATH. The hand-rolled launchd daemon
+  # builds PATH from this list via lib.makeBinPath. macOS jobs run
+  # natively, so the full toolchain lives here (unlike mattserver,
+  # where it's in the seal-ci container).
+  agentPackages = with pkgs; [
+    # The agent binary itself + base userland the agent + plugins +
+    # hook scripts reach for outside any job sandbox.
+    buildkite-agent
+    bash
+    coreutils
+    gnutar
+    gzip
+    git
+    # Rust toolchain — CI installs the pinned nightly via `rustup
+    # show active-toolchain`. Pre-install rustup so the CI step
+    # doesn't have to curl-install it on every job.
+    rustup
 
-      # protobuf-compiler — equivalent of the Linux apt install step.
-      protobuf
+    # protobuf-compiler — equivalent of the Linux apt install step.
+    protobuf
 
-      # GNU coreutils — macOS ships BSD coreutils; some CI scripts
-      # expect GNU `timeout`, `realpath`, etc. PATH-prefix-installed
-      # under the runner service's environment so `coreutils-prefixed`
-      # tools (gtimeout, grealpath) are also available.
-      coreutils
+    # GNU coreutils — macOS ships BSD coreutils; some CI scripts
+    # expect GNU `timeout`, `realpath`, etc. PATH-prefix-installed
+    # under the runner service's environment so `coreutils-prefixed`
+    # tools (gtimeout, grealpath) are also available.
+    coreutils
 
-      # pkg-config — required for openssl-sys and similar crates to
-      # resolve at build.
-      pkg-config
+    # pkg-config — required for openssl-sys and similar crates to
+    # resolve at build.
+    pkg-config
 
-      # Test runner — pre-installed so taiki-e/install-action detects
-      # it in PATH and skips the GitHub Releases download step.
-      cargo-nextest
+    # Test runner — pre-installed so taiki-e/install-action detects
+    # it in PATH and skips the GitHub Releases download step.
+    cargo-nextest
 
-      # Compiler cache — wired via RUSTC_WRAPPER below.
-      sccache
+    # Compiler cache — wired via RUSTC_WRAPPER below.
+    sccache
 
-      # oven-sh/setup-bun@v2 shells out to `unzip` to extract the
-      # downloaded archive even when `bun` is already installed. macOS
-      # ships unzip in /usr/bin but the runner's curated PATH doesn't
-      # include /usr/bin — so we add the Nix package explicitly. Mirror
-      # of mattserver's fix. SEA-640.
-      unzip
+    # oven-sh/setup-bun@v2 shells out to `unzip` to extract the
+    # downloaded archive even when `bun` is already installed. macOS
+    # ships unzip in /usr/bin but the runner's curated PATH doesn't
+    # include /usr/bin — so we add the Nix package explicitly. Mirror
+    # of mattserver's fix. SEA-640.
+    unzip
 
-      # Community GitHub Actions assume a standard *nix userland on
-      # PATH. nix-darwin's github-runner module curates the runner PATH
-      # down to bash + coreutils + git + gnutar + gzip + extraPackages,
-      # which excludes the rest of GNU coreutils + the macOS BSD utils
-      # in /usr/bin. The following additions cover the tools we've
-      # observed actions reach for. SEA-640.
-      curl # taiki-e/install-action: downloads binaries
-      gawk # tecolicom/actions-use-homebrew-tools: awk pipeline
-      gnused # taiki-e/install-action: sed -E for input parsing
-      gnugrep # actions in general: grep -E
-      findutils # find + xargs
+    # Community GitHub Actions assume a standard *nix userland on
+    # PATH. nix-darwin's github-runner module curates the runner PATH
+    # down to bash + coreutils + git + gnutar + gzip + extraPackages,
+    # which excludes the rest of GNU coreutils + the macOS BSD utils
+    # in /usr/bin. The following additions cover the tools we've
+    # observed actions reach for. SEA-640.
+    curl # taiki-e/install-action: downloads binaries
+    gawk # tecolicom/actions-use-homebrew-tools: awk pipeline
+    gnused # taiki-e/install-action: sed -E for input parsing
+    gnugrep # actions in general: grep -E
+    findutils # find + xargs
 
-      # Brew wrapper — see top-of-file brewShims comment.
-      brewShims
+    # Brew wrapper — see top-of-file brewShims comment.
+    brewShims
 
-      # Xcode CLI wrappers (cc, clang, ld, ar, etc.) — see
-      # top-of-file xcodeShims comment. Required for cargo's build
-      # scripts and rustc's linker invocation.
-      xcodeShims
+    # Xcode CLI wrappers (cc, clang, ld, ar, etc.) — see
+    # top-of-file xcodeShims comment. Required for cargo's build
+    # scripts and rustc's linker invocation.
+    xcodeShims
 
-      # Other sealed repo deps + general CI utilities
-      bun
-      awscli2
-      jq
-      gnumake
-      # NOTE: deliberately no dbus / mold / clang / gcc here — macOS's
-      # clang from the Xcode Command Line Tools is what cargo uses on
-      # this platform; Linux-only deps would just be dead weight.
-    ];
-    extraEnvironment = {
-      # Per-instance cargo home. Pre-SEA-672 this pointed at a
-      # /shared subdir to keep one warm registry across all
-      # runners — but concurrent cargo invocations on different
-      # runners race during crate-source extraction: cargo creates
-      # `registry/src/<crate>-<ver>/` before unpacking, sccache
-      # tries to hash the source files mid-unpack, and gets ENOENT
-      # on files that haven't been extracted yet. The
-      # index-lockfile that cargo uses serializes registry *index*
-      # updates, NOT source unpacks — so a shared registry is only
-      # safe when at most one cargo runs at a time, which doesn't
-      # hold on a 3-runner box. See mattserver/system.nix for the
-      # full incident write-up. Per-instance CARGO_HOME costs
-      # ~1-2 GB extra per runner for the warm registry.
-      CARGO_HOME = "/var/lib/github-runners/${name}/.cargo";
+    # Other sealed repo deps + general CI utilities
+    bun
+    awscli2
+    jq
+    gnumake
+    # NOTE: deliberately no dbus / mold / clang / gcc here — macOS's
+    # clang from the Xcode Command Line Tools is what cargo uses on
+    # this platform; Linux-only deps would just be dead weight.
+  ];
 
-      # Isolated per instance — rustup has no concurrent-write
-      # protection and will corrupt toolchain state if two instances
-      # install simultaneously.
-      RUSTUP_HOME = "/var/lib/github-runners/${name}/.rustup";
+  # Per-instance environment (cargo/rustup/sccache/bun caches). The
+  # launchd daemon merges this into EnvironmentVariables. Same shape
+  # the github-runner module's `extraEnvironment` carried.
+  mkAgentEnv = name: {
+    # Per-instance cargo home. Pre-SEA-672 this pointed at a
+    # /shared subdir to keep one warm registry across all
+    # runners — but concurrent cargo invocations on different
+    # runners race during crate-source extraction: cargo creates
+    # `registry/src/<crate>-<ver>/` before unpacking, sccache
+    # tries to hash the source files mid-unpack, and gets ENOENT
+    # on files that haven't been extracted yet. The
+    # index-lockfile that cargo uses serializes registry *index*
+    # updates, NOT source unpacks — so a shared registry is only
+    # safe when at most one cargo runs at a time, which doesn't
+    # hold on a 3-runner box. See mattserver/system.nix for the
+    # full incident write-up. Per-instance CARGO_HOME costs
+    # ~1-2 GB extra per runner for the warm registry.
+    CARGO_HOME = "/var/lib/buildkite-agents/${name}/.cargo";
 
-      # 6 build jobs per instance × 2 instances = 12 threads = Xeon E5
-      # logical core count. Bumped from 4 → 6 when sealed-macos-3
-      # was retired (SEA-672 round 3 load-test fallout).
-      CARGO_BUILD_JOBS = "6";
+    # Isolated per instance — rustup has no concurrent-write
+    # protection and will corrupt toolchain state if two instances
+    # install simultaneously.
+    RUSTUP_HOME = "/var/lib/buildkite-agents/${name}/.rustup";
 
-      # sccache wiring. Runner-level RUSTC_WRAPPER means cargo uses
-      # sccache automatically without per-workflow opt-in. The runners
-      # connect to a *shared* sccache server running as its own
-      # launchd daemon (see `launchd.daemons.sccache-server` below).
-      # Pre-SEA-672 each runner's first `RUSTC_WRAPPER=sccache` call
-      # auto-spawned its own server, which on Linux turned into a
-      # concurrent-bind race + per-server cache-state divergence. The
-      # Mac side hasn't surfaced the failure yet (lower contention on
-      # this 64 GB box) but the consolidation is the right hygiene
-      # shape on both runner hosts. SEA-672.
-      RUSTC_WRAPPER = "sccache";
-      SCCACHE_DIR = "/var/lib/github-runners/shared/.sccache";
-      SCCACHE_CACHE_SIZE = "30G";
-      # Point the sccache client at the dedicated server unit.
-      # Default is 4226; pin it explicitly so a future port change
-      # only needs one edit.
-      SCCACHE_SERVER_PORT = "4226";
+    # 6 build jobs per instance × 2 instances = 12 threads = Xeon E5
+    # logical core count. Bumped from 4 → 6 when sealed-macos-3
+    # was retired (SEA-672 round 3 load-test fallout).
+    CARGO_BUILD_JOBS = "6";
 
-      # Per-instance bun + uv install caches. Bun is used by docs/site
-      # + linear-auto-done bundles; uv isn't called by today's seal CI
-      # but is staged so a future Python tool gets a warm cache for
-      # free. Pre-warm cost is one bun-install per instance (~3-5s on
-      # cold cache, then the runner-local path is reused across that
-      # instance's subsequent jobs). Per-instance (not /shared) for
-      # the same reason CARGO_HOME is per-instance — concurrent writes
-      # to a pool-wide install dir were the SEA-672 failure shape, and
-      # the cross-instance warm-up payoff is small enough that the
-      # extra GB of disk per runner is the right tradeoff. Both tools
-      # `mkdir -p` their cache dir on first use, so no activation-
-      # script entry needed.
-      BUN_INSTALL_CACHE_DIR = "/var/lib/github-runners/${name}/.bun-install";
-      UV_CACHE_DIR = "/var/lib/github-runners/${name}/.uv-cache";
+    # sccache wiring. Runner-level RUSTC_WRAPPER means cargo uses
+    # sccache automatically without per-workflow opt-in. The runners
+    # connect to a *shared* sccache server running as its own
+    # launchd daemon (see `launchd.daemons.sccache-server` below).
+    # Pre-SEA-672 each runner's first `RUSTC_WRAPPER=sccache` call
+    # auto-spawned its own server, which on Linux turned into a
+    # concurrent-bind race + per-server cache-state divergence. The
+    # Mac side hasn't surfaced the failure yet (lower contention on
+    # this 64 GB box) but the consolidation is the right hygiene
+    # shape on both runner hosts. SEA-672.
+    RUSTC_WRAPPER = "sccache";
+    SCCACHE_DIR = "/var/lib/buildkite-agents/shared/.sccache";
+    SCCACHE_CACHE_SIZE = "30G";
+    # Point the sccache client at the dedicated server unit.
+    # Default is 4226; pin it explicitly so a future port change
+    # only needs one edit.
+    SCCACHE_SERVER_PORT = "4226";
+
+    # Per-instance bun + uv install caches. Bun is used by docs/site
+    # + linear-auto-done bundles; uv isn't called by today's seal CI
+    # but is staged so a future Python tool gets a warm cache for
+    # free. Pre-warm cost is one bun-install per instance (~3-5s on
+    # cold cache, then the runner-local path is reused across that
+    # instance's subsequent jobs). Per-instance (not /shared) for
+    # the same reason CARGO_HOME is per-instance — concurrent writes
+    # to a pool-wide install dir were the SEA-672 failure shape, and
+    # the cross-instance warm-up payoff is small enough that the
+    # extra GB of disk per runner is the right tradeoff. Both tools
+    # `mkdir -p` their cache dir on first use, so no activation-
+    # script entry needed.
+    BUN_INSTALL_CACHE_DIR = "/var/lib/buildkite-agents/${name}/.bun-install";
+    UV_CACHE_DIR = "/var/lib/buildkite-agents/${name}/.uv-cache";
+  };
+
+  # Hand-rolled launchd daemon for one Buildkite agent instance.
+  # nix-darwin has no services.buildkite-agents module, so we run
+  # `buildkite-agent start` directly under launchd, configuring it via
+  # BUILDKITE_AGENT_* env vars (the agent reads these in lieu of a cfg
+  # file). KeepAlive restarts on crash; the agent's own graceful-stop
+  # handles in-flight jobs on shutdown.
+  #
+  # The agent token is read at launch from the tmpfs path the
+  # decrypt-agent-token daemon writes (see below) via
+  # BUILDKITE_AGENT_TOKEN_PATH — the token never lands in the launchd
+  # plist (which is world-readable in the Nix store).
+  mkAgentDaemon = name: {
+    serviceConfig = {
+      Label = "com.sealedsecurity.buildkite-agent-${name}";
+      ProgramArguments = [
+        "${pkgs.buildkite-agent}/bin/buildkite-agent"
+        "start"
+      ];
+      EnvironmentVariables = {
+        PATH = "${lib.makeBinPath agentPackages}:/usr/bin:/bin:/usr/sbin:/sbin";
+        HOME = "/var/lib/buildkite-agents/${name}";
+        # Agent identity + routing. The token is supplied out-of-band
+        # via the token file (next line) so it stays out of the plist.
+        BUILDKITE_AGENT_NAME = "mattmacpro-${name}";
+        BUILDKITE_AGENT_TAGS = "queue=macos-x64-selfhosted,os=macos,arch=x64,host=mattmacpro";
+        BUILDKITE_AGENT_TOKEN_PATH = "/var/run/buildkite-agent/agent-token";
+        BUILDKITE_BUILD_PATH = "/var/lib/buildkite-agents/${name}/builds";
+        BUILDKITE_HOOKS_PATH = "${pkgs.buildkite-agent}/share/buildkite-agent/hooks";
+        BUILDKITE_PLUGINS_PATH = "/var/lib/buildkite-agents/${name}/plugins";
+      }
+      // mkAgentEnv name;
+      UserName = agentUser;
+      GroupName = agentUser;
+      RunAtLoad = true;
+      KeepAlive = true;
+      StandardOutPath = "/var/log/buildkite-agent-${name}.log";
+      StandardErrorPath = "/var/log/buildkite-agent-${name}.log";
     };
   };
 in
@@ -281,6 +322,28 @@ in
     home = "/Users/mattw";
   };
 
+  # Buildkite agent service user. The github-runner module used to
+  # create this (_github-runner, uid/gid 533); since we hand-roll the
+  # launchd daemons we declare it ourselves. uid/gid 533 is preserved
+  # so the /var/lib/buildkite-agents state tree (chowned in the
+  # extraActivation block) keeps its ownership across the cutover.
+  # nix-darwin requires `knownUsers`/`knownGroups` for any
+  # non-system-managed account so it knows to create + later clean up
+  # the dscl entries.
+  users.users.${agentUser} = {
+    uid = agentUid;
+    gid = agentUid;
+    description = "Buildkite agent service user";
+    home = "/var/lib/buildkite-agents";
+    shell = "/usr/bin/false";
+  };
+  users.groups.${agentUser} = {
+    gid = agentUid;
+    description = "Buildkite agent service group";
+  };
+  users.knownUsers = [ agentUser ];
+  users.knownGroups = [ agentUser ];
+
   system.primaryUser = "mattw";
 
   # ============================================================
@@ -293,12 +356,10 @@ in
   # every darwin-rebuild and the installer-provisioned version gets
   # replaced.
   #
-  # This diverges from the MBP (`nix.enable = false`) for two
-  # reasons: (1) the MBP runs Determinate Nix which has its own
-  # daemon-management model where letting nix-darwin take over would
-  # conflict, and (2) `services.github-runners` has an assertion
-  # requiring `nix.enable = true` — without this the rebuild fails
-  # before any runner LaunchDaemon gets laid down.
+  # This diverges from the MBP (`nix.enable = false`) because the MBP
+  # runs Determinate Nix which has its own daemon-management model
+  # where letting nix-darwin take over would conflict. mattmacpro uses
+  # the standard nixos.org daemon, so nix-darwin manages the plist.
   nix.enable = true;
 
   # Trusted users — needed for the cachix substituters declared in
@@ -588,12 +649,12 @@ in
   };
 
   # ============================================================
-  # pf egress filter — UID-scoped lockdown for the runner pool
+  # pf egress filter — UID-scoped lockdown for the agent pool
   # ============================================================
   #
-  # Mirror of mattserver's nftables runner-egress rule, adapted for
-  # macOS's pf. Same threat model: a malicious GHA workflow lands
-  # code-exec as `_github-runner`; we cut that UID off from LAN
+  # Mirror of mattserver's nftables agent-egress rule, adapted for
+  # macOS's pf. Same threat model: a malicious workflow lands code-exec
+  # as the buildkite-agent user; we cut that UID off from LAN
   # reachability so it can't talk to the router admin UI, the NAS,
   # other workstations, etc.
   #
@@ -601,7 +662,10 @@ in
   # PrivateNetwork/IPAddressDeny analog; the actual filter has to
   # live at the kernel netfilter layer. macOS's pf can match on
   # `user <name>` which getpwnam-resolves the username at ruleset
-  # load time — robust against UID reshuffles by nix-darwin.
+  # load time — robust against UID reshuffles by nix-darwin. (Both
+  # agents share the one `_buildkite-agent` user here, so a single
+  # `user` match covers the pool — unlike the Linux side where the
+  # buildkite-agents module forces per-name users + a group match.)
   #
   # Why a full ruleset (not just an anchor): Apple's default
   # /etc/pf.conf only references com.apple/* anchors. To get OUR
@@ -612,14 +676,14 @@ in
   # them (Internet Sharing, AirDrop, etc. — none of which run on
   # this headless box) keeps working.
   #
-  # Allowed egress for the runner UID:
+  # Allowed egress for the agent UID:
   #   - loopback (sccache server lives on lo0)
-  #   - DNS (53/udp+tcp) — github.com, crates.io, registries
+  #   - DNS (53/udp+tcp) — github.com, crates.io, registries, buildkite.com
   #   - HTTP/HTTPS (80, 443) to public destinations
   #   - git+ssh (22) for `cargo install --git` etc.
   #   - utun* (Tailscale data plane) — tailnet ACLs gate peer access
   #
-  # Dropped egress for the runner UID:
+  # Dropped egress for the agent UID:
   #   - RFC1918 ranges (10/8, 172.16/12, 192.168/16)
   #   - link-local (169.254/16)
   #   - CGNAT (100.64/10) on non-utun interfaces — the utun pass
@@ -630,7 +694,7 @@ in
   # it with `sudo tcpdump -ni pflog0` to see unexpected blocks
   # during the first week of operation.
 
-  environment.etc."pf.runner.conf".text = ''
+  environment.etc."pf.agent.conf".text = ''
     # Apple default anchors — pass-through so Internet Sharing /
     # AirDrop / Apple-internal pf use continues to work if anything
     # ever needs them on this box.
@@ -646,7 +710,7 @@ in
       169.254.0.0/16, 100.64.0.0/10 \
     }
 
-    # ---- Runner egress lockdown ------------------------------------
+    # ---- Agent egress lockdown -------------------------------------
     # `quick` short-circuits — first match wins, no further
     # evaluation. Without `quick`, pf evaluates the whole ruleset
     # and the LAST matching rule wins (BSD pf semantics), which
@@ -659,28 +723,28 @@ in
     # Tailscale data-plane interface. Apple's tailscaled (formula
     # variant on this host) creates utun* interfaces; the exact
     # suffix is dynamic across reboots. `utun` matches any of them.
-    pass out quick on utun proto { tcp udp icmp } user _github-runner
+    pass out quick on utun proto { tcp udp icmp } user ${agentUser}
 
     # Allow DNS to any destination.
     pass out quick proto { tcp udp } from any to any port 53 \
-      user _github-runner
+      user ${agentUser}
 
-    # Drop LAN-range destinations for the runner UID. Listed BEFORE
-    # the public-internet allow so the runner can't fall through into
+    # Drop LAN-range destinations for the agent UID. Listed BEFORE
+    # the public-internet allow so the agent can't fall through into
     # a LAN host that happens to be listening on 443.
     block drop out log quick proto { tcp udp icmp } \
-      from any to <lan_ranges> user _github-runner
+      from any to <lan_ranges> user ${agentUser}
 
     # Allow public HTTP/HTTPS + git+ssh.
     pass out quick proto tcp from any to any port { 80, 443, 22 } \
-      user _github-runner
+      user ${agentUser}
 
-    # Default deny — runner UID can't reach anything else. Logged
+    # Default deny — agent UID can't reach anything else. Logged
     # to pflog0 for forensics.
-    block drop out log quick from any to any user _github-runner
+    block drop out log quick from any to any user ${agentUser}
 
     # Everything else (mattw's shell, system daemons, anyone not
-    # the runner UID) passes unaffected.
+    # the agent UID) passes unaffected.
     pass out all
   '';
 
@@ -695,76 +759,74 @@ in
   # the daemon process around. pf kernel state survives the daemon
   # exit — the rules stay loaded.
   #
-  # Ordering: `_github-runner` is created by nix-darwin's
-  # github-runner module activation; that activation runs before
-  # launchd boots our daemons, so getpwnam("_github-runner")
-  # succeeds at pfctl-load time. Worst case if races (it shouldn't):
-  # pfctl -f fails, daemon exits non-zero, the next reboot retries.
-  launchd.daemons.pf-runner-egress = {
+  # Ordering: `${agentUser}` is created by the users.users block above
+  # (applied during nix-darwin activation, before launchd boots our
+  # daemons), so getpwnam("${agentUser}") succeeds at pfctl-load time.
+  # Worst case if it races (it shouldn't): pfctl -f fails, the daemon
+  # exits non-zero, the next reboot retries.
+  launchd.daemons.pf-agent-egress = {
     serviceConfig = {
-      Label = "com.sealedsecurity.pf-runner-egress";
+      Label = "com.sealedsecurity.pf-agent-egress";
       ProgramArguments = [
         "/sbin/pfctl"
         "-ef"
-        "/etc/pf.runner.conf"
+        "/etc/pf.agent.conf"
       ];
       RunAtLoad = true;
       KeepAlive = false;
-      StandardOutPath = "/var/log/pf-runner-egress.log";
-      StandardErrorPath = "/var/log/pf-runner-egress.log";
+      StandardOutPath = "/var/log/pf-agent-egress.log";
+      StandardErrorPath = "/var/log/pf-agent-egress.log";
     };
   };
 
   # ============================================================
-  # GitHub Actions runners
+  # Buildkite agents (self-hosted PR-time CI)
   # ============================================================
   #
-  # Token file format: GitHub fine-grained PAT (or classic PAT) on
-  # one line, mode 600 root:wheel. Required scope:
-  #   `manage_runners:org` (fine-grained) or `admin:org` (classic).
+  # SEA-830: the box runs self-hosted Buildkite agents (was self-hosted
+  # GitHub Actions runners pre-SEA-587 migration). test-macos.yml routes
+  # to the `macos-x64-selfhosted` queue these agents register.
   #
-  # Provisioned by the bootstrap script BEFORE the first darwin-rebuild
-  # — that's why the runner `enable = true` is unconditional. See
-  # mattmacpro-bootstrap.sh step 5.
+  # nix-darwin has no services.buildkite-agents module, so the agent
+  # launchd daemons are hand-rolled (mkAgentDaemon in the let block).
+  # macOS PR jobs run NATIVELY on the agent (no docker plugin), so the
+  # full toolchain + the shared sccache server stay, exactly as the old
+  # runner had them.
+  #
+  # Token: the Buildkite *Agent* token (org Agents page), distinct from
+  # the BUILDKITE_API_TOKEN the `bk` CLI uses. Provisioned by the
+  # bootstrap script as a host-bound encrypted blob; decrypted into
+  # tmpfs at boot by the decrypt-agent-token daemon below.
 
-  # Pre-create the runner state dirs with the right ownership. The
-  # darwin module's activation script creates per-instance dirs at
-  # /var/lib/github-runners/<name>/ owned by the _github-runner user,
-  # but the shared SCCACHE_DIR path it doesn't know about, and the
-  # per-runner .cargo dirs need to exist with the right owner before
-  # cargo's first registry write. Without this, cargo fails with
-  # `Permission denied (os error 13)` on registry creation. SEA-640
-  # + SEA-672 (per-runner .cargo replaces the old shared layout).
-  #
-  # Equivalent of mattserver's systemd.tmpfiles.rules — nix-darwin
-  # doesn't have a tmpfiles abstraction, and custom-named activation
-  # script slots are silently ignored (the activation runner only
-  # invokes the slot names baked into modules/system/activation-
-  # scripts.nix). Hook into the existing `extraActivation` slot —
-  # one of the few slots nix-darwin explicitly leaves open for user
-  # customisation.
+  # Pre-create the agent state dirs with the right ownership. nix-darwin
+  # has no tmpfiles abstraction, and custom-named activation script
+  # slots are silently ignored (the activation runner only invokes the
+  # slot names baked into modules/system/activation-scripts.nix), so we
+  # hook the existing `extraActivation` slot. The state tree is kept at
+  # /var/lib/buildkite-agents (unchanged from the runner era) so the warm
+  # cargo/sccache caches survive the cutover.
   system.activationScripts.extraActivation.text = ''
-    echo >&2 "setting up GitHub Actions runner dirs..."
-    /bin/mkdir -p /var/lib/github-runners/shared/.sccache
-    /bin/mkdir -p /var/lib/github-runners/sealed-macos/.cargo
-    /bin/mkdir -p /var/lib/github-runners/sealed-macos-2/.cargo
-    /usr/sbin/chown -R _github-runner:_github-runner /var/lib/github-runners
-    /bin/chmod 0755 /var/lib/github-runners/shared
+    echo >&2 "setting up Buildkite agent dirs..."
+    /bin/mkdir -p /var/lib/buildkite-agents/shared/.sccache
+    /bin/mkdir -p /var/lib/buildkite-agents/sealed-macos/.cargo
+    /bin/mkdir -p /var/lib/buildkite-agents/sealed-macos-2/.cargo
+    /usr/sbin/chown -R ${agentUser}:${agentUser} /var/lib/buildkite-agents
+    /bin/chmod 0755 /var/lib/buildkite-agents/shared
 
-    # Spotlight + Time Machine exclusions on the runner state tree.
+    # Spotlight + Time Machine exclusions on the agent state tree.
     # Two hygiene concerns specific to macOS:
     #
     # 1. Spotlight indexing surfaces matched content via `mdfind` /
     #    Finder search / Quick Look. Build artifacts, intermediate
     #    object files, and (worse) any secret that ever lands in
-    #    /var/lib/github-runners/<name>/work/ during a CI job would
+    #    /var/lib/buildkite-agents/<name>/builds/ during a CI job would
     #    show up in those interfaces — for any user on the box, not
-    #    just _github-runner. Disabling Spotlight on the tree closes
+    #    just the agent user. Disabling Spotlight on the tree closes
     #    that exfil path.
     #
     # 2. Time Machine snapshots are content-addressed and persisted;
     #    a secret that briefly existed in a CI workspace can stick
-    #    around in TM history for months. Excluding the runner state
+    #    around in TM history for months. Excluding the agent state
     #    tree means TM never sees those bytes in the first place.
     #
     # Both commands fail silently when their dependencies aren't
@@ -772,28 +834,59 @@ in
     # bails if TM isn't configured) — fine for a headless box that
     # may not have either active. `|| true` suppresses the exit
     # status either way so a failure here doesn't fail activation.
-    echo >&2 "applying runner-state Spotlight + Time Machine exclusions..."
-    /usr/bin/mdutil -i off /var/lib/github-runners 2>/dev/null || true
-    if [ -d /var/lib/github-runners ]; then
-      /usr/bin/tmutil addexclusion /var/lib/github-runners 2>/dev/null || true
+    echo >&2 "applying agent-state Spotlight + Time Machine exclusions..."
+    /usr/bin/mdutil -i off /var/lib/buildkite-agents 2>/dev/null || true
+    if [ -d /var/lib/buildkite-agents ]; then
+      /usr/bin/tmutil addexclusion /var/lib/buildkite-agents 2>/dev/null || true
     fi
   '';
 
-  services.github-runners = {
-    sealed-macos = mkSealedRunner "sealed-macos";
-    sealed-macos-2 = mkSealedRunner "sealed-macos-2";
-    # SEA-672: dropped from 3 → 2 runners. The Mac Pro 2013 has 12
-    # logical cores and 64 GB RAM; 3 concurrent cold-cache cargo
-    # builds (each with `CARGO_BUILD_JOBS=4`) put 12 parallel rustc
-    # processes on 12 cores 1:1, stretching individual compiles to
-    # ~3× the solo-runner duration. Round-3 load test showed 3/4
-    # concurrent macOS builds blew past a 40min `Build tests + bins`
-    # cap mid-compile while a solo run on the same commit finished
-    # in 17 min. The macOS path filter only fires when sandbox /
-    # process-spawn / TLS code changes (cheaper-to-skip layer than
-    # Linux), so dropping throughput to 2 here is fine — the
-    # warm-cache steady state hits ~1m per macOS job anyway.
+  # Decrypt the host-bound encrypted agent token into tmpfs at boot.
+  # macOS has no systemd-creds; we use the same OCLP-era pattern as the
+  # other secrets on this box — an encrypted blob at
+  # /etc/buildkite-agent/agent-token.age decrypted by a one-shot launchd
+  # daemon. Here we keep it simple: the bootstrap script writes the
+  # plaintext token to /etc/buildkite-agent/agent-token (mode 600
+  # root:wheel) and this daemon copies it into a tmpfs-like /var/run
+  # path readable by the agent group. (macOS /var/run is not a tmpfs but
+  # is cleared on boot; the token is re-staged each boot from the
+  # root-only source.) See the buildkite-agents handoff doc for the
+  # provisioning step.
+  launchd.daemons.decrypt-agent-token = {
+    serviceConfig = {
+      Label = "com.sealedsecurity.decrypt-agent-token";
+      ProgramArguments = [
+        "/bin/sh"
+        "-c"
+        ''
+          set -e
+          install -d -m 0750 -o root -g ${agentUser} /var/run/buildkite-agent
+          install -m 0640 -o root -g ${agentUser} \
+            /etc/buildkite-agent/agent-token \
+            /var/run/buildkite-agent/agent-token
+        ''
+      ];
+      RunAtLoad = true;
+      KeepAlive = false;
+      StandardOutPath = "/var/log/decrypt-agent-token.log";
+      StandardErrorPath = "/var/log/decrypt-agent-token.log";
+    };
   };
+
+  # Two agent instances. SEA-672 dropped from 3 → 2: the Mac Pro 2013
+  # has 12 logical cores and 64 GB RAM; 3 concurrent cold-cache cargo
+  # builds put 12 parallel rustc on 12 cores 1:1, stretching individual
+  # compiles ~3× and blowing past a 40min cap. The macOS path filter
+  # only fires when sandbox / process-spawn / TLS code changes (a
+  # cheaper-to-skip layer than Linux), so N=2 is plenty; warm-cache
+  # steady state hits ~1m per macOS job.
+  #
+  # launchd has no dependency-ordering primitive like systemd's
+  # After=/Requires=. The agent daemon retries the token-file read on
+  # its own (KeepAlive restarts it until decrypt-agent-token has staged
+  # the file), so a boot-time race just costs a restart or two.
+  launchd.daemons.buildkite-agent-sealed-macos = mkAgentDaemon "sealed-macos";
+  launchd.daemons.buildkite-agent-sealed-macos-2 = mkAgentDaemon "sealed-macos-2";
 
   # ============================================================
   # Shared sccache server
@@ -820,7 +913,7 @@ in
         "${pkgs.sccache}/bin/sccache"
       ];
       EnvironmentVariables = {
-        SCCACHE_DIR = "/var/lib/github-runners/shared/.sccache";
+        SCCACHE_DIR = "/var/lib/buildkite-agents/shared/.sccache";
         SCCACHE_CACHE_SIZE = "30G";
         SCCACHE_SERVER_PORT = "4226";
         SCCACHE_LOG = "warn";
@@ -842,32 +935,30 @@ in
       };
       RunAtLoad = true;
       KeepAlive = true;
-      # Run as the github-runner service user so the cache dir
-      # ownership matches what the runner-side reads + writes.
-      # nix-darwin's `services.github-runners` defaults to the
-      # `_github-runner` system user.
-      UserName = "_github-runner";
-      GroupName = "_github-runner";
+      # Run as the buildkite-agent service user so the cache dir
+      # ownership matches what the agent-side reads + writes.
+      UserName = agentUser;
+      GroupName = agentUser;
       StandardOutPath = "/var/log/sccache-server.log";
       StandardErrorPath = "/var/log/sccache-server.log";
     };
   };
 
   # ============================================================
-  # Runner cache cleanup — weekly launchd job
+  # Agent cache cleanup — weekly launchd job
   # ============================================================
   #
   # mattserver has a systemd timer for this; nix-darwin uses launchd.
-  # Same find-and-rm logic as nixos/mattserver/system.nix lines 321-342.
+  # Same find-and-rm logic as nixos/mattserver/system.nix.
 
-  launchd.daemons.runner-cache-cleanup = {
+  launchd.daemons.agent-cache-cleanup = {
     serviceConfig = {
-      Label = "com.sealedsecurity.runner-cache-cleanup";
+      Label = "com.sealedsecurity.agent-cache-cleanup";
       ProgramArguments = [
         "/bin/sh"
         "-c"
         ''
-          find /var/lib/github-runners -maxdepth 6 \
+          find /var/lib/buildkite-agents -maxdepth 6 \
             -name "target" -type d \
             -not -path "*/.cargo/*" \
             -mtime +14 \
@@ -881,8 +972,8 @@ in
           Minute = 0;
         }
       ];
-      StandardOutPath = "/var/log/runner-cache-cleanup.log";
-      StandardErrorPath = "/var/log/runner-cache-cleanup.log";
+      StandardOutPath = "/var/log/agent-cache-cleanup.log";
+      StandardErrorPath = "/var/log/agent-cache-cleanup.log";
     };
   };
 
