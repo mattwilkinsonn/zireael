@@ -65,6 +65,101 @@ jobs:
       install_deps: true
     secrets: inherit
 
+  # Windows coverage. jj-hooks shells out to `git worktree add` with a
+  # `--git-dir` it resolves via canonicalize(); on Windows that yields a
+  # `\\?\` verbatim path git-for-windows rejects, so the worktree path
+  # handling has to be exercised on a real Windows host (the Unix matrix
+  # in ci-base-rust.yml can't surface it — Unix paths never get the
+  # prefix). Lives here, not in the shared reusable, so jj-gt isn't
+  # dragged onto Windows. `continue-on-error` keeps it informational
+  # while the Windows toolchain install stabilizes — the required
+  # `jj-hooks CI` rollup does NOT gate on it yet. Promote to required
+  # (drop continue-on-error, add to the rollup's needs) once it's
+  # reliably green.
+  test-windows:
+    name: Test (jj-hooks, windows-latest)
+    needs: [optimize_ci, changes]
+    if: |
+      needs.optimize_ci.outputs.skip == 'false' &&
+      needs.changes.outputs.changed == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    env:
+      CARGO_TERM_COLOR: always
+      # uv installs tool executables here; we add it to PATH below.
+      XDG_BIN_HOME: ${{ github.workspace }}\.tools\bin
+      XDG_DATA_HOME: ${{ github.workspace }}\.tools\data
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: rustup show active-toolchain || rustup toolchain install stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "test-jj-hooks-windows"
+          save-if: "true"
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-binstall
+
+      - uses: astral-sh/setup-uv@v6
+
+      # Latest jj (windows MSVC zip) — matches the unpinned Unix legs so
+      # Windows catches jj CLI drift too.
+      - name: Install latest jj
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = (Invoke-RestMethod "https://api.github.com/repos/jj-vcs/jj/releases/latest").tag_name
+          if (-not $tag) { throw "could not resolve latest jj release tag" }
+          $triple = "x86_64-pc-windows-msvc"
+          $url = "https://github.com/jj-vcs/jj/releases/download/$tag/jj-$tag-$triple.zip"
+          New-Item -ItemType Directory -Force -Path $env:XDG_BIN_HOME | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP "jj.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $env:XDG_BIN_HOME -Force
+          & "$env:XDG_BIN_HOME\jj.exe" --version
+
+      # Hook-runner stack: pre-commit + prek via uv, lefthook + pkl +
+      # actionlint via release assets, hk via cargo-binstall. Versions
+      # mirror the Unix install in ci-base-rust.yml.
+      - name: Install jj-hooks hook stack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bin = $env:XDG_BIN_HOME
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+
+          uv tool install pre-commit
+          uv tool install prek
+
+          Invoke-WebRequest -Uri "https://github.com/evilmartians/lefthook/releases/download/v2.1.6/lefthook_2.1.6_Windows_x86_64.exe" -OutFile "$bin\lefthook.exe"
+          Invoke-WebRequest -Uri "https://github.com/apple/pkl/releases/download/0.31.1/pkl-windows-amd64.exe" -OutFile "$bin\pkl.exe"
+
+          $alZip = Join-Path $env:RUNNER_TEMP "actionlint.zip"
+          Invoke-WebRequest -Uri "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_windows_amd64.zip" -OutFile $alZip
+          Expand-Archive -Path $alZip -DestinationPath $bin -Force
+
+          cargo binstall -y --install-path $bin hk
+
+      - name: Add tool dir to PATH
+        shell: pwsh
+        run: |
+          Add-Content -Path $env:GITHUB_PATH -Value $env:XDG_BIN_HOME
+
+      - name: Configure git identity
+        shell: pwsh
+        run: |
+          git config --global user.name "jj-hooks CI"
+          git config --global user.email "ci@jj-hooks.invalid"
+
+      - name: Tests
+        shell: pwsh
+        run: cargo nextest run -p jj-hooks --no-fail-fast
+
   # Rollup gate. ALWAYS fires, regardless of whether the dispatch job
   # ran or was skipped by the path filter. This is the single stable
   # check context the branch-protection ruleset gates on
