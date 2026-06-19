@@ -1,6 +1,6 @@
 # mattserver — NixOS Install Procedure
 
-Old gaming PC repurposed as a ZFS backup target, GitHub Actions runner host,
+Old gaming PC repurposed as a ZFS backup target, Buildkite CI agent host,
 and on-demand gaming station.
 
 **Hardware:**
@@ -16,7 +16,8 @@ and on-demand gaming station.
 
 - [ ] `nix-config` repo pushed (run `config status` on the Mac to confirm).
 - [ ] Tailscale pre-auth key ready at <https://login.tailscale.com/admin/settings/keys>.
-- [ ] GitHub PAT ready for the sealed runner pool (see GitHub runner token section below).
+- [ ] Buildkite agent token ready (org Agents page → Reveal Agent Token; see
+      "Buildkite agent token" section below).
 - [ ] New `mattw` + `root` password ready to type at the bootstrap prompt
       (manually rotated — see "Security posture" below for why this isn't 1P-driven).
 - [ ] Ventoy stick has the latest **NixOS 25.11 minimal or graphical ISO**
@@ -156,34 +157,34 @@ bash /run/media/*/Ventoy/home-manager/nixos/scripts/mattserver-bootstrap.sh
 
 ## Security posture
 
-mattserver runs untrusted GitHub Actions workflows via the
-self-hosted runner pool. The threat model assumes that a malicious
-workflow could land code-exec as the `sealed-runner` user — already
-mitigated upstream by external-PR approval gates + dep-update
-cooldowns, but defense-in-depth on the host shrinks the blast
-radius if those upstream layers fail.
+mattserver runs untrusted CI workflows via the self-hosted Buildkite
+agent pool. The threat model assumes that a malicious workflow could
+land code-exec as a `buildkite-agent-*` user — already mitigated
+upstream by external-PR approval gates + dep-update cooldowns, but
+defense-in-depth on the host shrinks the blast radius if those upstream
+layers fail.
 
 The deliberate posture choices on this host:
 
 - **Zero standing 1Password service-account tokens.** No personal SA,
-  no team SA, no Runners-vault SA. The bootstrap script (step 4)
-  prompts for the user password manually rather than fetching from
-  1P. Any SA token on disk is something the runner UID could
-  exfiltrate; the simplest answer is "have no SA tokens." The
-  documented downside is that password rotation is operator-driven
-  (run the bootstrap script and type the new password); the upside
-  is the runner UID has zero capability against the 1P account.
-- **Runner PAT encrypted at rest** via systemd-creds (host-bound
+  no team SA. The bootstrap script (step 4) prompts for the user
+  password manually rather than fetching from 1P. Any SA token on disk
+  is something a compromised agent could exfiltrate; the simplest
+  answer is "have no SA tokens." The documented downside is that
+  password rotation is operator-driven (run the bootstrap script and
+  type the new password); the upside is the agent has zero capability
+  against the 1P account.
+- **Agent token encrypted at rest** via systemd-creds (host-bound
   machine-ID encryption). The encrypted file at
-  `/etc/github-runner/sealed-token.cred` can't be decrypted off
-  this box; the plaintext only lives in tmpfs after
-  `decrypt-runner-token.service` runs at boot. See "GitHub runner
+  `/etc/buildkite-agent/agent-token.cred` can't be decrypted off this
+  box; the plaintext only lives in tmpfs after
+  `decrypt-agent-token.service` runs at boot. See "Buildkite agent
   token" below.
 - **No inter-server SSH keypair.** Earlier configs minted a shared
   `inter-server` ed25519 key in 1P and provisioned the private half
   to every NixOS host for cross-host automation. Retired — the only
   consumer (Pi-to-mattserver ZFS backups) wasn't actually wired up,
-  and the standing private key was a credential the runner UID
+  and the standing private key was a credential a compromised agent
   could reach. The matching `authorizedKeys` line is gone from
   `nixos/common.nix`. If we ever set up cross-host automation
   again, mint a fresh per-pair keypair scoped to the specific
@@ -197,93 +198,80 @@ The deliberate posture choices on this host:
   tailscale-serve it, so the only path was LAN inbound on :9090.
   Replaced operationally by Tailscale SSH + `btm` for live
   monitoring.
-- **nftables egress filter** on the `sealed-runner` UID drops
-  outbound to RFC1918, link-local, and CGNAT destinations that
-  bypass tailscaled. Allows DNS + public HTTP/HTTPS/git+ssh +
-  tailscale0. See `networking.nftables.tables.runner_egress` in
-  `system.nix`.
+- **No host-level egress lockdown on the agent (yet).** The
+  pre-SEA-830 runner setup dropped the runner UID's outbound to
+  RFC1918 / link-local / CGNAT (LAN-pivot defense-in-depth). That
+  rule relied on jobs running as forks of the runner UID in the host
+  netns; SEA-830 moved PR jobs into a podman container, where a
+  GID-by-`output` rule both mis-scopes (supplementary group) and
+  misses the hook (container egress is `forward`/`postrouting`). It
+  was dropped rather than shipped failing-open. Container-aware LAN
+  egress isolation is tracked in **SEA-835**. (mattmacpro runs jobs
+  natively, so its pf egress rule is still correctly scoped.)
 
-## GitHub runner token
+## Buildkite agent token
 
-> **Runners are disabled by default** (`enableRunners = false` at the top
-> of `nixos/mattserver/system.nix`). The token-write + flip-and-rebuild
-> step below is what turns them on. Skip this section entirely if you're
-> not ready to wire up runners yet — the rest of the host works without
-> them.
+> The agents register with the Buildkite **Agent** token (org Agents
+> page → Reveal Agent Token) — distinct from the `BUILDKITE_API_TOKEN`
+> the `bk` CLI uses. The encrypted file at
+> `/etc/buildkite-agent/agent-token.cred` must exist before the
+> `buildkite-agent-*` units start, or they fail with no token to
+> decrypt. The rest of the host works without it if you're not wiring
+> up the agents yet.
 
-The four runner instances (`sealed`, `sealed-2`, `sealed-3`, `sealed-4`)
-share a single org-scoped token. The plaintext PAT is encrypted at rest
-via `systemd-creds` (host-bound — only this box's machine ID can
-decrypt) and decrypted into tmpfs (`/run/github-runner/sealed-token`)
-at boot by `decrypt-runner-token.service`. The encrypted file at
-`/etc/github-runner/sealed-token.cred` must exist *before*
-`enableRunners` flips to `true` or `nixos-rebuild` will fail trying to
-start services with no token to decrypt.
+The two agent instances (`sealed`, `sealed-2`) share a single
+org-scoped agent token. The plaintext is encrypted at rest via
+`systemd-creds` (host-bound — only this box's machine ID can decrypt)
+and decrypted into tmpfs (`/run/buildkite-agent/agent-token`) at boot
+by `decrypt-agent-token.service`.
 
-Token scope:
-
-| Runner pool | Encrypted file | PAT scope |
-| ----------- | -------------- | --------- |
-| `sealed`, `sealed-2`, `sealed-3`, `sealed-4` | `/etc/github-runner/sealed-token.cred` | `manage_runners:org` (fine-grained) or `admin:org` (classic) |
-
-Create a fine-grained PAT scoped to the sealedsecurity org at
-<https://github.com/organizations/sealedsecurity/settings/personal-access-tokens>.
-Then encrypt it with the helper script (prompts for the token, writes
-the host-bound .cred file, optionally shreds any pre-existing
-plaintext):
+Get the agent token from
+<https://buildkite.com/organizations/sealedsecurity/agents> (Reveal
+Agent Token). Then encrypt it with the helper script (prompts for the
+token, writes the host-bound .cred file):
 
 ```bash
-sudo bash ~/repos/zireael/nix-config/nixos/scripts/mattserver-encrypt-runner-token.sh
+sudo bash ~/repos/zireael/nix-config/nixos/scripts/mattserver-encrypt-agent-token.sh
 ```
 
 The script verifies the decrypt path before exiting, so a successful
-run means the runner units will pick up the same plaintext at boot.
+run means the agent units will pick up the same plaintext at boot.
 
 > **Why systemd-creds instead of a plaintext token file:** the .cred
 > file is decryptable only by this host (encryption is bound to the
-> machine ID), so an attacker who exfiltrates `/etc/github-runner/`
+> machine ID), so an attacker who exfiltrates `/etc/buildkite-agent/`
 > off the box gets a useless blob. The plaintext only ever lives in
 > tmpfs after decrypt — it disappears on shutdown. Same pattern the
 > Pi uses for `op-pi-svc-token.cred`.
 
-Now flip `enableRunners = true;` in `nixos/mattserver/system.nix` and
-rebuild — all four runner services come up registered:
+Rebuild — both agent services come up and register:
 
 ```bash
 nix-switch
 sudo systemctl status \
-  decrypt-runner-token \
-  github-runner-sealed \
-  github-runner-sealed-2 \
-  github-runner-sealed-3 \
-  github-runner-sealed-4
+  decrypt-agent-token \
+  buildkite-agent-sealed \
+  buildkite-agent-sealed-2
 ```
 
-Confirm the four runners appear at
-<https://github.com/organizations/sealedsecurity/settings/actions/runners>
-with labels `[self-hosted, Linux, X64, seal-linux-x64, mattserver]`.
+Confirm the two agents appear at
+<https://buildkite.com/organizations/sealedsecurity/agents> with the
+tag `queue=linux-x64-selfhosted`.
 
-If you're migrating from an earlier plaintext layout, clean up the
-leftover files:
+To rotate the token, re-run the encrypt script with the new value and
+restart the decrypt + agent units:
 
 ```bash
-sudo shred -u /etc/github-runner/sealed-token         # plaintext PAT
-sudo rm -f   /etc/github-runner/personal-token        # pre-2026 split
+sudo bash ~/repos/zireael/nix-config/nixos/scripts/mattserver-encrypt-agent-token.sh
+sudo systemctl restart decrypt-agent-token.service
+sudo systemctl restart 'buildkite-agent-sealed*.service'
 ```
 
-To rotate the PAT, re-run the encrypt script with the new token and
-restart the decrypt + runner units:
-
-```bash
-sudo bash ~/repos/zireael/nix-config/nixos/scripts/mattserver-encrypt-runner-token.sh
-sudo systemctl restart decrypt-runner-token.service
-sudo systemctl restart 'github-runner-sealed*.service'
-```
-
-To later expand the pool (sealed-5, etc.), edit
-`nixos/mattserver/system.nix` and rebuild — no token changes are needed
-because the org-level PAT registers any number of runners against the
-same scope.
+To later expand the pool (sealed-3, etc.), add an entry to
+`services.buildkite-agents` in `nixos/mattserver/system.nix` plus a
+matching `systemd.services.buildkite-agent-<name>` decrypt-ordering
+stanza, then rebuild — no token changes are needed because the
+org-level agent token registers any number of agents.
 
 ## ZFS backup pool setup
 
@@ -370,10 +358,10 @@ When wiring this back up:
      backup@mattserver.tail08a5c5.ts.net:tank/backups/rpi5
    ```
 
-   Tailscale hostname is preferred over the LAN IP — the runner
-   egress lockdown on mattserver doesn't gate the inbound side, but
-   future hardening (e.g. dropping LAN inbound entirely) won't break
-   the path.
+   Tailscale hostname is preferred over the LAN IP — the inbound
+   firewall on mattserver only trusts `tailscale0`, and future
+   hardening (e.g. dropping LAN inbound entirely) won't break the
+   path.
 
 ## Gaming
 

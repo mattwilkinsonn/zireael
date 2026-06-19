@@ -1,7 +1,7 @@
 # mattmacpro — Install Procedure
 
-Mac Pro 2013 "trashcan" repurposed as a self-hosted GitHub Actions runner
-host for the sealedsecurity org (macOS x64 pool, label `seal-macos-x64`).
+Mac Pro 2013 "trashcan" repurposed as a self-hosted Buildkite CI agent
+host for the sealedsecurity org (macOS x64 pool, queue `macos-x64-selfhosted`).
 
 **Hardware:**
 
@@ -13,8 +13,8 @@ host for the sealedsecurity org (macOS x64 pool, label `seal-macos-x64`).
 
 **OS strategy:** OCLP-installed macOS Sonoma 14.x. The Mac Pro 2013 is
 natively stuck on macOS Monterey (Apple dropped it from Ventura+), but
-Monterey is already past security-update EOL and the Homebrew / GitHub
-runner ecosystem is starting to drop it. Sonoma via OpenCore Legacy
+Monterey is already past security-update EOL and the Homebrew / CI
+toolchain ecosystem is starting to drop it. Sonoma via OpenCore Legacy
 Patcher keeps the box inside a supported window through ~late 2026.
 
 ## TL;DR
@@ -29,9 +29,9 @@ Patcher keeps the box inside a supported window through ~late 2026.
 
 The bootstrap script handles everything else: Xcode CLT, Nix
 (upstream, via the Determinate installer), Homebrew, `gh` + zireael
-checkout, GitHub runner PAT, `darwin-rebuild`, Tailscale auth. You'll
-get three interactive prompts: `gh auth login` flow, GitHub runner
-PAT, Tailscale pre-auth key. That's it.
+checkout, Buildkite agent token, `darwin-rebuild`, Tailscale auth.
+You'll get three interactive prompts: `gh auth login` flow, Buildkite
+agent token, Tailscale pre-auth key. That's it.
 
 ## Pre-install checklist
 
@@ -39,9 +39,9 @@ PAT, Tailscale pre-auth key. That's it.
 - [ ] Tailscale pre-auth key ready at
       <https://login.tailscale.com/admin/settings/keys>. Single-use,
       tagged with `tag:ci-runner`. Paste at the bootstrap prompt.
-- [ ] GitHub PAT ready (fine-grained with `manage_runners:org` for
-      sealedsecurity org, or classic with `admin:org`). Create at
-      <https://github.com/organizations/sealedsecurity/settings/personal-access-tokens>.
+- [ ] Buildkite agent token ready (org Agents page → Reveal Agent
+      Token) at
+      <https://buildkite.com/organizations/sealedsecurity/agents>.
 - [ ] Bootable Sonoma installer USB created via OpenCore Legacy Patcher
       (see [OCLP install](#oclp-install) below).
 
@@ -144,27 +144,29 @@ debuggable remotely (no more USB-shuffling to copy errors back):
    flag (their proprietary fork doesn't ship x86_64-darwin). Upstream
    Nix; same installer machinery handles the synthetic-fs dance +
    daemon plist.
-7. **GitHub runner PAT** — prompts for the org-scoped PAT and writes
-   it to `/etc/github-runner/sealed-token` (mode 600 root:wheel).
-   Must be in place before step 8 since the runners are
-   `enable = true` unconditionally.
-8. **darwin-rebuild switch** — enables sshd via `systemsetup`, locks
-   pmset, lays down the three runner LaunchDaemons (start
-   immediately), and Glances + tailscale-serve-glances.
-9. **Sanity checks** — confirms sshd, Tailscale, runners, and
-   Glances are all up.
+7. **Buildkite agent token** — prompts for the org agent token and
+   writes it to `/etc/buildkite-agent/agent-token` (mode 600
+   root:wheel). Must be in place before step 8 since the agent
+   daemons read it at launch.
+8. **darwin-rebuild switch** — keeps native sshd disabled (Tailscale
+   SSH is the only access path), locks pmset, lays down the two agent
+   LaunchDaemons + the decrypt-agent-token daemon (start immediately),
+   and Glances + tailscale-serve-glances.
+9. **Sanity checks** — confirms native sshd is off, Tailscale SSH +
+   agents + Glances are all up.
 
 The script is re-runnable: every step skips if already done. Safe to
 ctrl-C at any point and resume — including via SSH after step 4.
 
 **Security posture:** mattmacpro deliberately keeps no 1Password
-service-account tokens on disk — the host runs untrusted GHA
-workflows via the self-hosted runner pool, so any SA accessible to
-processes here is a credential the runner UID could exfiltrate.
-The runner PAT in step 7 is the only secret, mode-600 root-wheel.
-Earlier bootstrap versions provisioned a personal SA into
-Keychain at step 7 and fetched a shared `inter-server` SSH key —
-both retired. If your host still has either, clean them up:
+service-account tokens on disk — the host runs untrusted CI
+workflows via the self-hosted Buildkite agent pool, so any SA
+accessible to processes here is a credential a compromised agent
+could exfiltrate. The agent token in step 7 is the only secret,
+mode-600 root-wheel. Earlier bootstrap versions provisioned a
+personal SA into Keychain at step 7 and fetched a shared
+`inter-server` SSH key — both retired. If your host still has either,
+clean them up:
 
 ```bash
 security delete-generic-password -a "$USER" -s OP_SERVICE_ACCOUNT_TOKEN
@@ -177,9 +179,9 @@ After it completes, you should be able to SSH from your MBP:
 ssh mattw@mattmacpro.tail08a5c5.ts.net
 ```
 
-And the runners should appear at
-<https://github.com/organizations/sealedsecurity/settings/actions/runners>
-with labels `[self-hosted, macOS, X64, seal-macos-x64, mattmacpro]`.
+And the agents should appear at
+<https://buildkite.com/organizations/sealedsecurity/agents>
+with the tag `queue=macos-x64-selfhosted`.
 
 ## Glances dashboard
 
@@ -195,15 +197,15 @@ idempotently on every nix-switch, so a `sudo darwin-rebuild switch
 
 ## Permissions / Gatekeeper
 
-The runner binary lives in the nix store; nix-darwin's
-`services.github-runners` module wraps it in a launchd LaunchDaemon
-that runs as root. Gatekeeper doesn't gate root-launched binaries in
-the nix store path, so no first-launch `xattr -d com.apple.quarantine`
-dance is needed.
+The agent binary lives in the nix store; the hand-rolled launchd
+daemon (`darwin/mattmacpro/system.nix`) runs it as the
+`_buildkite-agent` user. Gatekeeper doesn't gate launchd-launched
+binaries in the nix store path, so no first-launch
+`xattr -d com.apple.quarantine` dance is needed.
 
 If a CI job tries to do something macOS gates (Accessibility access,
 Screen Recording, Files & Folders), you'll see a prompt — pre-approve
-under System Settings → Privacy & Security. The runner workload
+under System Settings → Privacy & Security. The agent workload
 shouldn't trip these, but `cargo nextest` with seal's sandbox tests
 exercises `sandbox-exec`, which is built into macOS and works without
 approval.
@@ -222,18 +224,18 @@ Mac Pro 2013 may lag — wait for the OCLP project to officially bless
 the new version before updating. See
 <https://dortania.github.io/OpenCore-Legacy-Patcher/MODELS.html>.
 
-## Rotating the runner PAT
+## Rotating the agent token
 
-When the PAT expires:
+When the agent token rotates:
 
 ```bash
 sudo install -m 600 -o root -g wheel \
-  /dev/stdin /etc/github-runner/sealed-token <<< 'ghp_new...'
+  /dev/stdin /etc/buildkite-agent/agent-token <<< 'new-token...'
+sudo launchctl kickstart -k system/com.sealedsecurity.decrypt-agent-token
 sudo launchctl kickstart -k \
-  system/actions.runner.sealedsecurity.sealed \
-  system/actions.runner.sealedsecurity.sealed-2 \
-  system/actions.runner.sealedsecurity.sealed-3
+  system/com.sealedsecurity.buildkite-agent-sealed-macos \
+  system/com.sealedsecurity.buildkite-agent-sealed-macos-2
 ```
 
-No `darwin-rebuild` needed — the runner services re-read the token
-file on restart.
+No `darwin-rebuild` needed — the decrypt daemon re-stages the token
+and the agents re-read it on restart.
