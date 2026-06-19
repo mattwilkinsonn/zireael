@@ -859,15 +859,19 @@ in
     #    around in TM history for months. Excluding the agent state
     #    tree means TM never sees those bytes in the first place.
     #
-    # Both commands fail silently when their dependencies aren't
-    # available (mdutil bails if Spotlight isn't running; tmutil
-    # bails if TM isn't configured) — fine for a headless box that
-    # may not have either active. `|| true` suppresses the exit
-    # status either way so a failure here doesn't fail activation.
+    # Both commands no-op when their dependencies aren't available
+    # (mdutil reports "unknown indexing state" when the volume isn't
+    # Spotlight-indexed — as is the case for this path; tmutil bails if
+    # TM isn't configured) — fine for a headless box that may not have
+    # either active. Redirect BOTH stdout and stderr: mdutil writes its
+    # "unknown indexing state" / "invalid operation" notice to STDOUT,
+    # not stderr, so a bare `2>/dev/null` leaves it cluttering every
+    # nix-switch. `|| true` suppresses the exit status so a failure here
+    # never fails activation.
     echo >&2 "applying agent-state Spotlight + Time Machine exclusions..."
-    /usr/bin/mdutil -i off /var/lib/buildkite-agents 2>/dev/null || true
+    /usr/bin/mdutil -i off /var/lib/buildkite-agents >/dev/null 2>&1 || true
     if [ -d /var/lib/buildkite-agents ]; then
-      /usr/bin/tmutil addexclusion /var/lib/buildkite-agents 2>/dev/null || true
+      /usr/bin/tmutil addexclusion /var/lib/buildkite-agents >/dev/null 2>&1 || true
     fi
   '';
 
