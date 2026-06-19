@@ -175,6 +175,7 @@
       "codex-app"
       "zed"
       "cmux"
+      "typora"
     ];
   };
 
