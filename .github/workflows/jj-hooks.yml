@@ -71,11 +71,9 @@ jobs:
   # handling has to be exercised on a real Windows host (the Unix matrix
   # in ci-base-rust.yml can't surface it — Unix paths never get the
   # prefix). Lives here, not in the shared reusable, so jj-gt isn't
-  # dragged onto Windows. `continue-on-error` keeps it informational
-  # while the Windows toolchain install stabilizes — the required
-  # `jj-hooks CI` rollup does NOT gate on it yet. Promote to required
-  # (drop continue-on-error, add to the rollup's needs) once it's
-  # reliably green.
+  # dragged onto Windows. Blocking: the `jj-hooks CI` rollup gates on
+  # this job's result (see the rollup's `needs` + result check below),
+  # so a Windows regression fails the required check.
   test-windows:
     name: Test (jj-hooks, windows-latest)
     needs: [optimize_ci, changes]
@@ -84,7 +82,6 @@ jobs:
       needs.changes.outputs.changed == 'true'
     runs-on: windows-latest
     timeout-minutes: 25
-    continue-on-error: true
     env:
       CARGO_TERM_COLOR: always
       # uv installs tool executables here; we add it to PATH below.
@@ -191,21 +188,28 @@ jobs:
   # not a failure); `failure` and `cancelled` upstream are fail.
   ci:
     name: jj-hooks CI
-    needs: [optimize_ci, changes, ci-dispatch]
+    needs: [optimize_ci, changes, ci-dispatch, test-windows]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
-      - name: Rollup ci-dispatch result
+      - name: Rollup job results
         run: |
           set -euo pipefail
-          result='${{ needs.ci-dispatch.result }}'
-          case "$result" in
-            success|skipped)
-              echo "ci-dispatch reported $result — pass"
-              ;;
-            *)
-              echo "ci-dispatch reported $result — fail" >&2
-              exit 1
-              ;;
-          esac
+          fail=0
+          for entry in \
+            "ci-dispatch=${{ needs.ci-dispatch.result }}" \
+            "test-windows=${{ needs.test-windows.result }}"; do
+            name="${entry%%=*}"
+            result="${entry#*=}"
+            case "$result" in
+              success|skipped)
+                echo "$name reported $result — pass"
+                ;;
+              *)
+                echo "$name reported $result — fail" >&2
+                fail=1
+                ;;
+            esac
+          done
+          exit "$fail"
