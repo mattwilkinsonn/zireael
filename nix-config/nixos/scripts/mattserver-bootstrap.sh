@@ -156,7 +156,8 @@ Next steps:
   1. Encrypt the Buildkite agent token into systemd-creds at
      /etc/buildkite-agent/agent-token.cred (INSTALL.md "Buildkite agent token"):
        sudo bash $HOME/repos/zireael/nix-config/nixos/scripts/mattserver-encrypt-agent-token.sh
-     Then nix-switch; the buildkite-agent units register on next boot.
+     Then nix-switch; the decrypt-agent-token + buildkite-agent units
+     start and the agents register (no reboot needed).
   2. Create ZFS pool if not done yet (INSTALL.md "SATA SSHD — ZFS backup pool").
   3. Grant ZFS delegation to the backup user (INSTALL.md "ZFS backup receive setup").
   4. Add SSH config entry on your Mac (INSTALL.md "SSH from the Mac").

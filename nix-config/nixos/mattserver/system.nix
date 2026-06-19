@@ -12,14 +12,20 @@
 #      `bootToDesktop` in desktop.nix to go headless)
 
 let
-  # Shared supplementary group the egress filter keys on. The nixpkgs
+  # Shared supplementary group every agent joins so they can all read
+  # the one decrypted agent-token file. The nixpkgs
   # services.buildkite-agents module creates a per-agent system user
-  # (buildkite-agent-sealed, buildkite-agent-sealed-2, …), so there's
-  # no single static UID to match in the nftables rule like the old
-  # github-runner setup had. Instead every agent joins this group and
-  # the egress lockdown matches `meta skgid "ci-egress"` — one rule
-  # covers any number of agent instances. SEA-830.
-  egressGroup = "ci-egress";
+  # (buildkite-agent-sealed, buildkite-agent-sealed-2, …) with its own
+  # primary group, so there's no shared group to chgrp the token to.
+  # This group provides one: decrypt-agent-token.service writes the
+  # token mode 0640 owned by this group, and each agent (a member)
+  # reads it via tokenPath. SEA-830.
+  #
+  # (Pre-SEA-835 this group also keyed an nftables egress filter; that
+  # rule was dropped because it couldn't cover the container workload
+  # — see the NOTE in the networking section. The group's remaining
+  # job is shared token-read.)
+  agentTokenGroup = "buildkite-token";
 
   # Per-PR-pipeline jobs run INSIDE the seal-ci container (the
   # Buildkite docker plugin launches it), not natively on the agent.
@@ -82,10 +88,11 @@ let
 
     runtimePackages = agentRuntimePackages;
 
-    # Join the egress-filter group (kernel nftables lockdown below) and
-    # the podman group (docker-compat socket access).
+    # Join the shared token-read group (so every agent can read the one
+    # decrypted agent-token) and the podman group (docker-compat socket
+    # access).
     extraGroups = [
-      egressGroup
+      agentTokenGroup
       "podman"
     ];
 
@@ -316,12 +323,12 @@ in
     sealed-2 = agentConfig;
   };
 
-  # Egress-filter group every agent joins (see the nftables lockdown
-  # below). The buildkite-agents module creates per-agent users
-  # (buildkite-agent-sealed, -sealed-2); this shared supplementary
-  # group is what the kernel egress rule matches so one rule covers all
-  # instances regardless of count.
-  users.groups.${egressGroup} = { };
+  # Shared token-read group every agent joins. The buildkite-agents
+  # module creates per-agent users (buildkite-agent-sealed, -sealed-2)
+  # each with its own primary group; this shared group is what the one
+  # decrypted agent-token file is chgrp'd to so every agent can read
+  # it regardless of instance count.
+  users.groups.${agentTokenGroup} = { };
 
   # Token provisioning. The agents register with the Buildkite *Agent*
   # token (org Agents page) — distinct from the BUILDKITE_API_TOKEN the
@@ -346,7 +353,7 @@ in
       RuntimeDirectoryPreserve = true;
       # `+` prefix runs ExecStart as root (needed for systemd-creds
       # decrypt against the host machine-ID key). The token is then
-      # made group-readable by the egress group so every per-agent
+      # made group-readable by the shared token group so every per-agent
       # user (all members of the group) can read it via tokenPath.
       ExecStart = [
         ''
@@ -356,7 +363,7 @@ in
               --name=buildkite-agent-token \
               /etc/buildkite-agent/agent-token.cred \
               /run/buildkite-agent/agent-token
-            chgrp ${egressGroup} /run/buildkite-agent/agent-token
+            chgrp ${agentTokenGroup} /run/buildkite-agent/agent-token
             chmod 640 /run/buildkite-agent/agent-token
           ''}
         ''
@@ -432,17 +439,10 @@ in
     networkmanager.enable = true;
   };
 
-  # nftables backend (replaces the iptables-based default). Required
-  # for the agent-egress filter below — `networking.firewall` still
-  # works on either backend; nftables gives us the group-matched
-  # output chain we want for the lockdown.
+  # nftables backend (replaces the iptables-based default).
+  # `networking.firewall` works on either backend; we keep nftables
+  # for the inbound firewall below.
   networking.nftables.enable = true;
-  # Skip the rule-check at build time. The check would invoke `nft -c`
-  # inside the build sandbox, where only nixbld* users exist —
-  # `meta skgid != "ci-egress"` fails name resolution and the
-  # build aborts with "Group does not exist". The check still runs at
-  # activation time on the host, where ci-egress is present.
-  networking.nftables.checkRuleset = false;
 
   networking.firewall = {
     enable = true;
@@ -455,139 +455,29 @@ in
     trustedInterfaces = [ "tailscale0" ];
   };
 
-  # Egress lockdown for the self-hosted CI agent pool.
+  # NOTE: no host-level egress lockdown on the CI agent here.
   #
-  # Threat model: a malicious workflow lands code-exec as a Buildkite
-  # agent process. Already mitigated upstream by external-PR workflow
-  # approval + dep cooldowns + Tailscale ACLs gating tailnet peer
-  # reachability. This rule is defense-in-depth: cut the agent off from
-  # the LAN (router admin, NAS, other workstations) and from
-  # CGNAT-routed paths that bypass tailscaled.
+  # The pre-SEA-830 self-hosted-runner setup carried an nftables
+  # `output`-hook rule that dropped the runner UID's egress to RFC1918
+  # / link-local / CGNAT (LAN-pivot defense-in-depth). That rule was
+  # valid when job code ran as forks of the runner UID in the host
+  # network namespace. SEA-830 moved PR jobs INTO a podman container
+  # (the Buildkite docker plugin), which breaks UID/GID-by-`output`
+  # filtering two ways: (1) `meta skgid` matches only the primary GID,
+  # and the agents join `ci-egress` as a supplementary group, so the
+  # match never fires; (2) container egress traverses
+  # `forward`/`postrouting`, not `output`, so the rule never sees the
+  # job's packets at all. The control would have constrained only the
+  # trusted agent daemon while silently failing open for the untrusted
+  # workload — worse than no rule. Dropped here deliberately.
   #
-  # Why nftables (kernel, by GID) and not systemd's per-unit
-  # `IPAddressDeny=` / `PrivateNetwork=`: PR jobs run inside a container
-  # the agent launches via the docker plugin, and a per-unit network
-  # filter wouldn't follow the job into the container's network path
-  # cleanly. Filtering by GID at the kernel survives every fork inside
-  # the unit, the container launch, and any in-process privilege
-  # escalation short of root.
-  #
-  # `meta skgid` is the source GID for outbound packets. The
-  # buildkite-agents module gives each agent its own per-name user
-  # (buildkite-agent-sealed, -sealed-2), so there's no single UID to
-  # match like the old shared-runner setup — instead every agent joins
-  # the `ci-egress` group and we match the GID. nft resolves
-  # `"ci-egress"` via getgrnam at ruleset load, robust against the
-  # auto-allocated GID.
-  #
-  # Allowed egress for the agent group:
-  #   - loopback (localhost services)
-  #   - DNS (53/udp+tcp, any destination — needed for
-  #     github.com, crates.io, registries, buildkite.com)
-  #   - HTTP/HTTPS (80, 443) to public destinations (registries,
-  #     GitHub API, Buildkite agent API, R2 sccache, artifacts)
-  #   - git+ssh egress (22) for `cargo install --git` etc.
-  #   - tailscale0 interface (tailnet ACLs govern peers)
-  #
-  # Dropped egress for the agent group:
-  #   - any TCP/UDP/ICMP to RFC1918 (10/8, 172.16/12, 192.168/16)
-  #   - link-local (169.254/16)
-  #   - CGNAT (100.64/10) on non-tailscale0 paths — tailscale0
-  #     egress was already passed above; this catches anyone
-  #     trying to route around tailscaled
-  #   - IPv6 ULA + link-local
-  #
-  # The `log prefix "agent-egress-drop: "` action surfaces blocked
-  # attempts in the journal so we can see what legitimate egress (if
-  # any) got caught and tighten the allowlist. After a week of clean
-  # logs, the prefix can be demoted to bare `drop`.
-  networking.nftables.tables.agent_egress = {
-    family = "inet";
-    content = ''
-      chain output {
-        type filter hook output priority filter; policy accept;
-
-        # Skip the rule for any process not in the agent egress group.
-        # The buildkite-agents module gives each agent its own per-name
-        # user, all members of `ci-egress`; matching the GID covers
-        # every agent instance with one rule. `meta skgid` resolves the
-        # group name via getgrnam at ruleset load.
-        meta skgid != "ci-egress" accept
-
-        # Allow loopback — localhost-only services.
-        oifname "lo" accept
-
-        # Allow tailscale0 egress — tailnet ACLs are the policy layer
-        # for peer reachability.
-        oifname "tailscale0" accept
-
-        # Allow DNS to any destination.
-        udp dport 53 accept
-        tcp dport 53 accept
-
-        # Drop RFC1918 / link-local / CGNAT (non-tailscale0) before
-        # the public-internet allow so the agent can't fall through
-        # the 443-allow into a LAN host listening on 443.
-        ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
-                   169.254.0.0/16, 100.64.0.0/10 } \
-          log prefix "agent-egress-drop: " level warn drop
-        ip6 daddr { fc00::/7, fe80::/10 } \
-          log prefix "agent-egress-drop: " level warn drop
-
-        # Force v4 fallback for outbound TCP from this group.
-        #
-        # Strace evidence (2026-06-01 round-9 diagnostic) showed
-        # `bun install` opening ~30 parallel non-blocking SYNs to
-        # 2606:4700::6810:XXX:443 (Cloudflare /120, npmjs.org).
-        # Every connect returned EINPROGRESS and then ETIMEDOUT
-        # ~10s later. ZERO agent-egress drops fired during the
-        # hang window — the SYNs leave the box and never get a
-        # SYN-ACK. Sequential v4 (curl, single connection) to the
-        # same Cloudflare service works in <300ms. Likely an
-        # upstream anti-flood / WAF on Cloudflare's edge that
-        # rate-limits a SYN burst from one source v6, OR a
-        # SLAAC-allocated /64 we're not propagating cleanly.
-        #
-        # The fix is surgical: reject outbound v6 TCP for this group
-        # so getaddrinfo's v4 results (also returned in the resolver
-        # answer) are tried instead.
-        #
-        # Why `reject` (not `drop`):
-        #   `drop` would silently swallow the SYN and the local
-        #   socket would still sit in EINPROGRESS until the kernel's
-        #   tcp_syn_retries exhausts (~127s) — the exact symptom we
-        #   already see from the upstream silent drop. `reject with
-        #   icmpx admin-prohibited` synthesizes an ICMPv6 admin-
-        #   prohibited back into the local stack so the socket fails
-        #   immediately with EACCES/EHOSTUNREACH; bun blows through
-        #   its v6 candidates in microseconds and lands on v4 inside
-        #   one app-level timeout instead of fifty.
-        #
-        # Why `meta nfproto ipv6 meta l4proto tcp` (not
-        # `ip6 nexthdr tcp`):
-        #   `ip6 nexthdr` inspects only the base header's Next
-        #   Header field; if there's any extension header (Hop-by-
-        #   Hop, Routing, Destination, Fragment) the match misses
-        #   and the packet leaks through to the `tcp dport 443
-        #   accept` below. `meta l4proto` walks the nexthdr chain.
-        #   The `nfproto ipv6` gate is required because in this
-        #   `inet`-family table `meta l4proto tcp` alone would
-        #   match v4 TCP too and kill the v4 path.
-        #
-        # Distinct log prefix so future debugging can tell "v6
-        # force-downgrade" from "actual policy block."
-        meta nfproto ipv6 meta l4proto tcp \
-          log prefix "agent-egress-drop-v6tcp: " level warn \
-          reject with icmpx type admin-prohibited
-
-        # Allow public HTTP/HTTPS + git+ssh.
-        tcp dport { 80, 443, 22 } accept
-
-        # Default deny for anything else this group tries.
-        log prefix "agent-egress-drop: " level warn drop
-      }
-    '';
-  };
+  # Container-aware LAN egress isolation (a `forward`/`postrouting`
+  # rule matching the podman network, or a CNI egress policy) is
+  # tracked in SEA-835. The threat model (malicious CI job pivoting to
+  # the home LAN; upstream PR-approval + dep cooldowns are the primary
+  # defense) is unchanged — only the enforcement point needs redoing
+  # for the container model. mattmacpro still runs jobs natively, so
+  # its pf egress rule remains correctly scoped.
 
   # Unload the bootstrap-time native sshd. The mattserver-bootstrap
   # script enables it so the operator can SSH in over the LAN to

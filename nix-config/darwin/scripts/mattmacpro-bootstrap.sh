@@ -307,9 +307,12 @@ fi
 
 # Source file stays root:wheel; the decrypt-agent-token launchd daemon
 # re-stages a group-readable copy under /var/run on every boot, so the
-# agent never reads this root-only original directly.
+# agent never reads this root-only original directly. chmod is enforced
+# unconditionally so a rerun over a pre-existing over-permissive file
+# still ends up mode 600.
 sudo chown root:wheel "$SEALED_TOKEN_FILE"
-echo "  owner: root:wheel (re-staged to /var/run/buildkite-agent by decrypt-agent-token)"
+sudo chmod 600 "$SEALED_TOKEN_FILE"
+echo "  owner: root:wheel mode 600 (re-staged to /var/run/buildkite-agent by decrypt-agent-token)"
 
 # ---------------------------------------------------------------------
 # 8. darwin-rebuild switch

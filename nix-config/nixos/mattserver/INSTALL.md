@@ -198,11 +198,16 @@ The deliberate posture choices on this host:
   tailscale-serve it, so the only path was LAN inbound on :9090.
   Replaced operationally by Tailscale SSH + `btm` for live
   monitoring.
-- **nftables egress filter** on the `ci-egress` group (every agent
-  joins it) drops outbound to RFC1918, link-local, and CGNAT
-  destinations that bypass tailscaled. Allows DNS + public
-  HTTP/HTTPS/git+ssh + tailscale0. See
-  `networking.nftables.tables.agent_egress` in `system.nix`.
+- **No host-level egress lockdown on the agent (yet).** The
+  pre-SEA-830 runner setup dropped the runner UID's outbound to
+  RFC1918 / link-local / CGNAT (LAN-pivot defense-in-depth). That
+  rule relied on jobs running as forks of the runner UID in the host
+  netns; SEA-830 moved PR jobs into a podman container, where a
+  GID-by-`output` rule both mis-scopes (supplementary group) and
+  misses the hook (container egress is `forward`/`postrouting`). It
+  was dropped rather than shipped failing-open. Container-aware LAN
+  egress isolation is tracked in **SEA-835**. (mattmacpro runs jobs
+  natively, so its pf egress rule is still correctly scoped.)
 
 ## Buildkite agent token
 
@@ -353,10 +358,10 @@ When wiring this back up:
      backup@mattserver.tail08a5c5.ts.net:tank/backups/rpi5
    ```
 
-   Tailscale hostname is preferred over the LAN IP — the runner
-   egress lockdown on mattserver doesn't gate the inbound side, but
-   future hardening (e.g. dropping LAN inbound entirely) won't break
-   the path.
+   Tailscale hostname is preferred over the LAN IP — the inbound
+   firewall on mattserver only trusts `tailscale0`, and future
+   hardening (e.g. dropping LAN inbound entirely) won't break the
+   path.
 
 ## Gaming
 

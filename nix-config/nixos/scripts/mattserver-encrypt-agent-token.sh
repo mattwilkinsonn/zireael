@@ -69,8 +69,8 @@ echo
 echo "Encrypted to $OUT"
 echo "Verifying decrypt..."
 
-DECRYPTED_PREFIX=$(systemd-creds decrypt --name=buildkite-agent-token "$OUT" - | head -c 8)
-echo "Decrypt OK. Token starts with: ${DECRYPTED_PREFIX}..."
+systemd-creds decrypt --name=buildkite-agent-token "$OUT" - >/dev/null
+echo "Decrypt OK."
 
 echo
 echo "Done. The buildkite-agent units decrypt this credential at boot"

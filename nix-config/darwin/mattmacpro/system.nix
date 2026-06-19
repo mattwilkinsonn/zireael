@@ -133,6 +133,9 @@ let
     # hook scripts reach for outside any job sandbox.
     buildkite-agent
     bash
+    # GNU coreutils — macOS ships BSD coreutils; some CI scripts expect
+    # GNU `timeout`, `realpath`, etc. (also exposes the g-prefixed
+    # gtimeout / grealpath).
     coreutils
     gnutar
     gzip
@@ -144,12 +147,6 @@ let
 
     # protobuf-compiler — equivalent of the Linux apt install step.
     protobuf
-
-    # GNU coreutils — macOS ships BSD coreutils; some CI scripts
-    # expect GNU `timeout`, `realpath`, etc. PATH-prefix-installed
-    # under the runner service's environment so `coreutils-prefixed`
-    # tools (gtimeout, grealpath) are also available.
-    coreutils
 
     # pkg-config — required for openssl-sys and similar crates to
     # resolve at build.
@@ -725,15 +722,18 @@ in
     # suffix is dynamic across reboots. `utun` matches any of them.
     pass out quick on utun proto { tcp udp icmp } user ${agentUser}
 
-    # Allow DNS to any destination.
-    pass out quick proto { tcp udp } from any to any port 53 \
-      user ${agentUser}
-
     # Drop LAN-range destinations for the agent UID. Listed BEFORE
-    # the public-internet allow so the agent can't fall through into
-    # a LAN host that happens to be listening on 443.
+    # the DNS + public-internet allows so the agent can't fall through
+    # into a LAN host that happens to be listening on 53 or 443.
     block drop out log quick proto { tcp udp icmp } \
       from any to <lan_ranges> user ${agentUser}
+
+    # Allow DNS only to non-LAN resolvers. Placed AFTER the LAN-drop
+    # (and scoped `to !<lan_ranges>`) so a malicious job can't reach a
+    # LAN-side resolver / service on port 53 — the `quick` modifier
+    # would otherwise short-circuit before the LAN-drop is evaluated.
+    pass out quick proto { tcp udp } from any to !<lan_ranges> port 53 \
+      user ${agentUser}
 
     # Allow public HTTP/HTTPS + git+ssh.
     pass out quick proto tcp from any to any port { 80, 443, 22 } \

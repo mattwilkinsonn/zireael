@@ -148,12 +148,12 @@ debuggable remotely (no more USB-shuffling to copy errors back):
    writes it to `/etc/buildkite-agent/agent-token` (mode 600
    root:wheel). Must be in place before step 8 since the agent
    daemons read it at launch.
-8. **darwin-rebuild switch** — enables sshd via `systemsetup`, locks
-   pmset, lays down the two agent LaunchDaemons + the
-   decrypt-agent-token daemon (start immediately), and Glances +
-   tailscale-serve-glances.
-9. **Sanity checks** — confirms sshd, Tailscale, agents, and
-   Glances are all up.
+8. **darwin-rebuild switch** — keeps native sshd disabled (Tailscale
+   SSH is the only access path), locks pmset, lays down the two agent
+   LaunchDaemons + the decrypt-agent-token daemon (start immediately),
+   and Glances + tailscale-serve-glances.
+9. **Sanity checks** — confirms native sshd is off, Tailscale SSH +
+   agents + Glances are all up.
 
 The script is re-runnable: every step skips if already done. Safe to
 ctrl-C at any point and resume — including via SSH after step 4.
