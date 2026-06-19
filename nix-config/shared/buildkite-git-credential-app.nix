@@ -60,7 +60,9 @@ pkgs.writeShellApplication {
 
     now="$(date +%s)"
     header='{"alg":"RS256","typ":"JWT"}'
-    payload="$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$((now - 60))" "$((now + 540))" "${appId}")"
+    # `iss` is the App ID as a JSON integer (unquoted %s — appId is
+    # numeric), matching GitHub's spec + octokit.
+    payload="$(printf '{"iat":%d,"exp":%d,"iss":%s}' "$((now - 60))" "$((now + 540))" "${appId}")"
     unsigned="$(printf '%s' "$header" | b64url).$(printf '%s' "$payload" | b64url)"
     sig="$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$key_file" | b64url)"
     jwt="$unsigned.$sig"
@@ -72,12 +74,15 @@ pkgs.writeShellApplication {
         -H "X-GitHub-Api-Version: 2022-11-28" "$@"
     }
 
-    # Look up the installation on sealedsecurity/seal (the App is
-    # installed org-wide; any repo it covers resolves the same
-    # installation). The first "id" in the installation object is the
-    # installation id.
-    install_id="$(api "https://api.github.com/repos/sealedsecurity/seal/installation" \
-      | grep -m1 -o '"id":[[:space:]]*[0-9]\+' | grep -o '[0-9]\+')"
+    # Resolve the installation via the ORG-level endpoint — stable
+    # regardless of which repo is queried (a per-repo endpoint would
+    # 404 if that repo were renamed/archived/uninstalled, silently
+    # killing every agent checkout). The first "id" in the installation
+    # object is the installation id. `grep -oE` (ERE) so `+` is portable
+    # to macOS's BSD grep — `grep` isn't in runtimeInputs, so mattmacpro
+    # uses /usr/bin/grep where the GNU BRE `\+` would match nothing.
+    install_id="$(api "https://api.github.com/orgs/sealedsecurity/installation" \
+      | grep -m1 -oE '"id":[[:space:]]*[0-9]+' | grep -oE '[0-9]+')"
     [ -n "$install_id" ] || { echo "buildkite-git-credential-app: no installation id" >&2; exit 0; }
 
     token="$(api -X POST "https://api.github.com/app/installations/$install_id/access_tokens" \
