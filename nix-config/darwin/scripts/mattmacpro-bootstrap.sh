@@ -42,6 +42,18 @@
 
 set -euo pipefail
 
+# Guarantee the standard macOS system paths + the Intel Homebrew prefix
+# are on PATH before anything else. This script shells out to system
+# tools in /usr/sbin (scutil) and /sbin (shutdown, reboot) and to
+# /usr/local/bin (brew, tailscale). On a fresh macOS account — or a box
+# whose nix-darwin /etc/static symlinks are dangling (e.g. after an OCLP
+# reinstall wiped /nix but left /etc behind) — the login shell's
+# path_helper never runs, so these dirs are missing and the script dies
+# with "scutil: command not found". Setting PATH explicitly here makes
+# bootstrap robust to that state. nix bits get prepended later once the
+# nix profile exists.
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR/../../shared/scripts
 # shellcheck source=../../shared/scripts/bootstrap-common.sh
