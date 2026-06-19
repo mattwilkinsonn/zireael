@@ -114,7 +114,12 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $tag = (Invoke-RestMethod "https://api.github.com/repos/jj-vcs/jj/releases/latest").tag_name
+          # Authenticated: unauthenticated api.github.com is 60 req/hr/IP,
+          # which CI runners sharing a cloud IP blow through (403);
+          # github.token lifts it to 5000/hr. Mirrors the Unix legs in
+          # ci-base-rust.yml.
+          $headers = @{ Authorization = "Bearer ${{ github.token }}" }
+          $tag = (Invoke-RestMethod -Headers $headers "https://api.github.com/repos/jj-vcs/jj/releases/latest").tag_name
           if (-not $tag) { throw "could not resolve latest jj release tag" }
           $triple = "x86_64-pc-windows-msvc"
           $url = "https://github.com/jj-vcs/jj/releases/download/$tag/jj-$tag-$triple.zip"
