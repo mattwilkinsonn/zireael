@@ -111,7 +111,11 @@ jobs:
           set -euo pipefail
           # Resolve the latest jj release so PR + nightly both catch jj
           # CLI drift the day it ships, rather than hiding behind a pin.
-          jj_version=$(curl -fsSL https://api.github.com/repos/jj-vcs/jj/releases/latest \
+          # Authenticated: the unauthenticated api.github.com limit is 60
+          # req/hr/IP, which CI runners sharing a cloud IP blow through
+          # (the install then 403s); github.token lifts it to 5000/hr.
+          jj_version=$(curl -fsSL -H "Authorization: Bearer ${{ github.token }}" \
+            https://api.github.com/repos/jj-vcs/jj/releases/latest \
             | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
           if [ -z "$jj_version" ]; then
             echo "could not resolve latest jj release tag" >&2
