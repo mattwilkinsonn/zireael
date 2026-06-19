@@ -218,6 +218,11 @@ let
     awscli2
     jq
     gnumake
+    # Command runner — the macOS test pipeline drives the build via
+    # `just` recipes (build-wasm-agent-staged, etc.). Pre-SEA-830 the
+    # hosted flow brew-installed it per job; the self-hosted agent
+    # bakes it into PATH here.
+    just
     # NOTE: deliberately no dbus / mold / clang / gcc here — macOS's
     # clang from the Xcode Command Line Tools is what cargo uses on
     # this platform; Linux-only deps would just be dead weight.
