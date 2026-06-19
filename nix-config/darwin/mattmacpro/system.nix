@@ -426,8 +426,13 @@ in
     };
     brews = [
       "coreutils"
-      "swiftly"
-      "xcodes"
+      # NOTE: no Swift toolchain managers (xcodes / swiftly) here. seal's
+      # macOS CI needs only the Xcode Command Line Tools (clang/ld via
+      # the xcodeShims above), not full Xcode — and newer Xcode versions
+      # won't run on the Mac Pro 2013 anyway, so a Swift-version manager
+      # has no future on this box. `xcodes` also has no x86_64 bottle as
+      # of 2.0.2 (Homebrew Tier 3), so leaving it in made every
+      # nix-switch fail its auto-upgrade. SEA-830.
       # zstd: same rationale as the MBP — podman links against
       # libzstd at runtime, so brew can't autoremove it. Declaring
       # it explicitly keeps the situation visible.
