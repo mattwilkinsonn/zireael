@@ -62,11 +62,11 @@ let
   # releases) — N=2 matches the historical SEA-680 round-4 shape so a
   # 4-PR stack serialises as 2 batches of 2. Job-internal parallelism
   # (CARGO_BUILD_JOBS) lives in the seal-ci container now, not here.
-  # Shared agent definition. Both instances are identical (the module
-  # derives each agent's name + dataDir from its attrset key in
-  # services.buildkite-agents below), so this is a plain value, not a
-  # `name:`-parameterised function.
-  agentConfig = {
+  # Per-instance agent config. The buildkite-agents module derives
+  # dataDir = /var/lib/buildkite-agent-<name> from the attrset key, so
+  # each agent gets its own plugins dir under it (set via extraConfig
+  # below) — keyed by `name`.
+  mkAgent = name: {
     enable = true;
 
     # Registration token — the Buildkite *Agent* token (org Agents
@@ -88,6 +88,16 @@ let
 
     runtimePackages = agentRuntimePackages;
 
+    # The module's generated buildkite-agent.cfg sets build-path +
+    # hooks-path but NOT plugins-path, so any step using a plugin
+    # (every PR pipeline uses secret-env + docker) fails at checkout
+    # with "Can't checkout plugin without a `plugins-path`". Point it
+    # at a per-instance dir under the agent's dataDir
+    # (/var/lib/buildkite-agent-<name>, createHome'd + owned by the
+    # agent user) so the two instances don't race a shared plugin
+    # checkout. The agent mkdir's it on first use.
+    extraConfig = ''plugins-path="/var/lib/buildkite-agent-${name}/plugins"'';
+
     # Join the shared token-read group (so every agent can read the one
     # decrypted agent-token) and the podman group (docker-compat socket
     # access).
@@ -95,11 +105,6 @@ let
       agentTokenGroup
       "podman"
     ];
-
-    # Don't garbage-collect the agent's nix deps mid-build, and give the
-    # build directory a stable home on the NVMe-backed state dir (the
-    # module defaults dataDir to /var/lib/buildkite-agent-<name>, which
-    # is already on btrfs root here — fine as-is).
   };
 in
 
@@ -319,8 +324,8 @@ in
   # cargo-registry / target-incremental bind-mounts into the container
   # are a follow-up (B1-full) — the cutover lands cold-registry first.
   services.buildkite-agents = {
-    sealed = agentConfig;
-    sealed-2 = agentConfig;
+    sealed = mkAgent "sealed";
+    sealed-2 = mkAgent "sealed-2";
   };
 
   # Shared token-read group every agent joins. The buildkite-agents
