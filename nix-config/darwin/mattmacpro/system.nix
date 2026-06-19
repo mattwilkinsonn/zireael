@@ -24,6 +24,20 @@
 # pmset activation block below.
 
 let
+  # Git credential helper for checkout-time clone auth — mints a
+  # sealedsecurity-ci App installation token over HTTPS so the agent can
+  # clone the repo (the Buildkite pipeline's git@github.com: SSH URL is
+  # rewritten to HTTPS via the gitconfig below). Shared with mattserver
+  # (shared/buildkite-git-credential-app.nix); this host stages the App
+  # key to /var/run/buildkite-agent/ci-app-key.pem via the
+  # decrypt-ci-app-key launchd daemon. App ID 4045728 is a public
+  # identifier, not a secret.
+  ciGitCredentialHelper = import ../../shared/buildkite-git-credential-app.nix {
+    inherit pkgs;
+    appId = "4045728";
+    keyPath = "/var/run/buildkite-agent/ci-app-key.pem";
+  };
+
   # Service user for the Buildkite agents. nix-darwin's github-runner
   # module used to create `_github-runner` (uid/gid 533); we now hand-
   # roll the agent launchd daemons (nix-darwin has no buildkite-agents
@@ -906,6 +920,50 @@ in
       StandardErrorPath = "/var/log/decrypt-agent-token.log";
     };
   };
+
+  # Stage the sealedsecurity-ci App private key for the git credential
+  # helper (checkout-time clone auth). Same shape as decrypt-agent-token:
+  # the bootstrap writes the plaintext .pem to /etc/buildkite-agent/
+  # ci-app-key.pem (mode 600 root:wheel) and this daemon re-stages a
+  # group-readable copy to /var/run on every boot. macOS has no
+  # systemd-creds (mattserver's host-binding) — this is the existing
+  # macpro plaintext-in-/etc tradeoff, applied to the App key too.
+  launchd.daemons.decrypt-ci-app-key = {
+    serviceConfig = {
+      Label = "com.sealedsecurity.decrypt-ci-app-key";
+      ProgramArguments = [
+        "/bin/sh"
+        "-c"
+        ''
+          set -e
+          install -d -m 0750 -o root -g ${agentUser} /var/run/buildkite-agent
+          install -m 0640 -o root -g ${agentUser} \
+            /etc/buildkite-agent/ci-app-key.pem \
+            /var/run/buildkite-agent/ci-app-key.pem
+        ''
+      ];
+      RunAtLoad = true;
+      KeepAlive = false;
+      StandardOutPath = "/var/log/decrypt-ci-app-key.log";
+      StandardErrorPath = "/var/log/decrypt-ci-app-key.log";
+    };
+  };
+
+  # System-wide git config for the agents' clones. Every agent launchd
+  # daemon runs git as _buildkite-agent, which has no home-manager
+  # config, so /etc/gitconfig (no programs.git option in nix-darwin —
+  # write the file directly) is where this lands:
+  #   - rewrite the SSH-form GitHub URL the pipeline uses
+  #     (git@github.com:owner/repo) to HTTPS so the helper applies;
+  #   - register the App-token credential helper for github.com HTTPS.
+  # mattw's interactive git still reads his home-manager gitconfig; this
+  # system file is the fallback the service users see.
+  environment.etc."gitconfig".text = ''
+    [url "https://github.com/"]
+        insteadOf = git@github.com:
+    [credential "https://github.com"]
+        helper = ${ciGitCredentialHelper}/bin/buildkite-git-credential-app
+  '';
 
   # Two agent instances. SEA-672 dropped from 3 → 2: the Mac Pro 2013
   # has 12 logical cores and 64 GB RAM; 3 concurrent cold-cache cargo

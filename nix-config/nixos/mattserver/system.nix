@@ -27,6 +27,18 @@ let
   # job is shared token-read.)
   agentTokenGroup = "buildkite-token";
 
+  # Git credential helper for checkout-time clone auth — mints a
+  # sealedsecurity-ci App installation token over HTTPS. Shared with
+  # mattmacpro (shared/buildkite-git-credential-app.nix); this host
+  # decrypts the App key to /run/buildkite-agent/ci-app-key.pem via
+  # decrypt-ci-app-key.service below. App ID 4045728 is a public
+  # identifier, not a secret.
+  ciGitCredentialHelper = import ../../shared/buildkite-git-credential-app.nix {
+    inherit pkgs;
+    appId = "4045728";
+    keyPath = "/run/buildkite-agent/ci-app-key.pem";
+  };
+
   # Per-PR-pipeline jobs run INSIDE the seal-ci container (the
   # Buildkite docker plugin launches it), not natively on the agent.
   # So the agent host only needs: the buildkite-agent binary, a base
@@ -400,12 +412,87 @@ in
   # module system MERGES with the module-generated units rather than
   # replacing them.
   systemd.services.buildkite-agent-sealed = {
-    after = [ "decrypt-agent-token.service" ];
-    requires = [ "decrypt-agent-token.service" ];
+    after = [
+      "decrypt-agent-token.service"
+      "decrypt-ci-app-key.service"
+    ];
+    requires = [
+      "decrypt-agent-token.service"
+      "decrypt-ci-app-key.service"
+    ];
   };
   systemd.services.buildkite-agent-sealed-2 = {
-    after = [ "decrypt-agent-token.service" ];
-    requires = [ "decrypt-agent-token.service" ];
+    after = [
+      "decrypt-agent-token.service"
+      "decrypt-ci-app-key.service"
+    ];
+    requires = [
+      "decrypt-agent-token.service"
+      "decrypt-ci-app-key.service"
+    ];
+  };
+
+  # Decrypt the sealedsecurity-ci App private key onto the box at boot
+  # for the git credential helper (checkout-time clone auth — see the
+  # ciGitCredentialHelper comment). Same host-bound systemd-creds
+  # pattern as the agent token: encrypt once with
+  #
+  #   sudo bash nixos/scripts/mattserver-encrypt-ci-app-key.sh
+  #
+  # which writes /etc/buildkite-agent/ci-app-key.pem.cred. This oneshot
+  # decrypts it to /run/buildkite-agent/ci-app-key.pem (tmpfs, mode
+  # 0640, group buildkite-token so the agent users can read it). The
+  # plaintext PEM never persists on disk.
+  systemd.services.decrypt-ci-app-key = {
+    description = "Decrypt the sealedsecurity-ci App key into /run";
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      # Share the same RuntimeDirectory as decrypt-agent-token; both
+      # write into /run/buildkite-agent. Preserve so neither tears down
+      # the other's file when it deactivates.
+      RuntimeDirectory = "buildkite-agent";
+      RuntimeDirectoryMode = "0750";
+      RuntimeDirectoryPreserve = true;
+      ExecStart = [
+        ''
+          +${pkgs.writeShellScript "decrypt-ci-app-key" ''
+            set -euo pipefail
+            ${pkgs.systemd}/bin/systemd-creds decrypt \
+              --name=buildkite-ci-app-key \
+              /etc/buildkite-agent/ci-app-key.pem.cred \
+              /run/buildkite-agent/ci-app-key.pem
+            chgrp ${agentTokenGroup} /run/buildkite-agent /run/buildkite-agent/ci-app-key.pem
+            chmod 0750 /run/buildkite-agent
+            chmod 0640 /run/buildkite-agent/ci-app-key.pem
+          ''}
+        ''
+      ];
+    };
+  };
+
+  # System-wide git config for the agents' clones (every buildkite-agent
+  # unit runs git as its own user, so a system config is the one place
+  # that covers them all without per-user files):
+  #
+  #   - Rewrite the SSH-form GitHub URL the Buildkite pipeline uses
+  #     (git@github.com:owner/repo) to HTTPS, so the credential helper
+  #     applies. Self-hosted agents have no GitHub SSH key.
+  #   - Register the App-token credential helper for github.com HTTPS.
+  #     `useHttpPath = false` (the default) means one token serves any
+  #     path under github.com.
+  #
+  # Public seal clones would work anonymously over HTTPS, but the helper
+  # is needed for private sealed once it cuts over — building the auth
+  # path once covers both.
+  programs.git = {
+    enable = true;
+    config = {
+      url."https://github.com/".insteadOf = "git@github.com:";
+      credential."https://github.com".helper =
+        "${ciGitCredentialHelper}/bin/buildkite-git-credential-app";
+    };
   };
 
   # ============================================================

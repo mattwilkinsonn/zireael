@@ -62,6 +62,7 @@ source "$SCRIPT_DIR/../../shared/scripts/bootstrap-common.sh"
 ZIREAEL_REPO_SLUG="mattwilkinsonn/zireael"
 NIX_CONFIG_DIR="$HOME/repos/zireael/nix-config"
 SEALED_TOKEN_FILE="/etc/buildkite-agent/agent-token"
+CI_APP_KEY_FILE="/etc/buildkite-agent/ci-app-key.pem"
 TARGET_HOSTNAME="mattmacpro"
 TS_HOSTNAME="${TARGET_HOSTNAME}.tail08a5c5.ts.net"
 
@@ -333,6 +334,33 @@ fi
 sudo chown root:wheel "$SEALED_TOKEN_FILE"
 sudo chmod 600 "$SEALED_TOKEN_FILE"
 echo "  owner: root:wheel mode 600 (re-staged to /var/run/buildkite-agent by decrypt-agent-token)"
+
+# ---------------------------------------------------------------------
+# 7b. sealedsecurity-ci App key → /etc/buildkite-agent/ci-app-key.pem
+# ---------------------------------------------------------------------
+# The git credential helper signs a JWT with this App private key to
+# mint installation tokens for cloning (the Buildkite pipeline's
+# git@github.com: URL is rewritten to HTTPS). The decrypt-ci-app-key
+# daemon re-stages it group-readable under /var/run each boot. Without
+# it, checkout fails "Permission denied (publickey)".
+step "sealedsecurity-ci App key"
+if sudo test -s "$CI_APP_KEY_FILE"; then
+	echo "  $CI_APP_KEY_FILE already present."
+else
+	echo "Path to the sealedsecurity-ci App private key (.pem),"
+	echo "downloaded from GitHub → org → Developer settings →"
+	echo "GitHub Apps → sealedsecurity-ci → Private keys → Generate."
+	echo
+	read -rp "Path to .pem: " PEM_PATH
+	[ -n "$PEM_PATH" ] && [ -r "$PEM_PATH" ] || err "unreadable .pem path: $PEM_PATH"
+	sudo mkdir -p /etc/buildkite-agent
+	sudo install -m 600 -o root -g wheel "$PEM_PATH" "$CI_APP_KEY_FILE"
+	echo "  $CI_APP_KEY_FILE written. Remember to shred the source:"
+	echo "    shred -u $PEM_PATH   # (or 'rm -P' on macOS)"
+fi
+sudo chown root:wheel "$CI_APP_KEY_FILE"
+sudo chmod 600 "$CI_APP_KEY_FILE"
+echo "  owner: root:wheel mode 600 (re-staged by decrypt-ci-app-key)"
 
 # ---------------------------------------------------------------------
 # 8. darwin-rebuild switch
