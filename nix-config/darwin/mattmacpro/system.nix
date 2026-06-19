@@ -38,6 +38,19 @@ let
     keyPath = "/var/run/buildkite-agent/ci-app-key.pem";
   };
 
+  # Git config for the AGENT processes only — pointed at via
+  # GIT_CONFIG_GLOBAL in each agent daemon's EnvironmentVariables (the
+  # agent user has no ~/.gitconfig), NOT written to /etc/gitconfig. A
+  # system-wide insteadOf rewrite is additive and can't be cancelled at
+  # a lower config level, so /etc/gitconfig would silently redirect
+  # mattw's own git@github.com: SSH clones to HTTPS+App-token too.
+  agentGitConfig = pkgs.writeText "buildkite-agent-gitconfig" ''
+    [url "https://github.com/"]
+        insteadOf = git@github.com:
+    [credential "https://github.com"]
+        helper = ${ciGitCredentialHelper}/bin/buildkite-git-credential-app
+  '';
+
   # Service user for the Buildkite agents. nix-darwin's github-runner
   # module used to create `_github-runner` (uid/gid 533); we now hand-
   # roll the agent launchd daemons (nix-darwin has no buildkite-agents
@@ -318,6 +331,10 @@ let
       EnvironmentVariables = {
         PATH = "${lib.makeBinPath agentPackages}:/usr/bin:/bin:/usr/sbin:/sbin";
         HOME = "/var/lib/buildkite-agents/${name}";
+        # Agent-scoped git config (insteadOf rewrite + credential
+        # helper) — GIT_CONFIG_GLOBAL so it applies only to the agent
+        # processes, not mattw's own git. See agentGitConfig.
+        GIT_CONFIG_GLOBAL = "${agentGitConfig}";
       }
       // mkAgentEnv name;
       UserName = agentUser;
@@ -949,21 +966,10 @@ in
     };
   };
 
-  # System-wide git config for the agents' clones. Every agent launchd
-  # daemon runs git as _buildkite-agent, which has no home-manager
-  # config, so /etc/gitconfig (no programs.git option in nix-darwin —
-  # write the file directly) is where this lands:
-  #   - rewrite the SSH-form GitHub URL the pipeline uses
-  #     (git@github.com:owner/repo) to HTTPS so the helper applies;
-  #   - register the App-token credential helper for github.com HTTPS.
-  # mattw's interactive git still reads his home-manager gitconfig; this
-  # system file is the fallback the service users see.
-  environment.etc."gitconfig".text = ''
-    [url "https://github.com/"]
-        insteadOf = git@github.com:
-    [credential "https://github.com"]
-        helper = ${ciGitCredentialHelper}/bin/buildkite-git-credential-app
-  '';
+  # (git config for the agents lives in agentGitConfig, pointed at via
+  # GIT_CONFIG_GLOBAL in each agent daemon's EnvironmentVariables above
+  # — NOT /etc/gitconfig, so it doesn't rewrite mattw's own git. See the
+  # agentGitConfig comment in the let block.)
 
   # Two agent instances. SEA-672 dropped from 3 → 2: the Mac Pro 2013
   # has 12 logical cores and 64 GB RAM; 3 concurrent cold-cache cargo

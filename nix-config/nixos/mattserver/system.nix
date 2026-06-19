@@ -39,6 +39,24 @@ let
     keyPath = "/run/buildkite-agent/ci-app-key.pem";
   };
 
+  # Git config for the AGENT processes only — pointed at via
+  # GIT_CONFIG_GLOBAL in each agent unit's environment (below), NOT
+  # written to /etc/gitconfig. A system-wide insteadOf rewrite is
+  # additive and can't be cancelled at a lower config level, so putting
+  # it in /etc/gitconfig would silently redirect mattw's own
+  # git@github.com: SSH clones to HTTPS+App-token too. Scoping it to the
+  # agents' GIT_CONFIG_GLOBAL keeps it off every other user's git.
+  #
+  #   - rewrite the SSH-form GitHub URL the Buildkite pipeline uses
+  #     (git@github.com:owner/repo) to HTTPS so the helper applies;
+  #   - register the App-token credential helper for github.com HTTPS.
+  agentGitConfig = pkgs.writeText "buildkite-agent-gitconfig" ''
+    [url "https://github.com/"]
+        insteadOf = git@github.com:
+    [credential "https://github.com"]
+        helper = ${ciGitCredentialHelper}/bin/buildkite-git-credential-app
+  '';
+
   # Per-PR-pipeline jobs run INSIDE the seal-ci container (the
   # Buildkite docker plugin launches it), not natively on the agent.
   # So the agent host only needs: the buildkite-agent binary, a base
@@ -406,7 +424,11 @@ in
     };
   };
 
-  # Order each agent unit behind the decrypt. The module names units
+  # Order each agent unit behind the decrypt, and point its git at the
+  # agent-scoped gitconfig (GIT_CONFIG_GLOBAL — the agent users have no
+  # ~/.gitconfig, so this layers the insteadOf rewrite + credential
+  # helper onto just the agent processes, leaving /etc/gitconfig and
+  # mattw's own git untouched). The module names units
   # `buildkite-agent-<name>`; keep this list in sync with
   # services.buildkite-agents above. Declared by single-key path so the
   # module system MERGES with the module-generated units rather than
@@ -420,6 +442,7 @@ in
       "decrypt-agent-token.service"
       "decrypt-ci-app-key.service"
     ];
+    environment.GIT_CONFIG_GLOBAL = "${agentGitConfig}";
   };
   systemd.services.buildkite-agent-sealed-2 = {
     after = [
@@ -430,6 +453,7 @@ in
       "decrypt-agent-token.service"
       "decrypt-ci-app-key.service"
     ];
+    environment.GIT_CONFIG_GLOBAL = "${agentGitConfig}";
   };
 
   # Decrypt the sealedsecurity-ci App private key onto the box at boot
@@ -472,28 +496,9 @@ in
     };
   };
 
-  # System-wide git config for the agents' clones (every buildkite-agent
-  # unit runs git as its own user, so a system config is the one place
-  # that covers them all without per-user files):
-  #
-  #   - Rewrite the SSH-form GitHub URL the Buildkite pipeline uses
-  #     (git@github.com:owner/repo) to HTTPS, so the credential helper
-  #     applies. Self-hosted agents have no GitHub SSH key.
-  #   - Register the App-token credential helper for github.com HTTPS.
-  #     `useHttpPath = false` (the default) means one token serves any
-  #     path under github.com.
-  #
-  # Public seal clones would work anonymously over HTTPS, but the helper
-  # is needed for private sealed once it cuts over — building the auth
-  # path once covers both.
-  programs.git = {
-    enable = true;
-    config = {
-      url."https://github.com/".insteadOf = "git@github.com:";
-      credential."https://github.com".helper =
-        "${ciGitCredentialHelper}/bin/buildkite-git-credential-app";
-    };
-  };
+  # (git config for the agents lives in agentGitConfig, pointed at via
+  # GIT_CONFIG_GLOBAL in each agent unit above — NOT system-wide, so it
+  # doesn't rewrite mattw's own git. See the agentGitConfig comment.)
 
   # ============================================================
   # Agent build-dir cleanup

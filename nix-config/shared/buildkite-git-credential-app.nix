@@ -77,12 +77,14 @@ pkgs.writeShellApplication {
     # Resolve the installation via the ORG-level endpoint — stable
     # regardless of which repo is queried (a per-repo endpoint would
     # 404 if that repo were renamed/archived/uninstalled, silently
-    # killing every agent checkout). The first "id" in the installation
-    # object is the installation id. `grep -oE` (ERE) so `+` is portable
-    # to macOS's BSD grep — `grep` isn't in runtimeInputs, so mattmacpro
-    # uses /usr/bin/grep where the GNU BRE `\+` would match nothing.
+    # killing every agent checkout). The response is compact JSON on a
+    # single line with several "id" fields (the installation id first,
+    # then account.id, etc.); `grep -o` prints EVERY match on the line,
+    # so pipe through `head -n1` to take only the first. `grep -oE`
+    # (ERE) keeps `+` portable to macOS's BSD grep (grep isn't in
+    # runtimeInputs, so mattmacpro uses /usr/bin/grep).
     install_id="$(api "https://api.github.com/orgs/sealedsecurity/installation" \
-      | grep -m1 -oE '"id":[[:space:]]*[0-9]+' | grep -oE '[0-9]+')"
+      | grep -oE '"id":[[:space:]]*[0-9]+' | head -n1 | grep -oE '[0-9]+')"
     [ -n "$install_id" ] || { echo "buildkite-git-credential-app: no installation id" >&2; exit 0; }
 
     token="$(api -X POST "https://api.github.com/app/installations/$install_id/access_tokens" \
