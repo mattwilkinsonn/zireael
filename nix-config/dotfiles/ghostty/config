@@ -5,6 +5,7 @@ font-family = "Cascadia Code"
 font-size = 14
 shell-integration-features = "true"
 macos-option-as-alt = true
+macos-auto-secure-input = false
 desktop-notifications = true
 keybind = alt+left=unbind
 keybind = alt+right=unbind
