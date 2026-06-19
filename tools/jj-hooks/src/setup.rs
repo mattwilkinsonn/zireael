@@ -260,6 +260,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // embeds the workspace path into an `sh -c` redirect; a Windows path breaks the shell command
     fn run_steps_passes_workspace_env_var() {
         // We can't easily intercept Command::env, but we *can* run
         // a real subprocess that records its env to a file. Using

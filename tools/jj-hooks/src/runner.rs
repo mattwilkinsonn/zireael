@@ -591,6 +591,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)] // resolves /bin/sh as an executable; Windows has no such path
     fn read_shim_argv_picks_up_prek_install_format() {
         // The exact format `prek install` writes (issue #17 repro).
         // We need the path to resolve to a real executable for the
@@ -609,6 +610,7 @@ exec "$PREK" hook-impl --hook-dir "$HERE" --script-version 4 --hook-type=pre-com
     }
 
     #[test]
+    #[cfg(unix)] // resolves /bin/sh as an executable; Windows has no such path
     fn read_shim_argv_picks_up_pre_commit_install_format() {
         // The format `pre-commit install` writes: unquoted
         // INSTALL_PYTHON=<path>, then exec'd as `python -mpre_commit`.
@@ -681,6 +683,7 @@ exec "$INSTALL_PYTHON" -mpre_commit "${ARGS[@]}"
     }
 
     #[test]
+    #[cfg(unix)] // resolves /bin/sh as an executable; Windows has no such path
     fn read_shim_argv_honours_stage() {
         // The pre-commit shim must NOT be consulted when we're running
         // the pre-push stage (and vice versa) — each stage has its own
@@ -698,6 +701,7 @@ exec "$INSTALL_PYTHON" -mpre_commit "${ARGS[@]}"
     }
 
     #[test]
+    #[cfg(unix)] // resolves /bin/sh as an executable; Windows has no such path
     fn read_shim_argv_accepts_export_prefix() {
         // Some shim variants emit `export VAR="…"` rather than bare
         // `VAR="…"`. Tolerate that.
