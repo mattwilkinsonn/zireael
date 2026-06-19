@@ -189,7 +189,6 @@ Global flags:
 | `--all` | off | Push all bookmarks (including new ones) |
 | `--tracked` | off | Push all tracked bookmarks |
 | `--deleted` | off | Push all deleted bookmarks |
-| `--allow-new` | off | Allow pushing new (untracked) bookmarks |
 | `--stage <pre-commit\|pre-push>` | `pre-push` | Which hook stage to run |
 | `--advance-bookmarks` | from config | Move local bookmarks to fixup commits on autofix |
 | `--dry-run` | off | Forwarded to `jj git push` |
