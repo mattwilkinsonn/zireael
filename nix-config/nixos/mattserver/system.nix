@@ -31,8 +31,8 @@ let
   # sealedsecurity-ci App installation token over HTTPS. Shared with
   # mattmacpro (shared/buildkite-git-credential-app.nix); this host
   # decrypts the App key to /run/buildkite-agent/ci-app-key.pem via
-  # decrypt-ci-app-key.service below. App ID 4045728 is a public
-  # identifier, not a secret.
+  # decrypt-agent-token.service below (which stages both secrets). App
+  # ID 4045728 is a public identifier, not a secret.
   ciGitCredentialHelper = import ../../shared/buildkite-git-credential-app.nix {
     inherit pkgs;
     appId = "4045728";
@@ -399,101 +399,60 @@ in
       RuntimeDirectoryMode = "0750";
       RuntimeDirectoryPreserve = true;
       # `+` prefix runs ExecStart as root (needed for systemd-creds
-      # decrypt against the host machine-ID key). The token file AND its
-      # parent dir are both group-owned by the shared token group so
-      # every per-agent user (a group member) can traverse /run/
-      # buildkite-agent and read the token via tokenPath. systemd
-      # creates the RuntimeDirectory owned root:root by default — the
-      # agents can't traverse a 0750 root:root dir even though they can
-      # read the 0640 file inside it, so the chgrp on the directory is
-      # load-bearing, not just the file.
+      # decrypt against the host machine-ID key). One service stages
+      # BOTH secrets — the agent token (needed at agent start) and the
+      # sealedsecurity-ci App key (needed at checkout by the git
+      # credential helper) — because they share /run/buildkite-agent and
+      # a separate unit declaring the same RuntimeDirectory makes systemd
+      # re-chown the whole tree to root:root on its activation, clobbering
+      # the chgrp the other unit did (the regression that broke
+      # agent-token reads). Both files AND the parent dir are group-owned
+      # by the shared token group so every per-agent user (a member) can
+      # traverse the 0750 dir and read the 0640 files. systemd creates
+      # the RuntimeDirectory root:root by default, so the chgrp on the
+      # dir is load-bearing, not just the files.
       ExecStart = [
         ''
-          +${pkgs.writeShellScript "decrypt-agent-token" ''
+          +${pkgs.writeShellScript "decrypt-agent-secrets" ''
             set -euo pipefail
             ${pkgs.systemd}/bin/systemd-creds decrypt \
               --name=buildkite-agent-token \
               /etc/buildkite-agent/agent-token.cred \
               /run/buildkite-agent/agent-token
-            chgrp ${agentTokenGroup} /run/buildkite-agent /run/buildkite-agent/agent-token
-            chmod 0750 /run/buildkite-agent
-            chmod 0640 /run/buildkite-agent/agent-token
-          ''}
-        ''
-      ];
-    };
-  };
-
-  # Order each agent unit behind the decrypt, and point its git at the
-  # agent-scoped gitconfig (GIT_CONFIG_GLOBAL — the agent users have no
-  # ~/.gitconfig, so this layers the insteadOf rewrite + credential
-  # helper onto just the agent processes, leaving /etc/gitconfig and
-  # mattw's own git untouched). The module names units
-  # `buildkite-agent-<name>`; keep this list in sync with
-  # services.buildkite-agents above. Declared by single-key path so the
-  # module system MERGES with the module-generated units rather than
-  # replacing them.
-  systemd.services.buildkite-agent-sealed = {
-    after = [
-      "decrypt-agent-token.service"
-      "decrypt-ci-app-key.service"
-    ];
-    requires = [
-      "decrypt-agent-token.service"
-      "decrypt-ci-app-key.service"
-    ];
-    environment.GIT_CONFIG_GLOBAL = "${agentGitConfig}";
-  };
-  systemd.services.buildkite-agent-sealed-2 = {
-    after = [
-      "decrypt-agent-token.service"
-      "decrypt-ci-app-key.service"
-    ];
-    requires = [
-      "decrypt-agent-token.service"
-      "decrypt-ci-app-key.service"
-    ];
-    environment.GIT_CONFIG_GLOBAL = "${agentGitConfig}";
-  };
-
-  # Decrypt the sealedsecurity-ci App private key onto the box at boot
-  # for the git credential helper (checkout-time clone auth — see the
-  # ciGitCredentialHelper comment). Same host-bound systemd-creds
-  # pattern as the agent token: encrypt once with
-  #
-  #   sudo bash nixos/scripts/mattserver-encrypt-ci-app-key.sh
-  #
-  # which writes /etc/buildkite-agent/ci-app-key.pem.cred. This oneshot
-  # decrypts it to /run/buildkite-agent/ci-app-key.pem (tmpfs, mode
-  # 0640, group buildkite-token so the agent users can read it). The
-  # plaintext PEM never persists on disk.
-  systemd.services.decrypt-ci-app-key = {
-    description = "Decrypt the sealedsecurity-ci App key into /run";
-    wantedBy = [ "multi-user.target" ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      # Share the same RuntimeDirectory as decrypt-agent-token; both
-      # write into /run/buildkite-agent. Preserve so neither tears down
-      # the other's file when it deactivates.
-      RuntimeDirectory = "buildkite-agent";
-      RuntimeDirectoryMode = "0750";
-      RuntimeDirectoryPreserve = true;
-      ExecStart = [
-        ''
-          +${pkgs.writeShellScript "decrypt-ci-app-key" ''
-            set -euo pipefail
             ${pkgs.systemd}/bin/systemd-creds decrypt \
               --name=buildkite-ci-app-key \
               /etc/buildkite-agent/ci-app-key.pem.cred \
               /run/buildkite-agent/ci-app-key.pem
-            chgrp ${agentTokenGroup} /run/buildkite-agent /run/buildkite-agent/ci-app-key.pem
+            chgrp ${agentTokenGroup} \
+              /run/buildkite-agent \
+              /run/buildkite-agent/agent-token \
+              /run/buildkite-agent/ci-app-key.pem
             chmod 0750 /run/buildkite-agent
-            chmod 0640 /run/buildkite-agent/ci-app-key.pem
+            chmod 0640 /run/buildkite-agent/agent-token /run/buildkite-agent/ci-app-key.pem
           ''}
         ''
       ];
     };
+  };
+
+  # Order each agent unit behind the secrets decrypt, and point its git
+  # at the agent-scoped gitconfig (GIT_CONFIG_GLOBAL — the agent users
+  # have no ~/.gitconfig, so this layers the insteadOf rewrite +
+  # credential helper onto just the agent processes, leaving
+  # /etc/gitconfig and mattw's own git untouched). The module names
+  # units `buildkite-agent-<name>`; keep this list in sync with
+  # services.buildkite-agents above. Declared by single-key path so the
+  # module system MERGES with the module-generated units rather than
+  # replacing them.
+  systemd.services.buildkite-agent-sealed = {
+    after = [ "decrypt-agent-token.service" ];
+    requires = [ "decrypt-agent-token.service" ];
+    environment.GIT_CONFIG_GLOBAL = "${agentGitConfig}";
+  };
+  systemd.services.buildkite-agent-sealed-2 = {
+    after = [ "decrypt-agent-token.service" ];
+    requires = [ "decrypt-agent-token.service" ];
+    environment.GIT_CONFIG_GLOBAL = "${agentGitConfig}";
   };
 
   # (git config for the agents lives in agentGitConfig, pointed at via

@@ -51,8 +51,10 @@ if [ -f "$OUT" ]; then
 	esac
 fi
 
-# --name= must match the value decrypt-ci-app-key.service passes to
-# `systemd-creds decrypt --name=<id>` (see nixos/mattserver/system.nix).
+# --name= must match the value decrypt-agent-token.service passes to
+# `systemd-creds decrypt --name=<id>` for the App key (that one service
+# stages both the agent token and this key — see
+# nixos/mattserver/system.nix).
 systemd-creds encrypt --name=buildkite-ci-app-key "$PEM" "$OUT"
 chmod 600 "$OUT"
 chown root:root "$OUT"
@@ -65,10 +67,11 @@ systemd-creds decrypt --name=buildkite-ci-app-key "$OUT" - >/dev/null
 echo "Decrypt OK."
 
 echo
-echo "Done. The decrypt-ci-app-key.service oneshot decrypts this at boot"
-echo "to /run/buildkite-agent/ci-app-key.pem for the git credential"
-echo "helper. Restart to pick up a rotation:"
-echo "  sudo systemctl restart decrypt-ci-app-key.service"
+echo "Done. The decrypt-agent-token.service oneshot (which stages both"
+echo "the agent token and this App key) decrypts this at boot to"
+echo "/run/buildkite-agent/ci-app-key.pem for the git credential helper."
+echo "Restart to pick up a rotation:"
+echo "  sudo systemctl restart decrypt-agent-token.service"
 echo "  sudo systemctl restart 'buildkite-agent-sealed*.service'"
 echo
 echo "Remember to shred the plaintext .pem you passed in once this"
