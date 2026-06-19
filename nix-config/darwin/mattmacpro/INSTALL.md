@@ -267,8 +267,10 @@ the new version before updating. See
 When the agent token rotates:
 
 ```bash
-sudo install -m 600 -o root -g wheel \
-  /dev/stdin /etc/buildkite-agent/agent-token <<< 'new-token...'
+# BSD `install` can't read /dev/stdin, so lay down the file empty with
+# the right mode first, then write the token via tee.
+sudo install -m 600 -o root -g wheel /dev/null /etc/buildkite-agent/agent-token
+printf '%s' 'new-token...' | sudo tee /etc/buildkite-agent/agent-token >/dev/null
 sudo launchctl kickstart -k system/com.sealedsecurity.decrypt-agent-token
 sudo launchctl kickstart -k \
   system/com.sealedsecurity.buildkite-agent-sealed-macos \

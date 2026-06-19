@@ -312,7 +312,15 @@ else
 	echo
 	[ -n "$BK_TOKEN" ] || err "empty token"
 	sudo mkdir -p /etc/buildkite-agent
-	sudo install -m 600 /dev/stdin "$SEALED_TOKEN_FILE" <<<"$BK_TOKEN"
+	# Create the file 600 root:wheel first, then write the secret into
+	# it via tee. macOS's BSD `install` can't read /dev/stdin
+	# ("Inappropriate file type or format" — that's a GNU-coreutils
+	# extension), so we can't pipe the token straight through install
+	# like the Linux side does. `install /dev/null` lays down an empty
+	# file with the right mode/owner; `tee` (which handles stdin fine
+	# on BSD) then fills it. The token stays off argv either way.
+	sudo install -m 600 -o root -g wheel /dev/null "$SEALED_TOKEN_FILE"
+	printf '%s' "$BK_TOKEN" | sudo tee "$SEALED_TOKEN_FILE" >/dev/null
 	unset BK_TOKEN
 	echo "  $SEALED_TOKEN_FILE written."
 fi

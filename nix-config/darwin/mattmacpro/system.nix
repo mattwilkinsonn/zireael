@@ -810,7 +810,12 @@ in
     /bin/mkdir -p /var/lib/buildkite-agents/shared/.sccache
     /bin/mkdir -p /var/lib/buildkite-agents/sealed-macos/.cargo
     /bin/mkdir -p /var/lib/buildkite-agents/sealed-macos-2/.cargo
-    /usr/sbin/chown -R ${agentUser}:${agentUser} /var/lib/buildkite-agents
+    # chown by numeric uid:gid, not name. This activation slot runs
+    # BEFORE nix-darwin's user-creation step, so `_buildkite-agent`
+    # isn't resolvable yet — `chown _buildkite-agent:_buildkite-agent`
+    # fails "illegal group name". The numeric 533:533 (pinned in the
+    # users.users/groups block above) needs no name lookup.
+    /usr/sbin/chown -R ${toString agentUid}:${toString agentUid} /var/lib/buildkite-agents
     /bin/chmod 0755 /var/lib/buildkite-agents/shared
 
     # Spotlight + Time Machine exclusions on the agent state tree.
