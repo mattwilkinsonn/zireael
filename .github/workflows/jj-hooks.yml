@@ -160,9 +160,18 @@ jobs:
           git config --global user.name "jj-hooks CI"
           git config --global user.email "ci@jj-hooks.invalid"
 
+      # Scoped to the workspace integration tests + lib unit tests. The
+      # workspace suite is what exercises the `git worktree add` /
+      # primary-git-dir path the dunce fix targets (jj + git only, no
+      # symlinks). The remaining integration suites (runner resolution,
+      # push, the shared harness) stage binaries via
+      # `std::os::unix::fs::symlink` + `PermissionsExt` to test
+      # Unix-specific PATH/wrapper resolution — they don't compile on
+      # Windows and the behaviour they cover doesn't exist here, so they
+      # stay Unix-only.
       - name: Tests
         shell: pwsh
-        run: cargo nextest run -p jj-hooks --no-fail-fast
+        run: cargo nextest run -p jj-hooks --lib --test workspace --no-fail-fast
 
   # Rollup gate. ALWAYS fires, regardless of whether the dispatch job
   # ran or was skipped by the path filter. This is the single stable
