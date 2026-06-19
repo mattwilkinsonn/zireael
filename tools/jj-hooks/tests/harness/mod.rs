@@ -84,7 +84,7 @@ impl TestRepo {
 
         // Create main bookmark on the initial commit and push it.
         run_jj(&primary, &["bookmark", "create", "main", "-r", "@-"]);
-        run_jj(&primary, &["git", "push", "-b", "main", "--allow-new"]);
+        run_jj(&primary, &["git", "push", "-b", "main"]);
 
         Self {
             tmp,

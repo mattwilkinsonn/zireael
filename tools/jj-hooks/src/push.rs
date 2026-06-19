@@ -229,13 +229,12 @@ mod tests {
             &[
                 "-b".into(),
                 "feature".into(),
-                "--allow-new".into(),
                 "--remote".into(),
                 "origin".into(),
             ],
             false,
         );
-        for needle in ["-b", "feature", "--allow-new", "--remote", "origin"] {
+        for needle in ["-b", "feature", "--remote", "origin"] {
             assert!(
                 argv.iter().any(|a| a == needle),
                 "expected `{needle}` in argv: {argv:?}"
