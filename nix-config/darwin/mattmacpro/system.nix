@@ -260,42 +260,62 @@ let
   };
 
   # Hand-rolled launchd daemon for one Buildkite agent instance.
-  # nix-darwin has no services.buildkite-agents module, so we run
-  # `buildkite-agent start` directly under launchd, configuring it via
-  # BUILDKITE_AGENT_* env vars (the agent reads these in lieu of a cfg
-  # file). KeepAlive restarts on crash; the agent's own graceful-stop
-  # handles in-flight jobs on shutdown.
+  # nix-darwin has no services.buildkite-agents module, so we run the
+  # agent under launchd via a small wrapper script. The wrapper exists
+  # for three reasons launchd-direct can't handle:
   #
-  # The agent token is read at launch from the tmpfs path the
-  # decrypt-agent-token daemon writes (see below) via
-  # BUILDKITE_AGENT_TOKEN_PATH — the token never lands in the launchd
-  # plist (which is world-readable in the Nix store).
+  #   1. Token. buildkite-agent reads the token from the
+  #      BUILDKITE_AGENT_TOKEN *value* (there is no *_TOKEN_PATH var).
+  #      Putting the value in the plist would leak it (the plist is
+  #      world-readable in the Nix store), so the wrapper reads it at
+  #      launch from the tmpfs file the decrypt-agent-token daemon
+  #      stages and exports it in-process.
+  #   2. Tags. The tag string contains `=` (queue=macos-x64-selfhosted),
+  #      which launchd's EnvironmentVariables parser mangles — it splits
+  #      on the first `=` and treats the rest as the value. Passing tags
+  #      as a `--tags` ARG sidesteps launchd env parsing entirely.
+  #   3. Logs. launchd opens StandardOutPath as the daemon user
+  #      (_buildkite-agent); /var/log is root-owned and not user-
+  #      writable, so launchd died with EX_CONFIG (78) before exec. The
+  #      wrapper logs to the agent-owned state dir instead.
+  #
+  # KeepAlive restarts on crash; the agent's own graceful-stop handles
+  # in-flight jobs on shutdown. Cargo/sccache cache env (mkAgentEnv)
+  # still flows through the plist — those values contain no `=`.
   mkAgentDaemon = name: {
     serviceConfig = {
       Label = "com.sealedsecurity.buildkite-agent-${name}";
       ProgramArguments = [
-        "${pkgs.buildkite-agent}/bin/buildkite-agent"
-        "start"
+        "${pkgs.writeShellScript "buildkite-agent-${name}-start" ''
+          set -euo pipefail
+          # Token by value (off the plist + off argv). The
+          # decrypt-agent-token daemon stages this file 0640, group
+          # _buildkite-agent, which this daemon's user can read.
+          BUILDKITE_AGENT_TOKEN="$(cat /var/run/buildkite-agent/agent-token)"
+          export BUILDKITE_AGENT_TOKEN
+          exec ${pkgs.buildkite-agent}/bin/buildkite-agent start \
+            --name mattmacpro-${name} \
+            --tags queue=macos-x64-selfhosted,os=macos,arch=x64,host=mattmacpro \
+            --build-path /var/lib/buildkite-agents/${name}/builds \
+            --hooks-path ${pkgs.buildkite-agent}/share/buildkite-agent/hooks \
+            --plugins-path /var/lib/buildkite-agents/${name}/plugins
+        ''}"
       ];
       EnvironmentVariables = {
         PATH = "${lib.makeBinPath agentPackages}:/usr/bin:/bin:/usr/sbin:/sbin";
         HOME = "/var/lib/buildkite-agents/${name}";
-        # Agent identity + routing. The token is supplied out-of-band
-        # via the token file (next line) so it stays out of the plist.
-        BUILDKITE_AGENT_NAME = "mattmacpro-${name}";
-        BUILDKITE_AGENT_TAGS = "queue=macos-x64-selfhosted,os=macos,arch=x64,host=mattmacpro";
-        BUILDKITE_AGENT_TOKEN_PATH = "/var/run/buildkite-agent/agent-token";
-        BUILDKITE_BUILD_PATH = "/var/lib/buildkite-agents/${name}/builds";
-        BUILDKITE_HOOKS_PATH = "${pkgs.buildkite-agent}/share/buildkite-agent/hooks";
-        BUILDKITE_PLUGINS_PATH = "/var/lib/buildkite-agents/${name}/plugins";
       }
       // mkAgentEnv name;
       UserName = agentUser;
       GroupName = agentUser;
       RunAtLoad = true;
       KeepAlive = true;
-      StandardOutPath = "/var/log/buildkite-agent-${name}.log";
-      StandardErrorPath = "/var/log/buildkite-agent-${name}.log";
+      # Log into the agent-owned state dir, NOT /var/log — launchd opens
+      # these paths as _buildkite-agent, which can't write root-owned
+      # /var/log (that was the EX_CONFIG 78 spawn failure). The state dir
+      # is chowned to the agent in the extraActivation block.
+      StandardOutPath = "/var/lib/buildkite-agents/${name}/agent.log";
+      StandardErrorPath = "/var/lib/buildkite-agents/${name}/agent.log";
     };
   };
 in
