@@ -88,8 +88,12 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       # uv installs tool executables here; we add it to PATH below.
+      # On Windows uv ignores XDG_BIN_HOME and defaults to
+      # %LOCALAPPDATA%\uv\bin unless UV_TOOL_BIN_DIR is set, so pin it
+      # explicitly to keep pre-commit/prek on the PATH we export.
       XDG_BIN_HOME: ${{ github.workspace }}\.tools\bin
       XDG_DATA_HOME: ${{ github.workspace }}\.tools\data
+      UV_TOOL_BIN_DIR: ${{ github.workspace }}\.tools\bin
     steps:
       - uses: actions/checkout@v6
 
