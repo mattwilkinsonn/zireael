@@ -117,6 +117,7 @@
       "swiftly"
       "coreutils"
       "duti"
+      "mas" # Mac App Store CLI — drives `homebrew.masApps` install/upgrade.
       "qalculate-qt"
       "podman"
       # zstd: stays declared even though dev.nix also installs pkgs.zstd.
@@ -177,6 +178,14 @@
       "cmux"
       "typora"
     ];
+    # Mac App Store apps. IDs from `mas search <name>` / the App Store
+    # share-link `/id<NUMBER>`. Requires a one-time manual App Store
+    # sign-in (mas can't authenticate on modern macOS) and the app must
+    # already be associated with the Apple ID. Versions aren't pinnable
+    # and removal here doesn't uninstall — prefer a cask when one exists.
+    masApps = {
+      "WiFi Explorer: Scanner" = 494803304;
+    };
   };
 
   # macOS system defaults
@@ -219,7 +228,7 @@
     DUTI=/opt/homebrew/bin/duti
     if [ -x "$DUTI" ]; then
       CODE=com.microsoft.VSCode
-      OBSIDIAN=md.obsidian
+      TYPORA=abnerworks.Typora
 
       # VSCode for source code + plain text UTIs (covers Dockerfile, Makefile, Justfile, etc.)
       "$DUTI" -s "$CODE" public.source-code all
@@ -256,10 +265,10 @@
         "$DUTI" -s "$CODE" ".$ext" all 2>/dev/null || true
       done
 
-      # Obsidian for markdown (overrides the plain-text default above)
-      "$DUTI" -s "$OBSIDIAN" .md all
-      "$DUTI" -s "$OBSIDIAN" .markdown all
-      "$DUTI" -s "$OBSIDIAN" net.daringfireball.markdown all
+      # Typora for markdown (overrides the plain-text default above)
+      "$DUTI" -s "$TYPORA" .md all
+      "$DUTI" -s "$TYPORA" .markdown all
+      "$DUTI" -s "$TYPORA" net.daringfireball.markdown all
     fi
   '';
 
