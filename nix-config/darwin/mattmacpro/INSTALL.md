@@ -219,6 +219,44 @@ After every macOS Sonoma point release:
    to re-apply pmset + sshd (point releases sometimes reset
    SystemSetup defaults).
 
+> **⚠️ A macOS reinstall (and sometimes an OCLP root-patch / OS
+> update) can wipe `/nix`.** Observed once on this box: after an
+> OCLP-driven reinstall, `/nix` was emptied (store gone, `nix` not on
+> PATH, no `/nix/var/nix/profiles`) while the nix-darwin `/etc`
+> symlinks (`/etc/zshrc → /etc/static → /nix/store/…`) were left
+> behind pointing at a store path that no longer existed. Symptoms:
+> SSH lands in a **bare prompt** (dangling `/etc/static` means the
+> login shell can't source `path_helper`), and system tools fail with
+> `scutil: command not found` / `shutdown: command not found` because
+> `/usr/sbin` + `/sbin` never made it onto PATH.
+>
+> **Diagnosis:** `ls /nix/var/nix/profiles/` (empty) + `which nix`
+> (not found) + `ls -d /run/current-system` (missing) = nix store
+> wiped, full re-bootstrap needed (not a re-activate).
+>
+> **Recovery:**
+>
+> 1. Restore a usable PATH for the session:
+>
+>    ```bash
+>    export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
+>    ```
+>
+> 2. Re-run the bootstrap from scratch — it reinstalls Nix, Homebrew,
+>    re-clones zireael, re-prompts for the agent token, and
+>    `darwin-rebuild switch` recreates `/run/current-system`, which
+>    repairs the dangling `/etc/static` symlinks:
+>
+>    ```bash
+>    bash ~/repos/zireael/nix-config/darwin/scripts/mattmacpro-bootstrap.sh
+>    ```
+>
+>    (The bootstrap script self-exports the base PATH at its top, so it
+>    survives this broken state even if you forget step 1. If the
+>    zireael checkout itself was also wiped, `gh repo clone
+>    mattwilkinsonn/zireael ~/repos/zireael` first — needs `gh` auth,
+>    or copy the repo from a USB stick.)
+
 After a major macOS release (Sonoma 14 → 15+), OCLP support for the
 Mac Pro 2013 may lag — wait for the OCLP project to officially bless
 the new version before updating. See

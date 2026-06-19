@@ -352,9 +352,14 @@ in
       RuntimeDirectoryMode = "0750";
       RuntimeDirectoryPreserve = true;
       # `+` prefix runs ExecStart as root (needed for systemd-creds
-      # decrypt against the host machine-ID key). The token is then
-      # made group-readable by the shared token group so every per-agent
-      # user (all members of the group) can read it via tokenPath.
+      # decrypt against the host machine-ID key). The token file AND its
+      # parent dir are both group-owned by the shared token group so
+      # every per-agent user (a group member) can traverse /run/
+      # buildkite-agent and read the token via tokenPath. systemd
+      # creates the RuntimeDirectory owned root:root by default — the
+      # agents can't traverse a 0750 root:root dir even though they can
+      # read the 0640 file inside it, so the chgrp on the directory is
+      # load-bearing, not just the file.
       ExecStart = [
         ''
           +${pkgs.writeShellScript "decrypt-agent-token" ''
@@ -363,8 +368,9 @@ in
               --name=buildkite-agent-token \
               /etc/buildkite-agent/agent-token.cred \
               /run/buildkite-agent/agent-token
-            chgrp ${agentTokenGroup} /run/buildkite-agent/agent-token
-            chmod 640 /run/buildkite-agent/agent-token
+            chgrp ${agentTokenGroup} /run/buildkite-agent /run/buildkite-agent/agent-token
+            chmod 0750 /run/buildkite-agent
+            chmod 0640 /run/buildkite-agent/agent-token
           ''}
         ''
       ];
