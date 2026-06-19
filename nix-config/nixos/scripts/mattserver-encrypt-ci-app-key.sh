@@ -65,10 +65,11 @@ systemd-creds decrypt --name=buildkite-ci-app-key "$OUT" - >/dev/null
 echo "Decrypt OK."
 
 echo
-echo "Done. The decrypt-ci-app-key.service oneshot decrypts this at boot"
-echo "to /run/buildkite-agent/ci-app-key.pem for the git credential"
-echo "helper. Restart to pick up a rotation:"
-echo "  sudo systemctl restart decrypt-ci-app-key.service"
+echo "Done. The decrypt-agent-token.service oneshot (which stages both"
+echo "the agent token and this App key) decrypts this at boot to"
+echo "/run/buildkite-agent/ci-app-key.pem for the git credential helper."
+echo "Restart to pick up a rotation:"
+echo "  sudo systemctl restart decrypt-agent-token.service"
 echo "  sudo systemctl restart 'buildkite-agent-sealed*.service'"
 echo
 echo "Remember to shred the plaintext .pem you passed in once this"

@@ -30,7 +30,7 @@ let
   # rewritten to HTTPS via the gitconfig below). Shared with mattserver
   # (shared/buildkite-git-credential-app.nix); this host stages the App
   # key to /var/run/buildkite-agent/ci-app-key.pem via the
-  # decrypt-ci-app-key launchd daemon. App ID 4045728 is a public
+  # decrypt-agent-secrets launchd daemon. App ID 4045728 is a public
   # identifier, not a secret.
   ciGitCredentialHelper = import ../../shared/buildkite-git-credential-app.nix {
     inherit pkgs;
@@ -295,7 +295,7 @@ let
   #      BUILDKITE_AGENT_TOKEN *value* (there is no *_TOKEN_PATH var).
   #      Putting the value in the plist would leak it (the plist is
   #      world-readable in the Nix store), so the wrapper reads it at
-  #      launch from the tmpfs file the decrypt-agent-token daemon
+  #      launch from the tmpfs file the decrypt-agent-secrets daemon
   #      stages and exports it in-process.
   #   2. Tags. The tag string contains `=` (queue=macos-x64-selfhosted),
   #      which launchd's EnvironmentVariables parser mangles — it splits
@@ -316,7 +316,7 @@ let
         "${pkgs.writeShellScript "buildkite-agent-${name}-start" ''
           set -euo pipefail
           # Token by value (off the plist + off argv). The
-          # decrypt-agent-token daemon stages this file 0640, group
+          # decrypt-agent-secrets daemon stages this file 0640, group
           # _buildkite-agent, which this daemon's user can read.
           BUILDKITE_AGENT_TOKEN="$(cat /var/run/buildkite-agent/agent-token)"
           export BUILDKITE_AGENT_TOKEN
@@ -852,7 +852,7 @@ in
   # Token: the Buildkite *Agent* token (org Agents page), distinct from
   # the BUILDKITE_API_TOKEN the `bk` CLI uses. Provisioned by the
   # bootstrap script as a host-bound encrypted blob; decrypted into
-  # tmpfs at boot by the decrypt-agent-token daemon below.
+  # tmpfs at boot by the decrypt-agent-secrets daemon below.
 
   # Pre-create the agent state dirs with the right ownership. nix-darwin
   # has no tmpfiles abstraction, and custom-named activation script
@@ -906,20 +906,19 @@ in
     fi
   '';
 
-  # Decrypt the host-bound encrypted agent token into tmpfs at boot.
-  # macOS has no systemd-creds; we use the same OCLP-era pattern as the
-  # other secrets on this box — an encrypted blob at
-  # /etc/buildkite-agent/agent-token.age decrypted by a one-shot launchd
-  # daemon. Here we keep it simple: the bootstrap script writes the
-  # plaintext token to /etc/buildkite-agent/agent-token (mode 600
-  # root:wheel) and this daemon copies it into a tmpfs-like /var/run
-  # path readable by the agent group. (macOS /var/run is not a tmpfs but
-  # is cleared on boot; the token is re-staged each boot from the
-  # root-only source.) See the buildkite-agents handoff doc for the
-  # provisioning step.
-  launchd.daemons.decrypt-agent-token = {
+  # Stage both agent secrets at boot: the Buildkite agent token (read by
+  # the agent at start) and the sealedsecurity-ci App key (read at
+  # checkout by the git credential helper). macOS has no systemd-creds;
+  # the bootstrap writes plaintext to /etc/buildkite-agent/{agent-token,
+  # ci-app-key.pem} (mode 600 root:wheel) and this one daemon re-stages
+  # group-readable copies under /var/run on every boot (macOS /var/run
+  # isn't a tmpfs but is cleared on boot). One daemon for both — mirrors
+  # mattserver, where a second unit re-owning the shared dir clobbered
+  # the first's group (the regression that broke token reads). This is
+  # the existing macpro plaintext-in-/etc tradeoff applied to both.
+  launchd.daemons.decrypt-agent-secrets = {
     serviceConfig = {
-      Label = "com.sealedsecurity.decrypt-agent-token";
+      Label = "com.sealedsecurity.decrypt-agent-secrets";
       ProgramArguments = [
         "/bin/sh"
         "-c"
@@ -929,31 +928,6 @@ in
           install -m 0640 -o root -g ${agentUser} \
             /etc/buildkite-agent/agent-token \
             /var/run/buildkite-agent/agent-token
-        ''
-      ];
-      RunAtLoad = true;
-      KeepAlive = false;
-      StandardOutPath = "/var/log/decrypt-agent-token.log";
-      StandardErrorPath = "/var/log/decrypt-agent-token.log";
-    };
-  };
-
-  # Stage the sealedsecurity-ci App private key for the git credential
-  # helper (checkout-time clone auth). Same shape as decrypt-agent-token:
-  # the bootstrap writes the plaintext .pem to /etc/buildkite-agent/
-  # ci-app-key.pem (mode 600 root:wheel) and this daemon re-stages a
-  # group-readable copy to /var/run on every boot. macOS has no
-  # systemd-creds (mattserver's host-binding) — this is the existing
-  # macpro plaintext-in-/etc tradeoff, applied to the App key too.
-  launchd.daemons.decrypt-ci-app-key = {
-    serviceConfig = {
-      Label = "com.sealedsecurity.decrypt-ci-app-key";
-      ProgramArguments = [
-        "/bin/sh"
-        "-c"
-        ''
-          set -e
-          install -d -m 0750 -o root -g ${agentUser} /var/run/buildkite-agent
           install -m 0640 -o root -g ${agentUser} \
             /etc/buildkite-agent/ci-app-key.pem \
             /var/run/buildkite-agent/ci-app-key.pem
@@ -961,8 +935,8 @@ in
       ];
       RunAtLoad = true;
       KeepAlive = false;
-      StandardOutPath = "/var/log/decrypt-ci-app-key.log";
-      StandardErrorPath = "/var/log/decrypt-ci-app-key.log";
+      StandardOutPath = "/var/log/decrypt-agent-secrets.log";
+      StandardErrorPath = "/var/log/decrypt-agent-secrets.log";
     };
   };
 
@@ -981,7 +955,7 @@ in
   #
   # launchd has no dependency-ordering primitive like systemd's
   # After=/Requires=. The agent daemon retries the token-file read on
-  # its own (KeepAlive restarts it until decrypt-agent-token has staged
+  # its own (KeepAlive restarts it until decrypt-agent-secrets has staged
   # the file), so a boot-time race just costs a restart or two.
   launchd.daemons.buildkite-agent-sealed-macos = mkAgentDaemon "sealed-macos";
   launchd.daemons.buildkite-agent-sealed-macos-2 = mkAgentDaemon "sealed-macos-2";
