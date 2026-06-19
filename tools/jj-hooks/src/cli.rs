@@ -159,10 +159,6 @@ pub struct PushArgs {
     #[arg(long)]
     pub deleted: bool,
 
-    /// Allow pushing new bookmarks (i.e. bookmarks not yet on the remote).
-    #[arg(long)]
-    pub allow_new: bool,
-
     /// Pass-through args after `--` forwarded to `jj git push` verbatim.
     #[arg(last = true)]
     pub passthrough: Vec<String>,
@@ -198,9 +194,6 @@ pub fn push_argv(args: &PushArgs, dry_run: bool) -> Vec<String> {
     }
     if args.deleted {
         out.push("--deleted".into());
-    }
-    if args.allow_new {
-        out.push("--allow-new".into());
     }
     if dry_run {
         out.push("--dry-run".into());

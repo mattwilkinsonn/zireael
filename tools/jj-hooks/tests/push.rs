@@ -55,7 +55,7 @@ fn delete_only_push_skips_hooks() {
     // Create a throwaway bookmark on the initial commit, push it, then delete it.
     let out = repo.jj(&["bookmark", "create", "tmp", "-r", "@-"]);
     assert!(out.status.success(), "{}", show(&out));
-    let out = repo.jj(&["git", "push", "-b", "tmp", "--allow-new"]);
+    let out = repo.jj(&["git", "push", "-b", "tmp"]);
     assert!(out.status.success(), "{}", show(&out));
     let out = repo.jj(&["bookmark", "delete", "tmp"]);
     assert!(out.status.success(), "{}", show(&out));
@@ -304,14 +304,7 @@ fn new_bookmark_uses_remote_ancestors_resolution() {
 
     let head = repo.commit_id_of("feature");
 
-    let out = repo.jj_hooks(&[
-        "--runner",
-        "pre-commit",
-        "push",
-        "-b",
-        "feature",
-        "--allow-new",
-    ]);
+    let out = repo.jj_hooks(&["--runner", "pre-commit", "push", "-b", "feature"]);
     assert!(out.status.success(), "{}", show(&out));
     assert_eq!(
         repo.remote_commit("feature").as_deref(),
@@ -351,7 +344,6 @@ fn multi_bookmark_one_fail_blocks_all() {
         "main",
         "-b",
         "feature",
-        "--allow-new",
     ]);
     assert!(!out.status.success(), "{}", show(&out));
 
@@ -657,7 +649,7 @@ fn runner_autodetect_inside_target_worktree_not_primary() {
     // No --runner flag, so we exercise the autodetect path that the issue
     // is about. Push must fail because the hk hook fails, not succeed
     // because lefthook silent-skipped on a missing config.
-    let out = repo.jj_hooks(&["push", "-b", "migrate-to-hk", "--allow-new"]);
+    let out = repo.jj_hooks(&["push", "-b", "migrate-to-hk"]);
     assert!(
         !out.status.success(),
         "push should abort because hk hook fails:\n{}",
@@ -695,7 +687,7 @@ fn runner_autodetect_inside_target_worktree_picks_lefthook() {
 
     let remote_before = repo.remote_commit("migrate-to-lefthook");
 
-    let out = repo.jj_hooks(&["push", "-b", "migrate-to-lefthook", "--allow-new"]);
+    let out = repo.jj_hooks(&["push", "-b", "migrate-to-lefthook"]);
     assert!(
         !out.status.success(),
         "push should abort because the target commit's lefthook hook fails:\n{}",
