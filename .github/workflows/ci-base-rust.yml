@@ -75,9 +75,10 @@ jobs:
     timeout-minutes: 20
     env:
       # install_deps steps drop per-tool binaries into XDG_BIN_HOME, a
-      # workspace-scoped dir the cache step persists. It ends in `/bin`
-      # so `npm config set prefix "$(dirname "$XDG_BIN_HOME")"` lands npm
-      # globals (markdownlint-cli2, gt) in XDG_BIN_HOME too.
+      # workspace-scoped dir. It ends in `/bin` so
+      # `npm config set prefix "$(dirname "$XDG_BIN_HOME")"` lands npm
+      # globals (markdownlint-cli2, gt) in XDG_BIN_HOME too. XDG_DATA_HOME
+      # keeps uv's tool data workspace-scoped rather than in $HOME.
       XDG_BIN_HOME: ${{ github.workspace }}/.tools/bin
       XDG_DATA_HOME: ${{ github.workspace }}/.tools/data
     steps:
@@ -95,22 +96,17 @@ jobs:
         with:
           tool: cargo-nextest,just,cargo-binstall
 
-      # Per-tool test binaries, installed below only when the caller
-      # asks: jj-hooks needs the hook-runner stack (pre-commit, prek,
-      # lefthook, hk, pkl, markdownlint-cli2, actionlint); jj-gt needs
-      # the Graphite CLI (gt). Cached per package since the sets differ.
-      - name: Cache test tools
-        if: inputs.install_deps && runner.os == 'Linux'
-        id: tools-cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ${{ env.XDG_BIN_HOME }}
-            ${{ env.XDG_DATA_HOME }}
-          key: tools-${{ inputs.package }}-${{ runner.os }}-${{ hashFiles('.github/workflows/ci-base-rust.yml') }}
-
+      # Per-tool test binaries: jj-hooks needs the hook-runner stack
+      # (pre-commit, prek, lefthook, hk, pkl, markdownlint-cli2,
+      # actionlint); jj-gt needs the Graphite CLI (gt). Installed fresh
+      # every run — deliberately NOT cached. A content-addressed cache
+      # keyed on this workflow file froze the tool set for weeks (a stale
+      # `pre-commit` went missing from the blob and the cache never
+      # refreshed because the YAML was untouched), defeating the
+      # nightly's whole purpose as a drift detector. The install cost is
+      # a bounded ~30-60s; correctness wins.
       - name: Install jj from prebuilt tarball
-        if: inputs.install_deps && (runner.os == 'macOS' || steps.tools-cache.outputs.cache-hit != 'true')
+        if: inputs.install_deps
         run: |
           set -euo pipefail
           jj_version=v0.41.0
@@ -131,22 +127,21 @@ jobs:
           "$dest/jj" --version
 
       - name: Install Python (for uv on Linux)
-        if: inputs.install_deps && runner.os == 'Linux' && steps.tools-cache.outputs.cache-hit != 'true'
+        if: inputs.install_deps && runner.os == 'Linux'
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
       - name: Install uv (Linux only — macOS uses brew)
-        if: inputs.install_deps && runner.os == 'Linux' && steps.tools-cache.outputs.cache-hit != 'true'
+        if: inputs.install_deps && runner.os == 'Linux'
         uses: astral-sh/setup-uv@v6
 
       # jj-hooks's integration tests drive real hook frameworks, so they
       # need the hook-runner stack on PATH. Pinned release tarballs / uv /
-      # npm / binstall, all into the cached XDG_BIN_HOME. Keep versions in
-      # sync with the Justfile `_install-deps-jj-hooks` recipe (its
-      # local-dev twin).
+      # npm / binstall, all into XDG_BIN_HOME. Keep versions in sync with
+      # the Justfile `_install-deps-jj-hooks` recipe (its local-dev twin).
       - name: Install jj-hooks hook stack
-        if: inputs.install_deps && inputs.package == 'jj-hooks' && (runner.os == 'macOS' || steps.tools-cache.outputs.cache-hit != 'true')
+        if: inputs.install_deps && inputs.package == 'jj-hooks'
         run: |
           set -euo pipefail
           case "$(uname -s)" in
@@ -175,7 +170,7 @@ jobs:
 
       # jj-gt's tests shell out to the Graphite CLI (gt), from npm.
       - name: Install Graphite CLI (gt)
-        if: inputs.install_deps && inputs.package == 'jj-gt' && (runner.os == 'macOS' || steps.tools-cache.outputs.cache-hit != 'true')
+        if: inputs.install_deps && inputs.package == 'jj-gt'
         run: |
           set -euo pipefail
           mkdir -p "$XDG_BIN_HOME"
