@@ -77,10 +77,12 @@ let
     git
     nix
     # Buildkite plugins + hook scripts reach for these directly on the
-    # agent (outside the job container): jq for plugin JSON, curl for
-    # the gh-app-token mint, gnugrep/gnused for shell glue.
+    # agent (outside the job container): jq for plugin JSON, curl +
+    # openssl for the gh-app-token JWT mint (the ci-image GHCR login
+    # runs gh-app-token.sh on the agent), gnugrep/gnused for shell glue.
     jq
     curl
+    openssl
     gnugrep
     gnused
     # Container CLI — the docker plugin shells out to `docker`.
