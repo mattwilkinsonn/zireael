@@ -51,8 +51,10 @@ if [ -f "$OUT" ]; then
 	esac
 fi
 
-# --name= must match the value decrypt-ci-app-key.service passes to
-# `systemd-creds decrypt --name=<id>` (see nixos/mattserver/system.nix).
+# --name= must match the value decrypt-agent-token.service passes to
+# `systemd-creds decrypt --name=<id>` for the App key (that one service
+# stages both the agent token and this key — see
+# nixos/mattserver/system.nix).
 systemd-creds encrypt --name=buildkite-ci-app-key "$PEM" "$OUT"
 chmod 600 "$OUT"
 chown root:root "$OUT"
