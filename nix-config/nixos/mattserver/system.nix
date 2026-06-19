@@ -328,6 +328,18 @@ in
     sealed-2 = mkAgent "sealed-2";
   };
 
+  # FHS-path shebang support for CI job scripts. Buildkite plugin hooks
+  # (secret-env, docker, …) and upstream tool scripts ship `#!/bin/bash`
+  # / `#!/usr/bin/python3` shebangs that bare NixOS can't exec — it
+  # provides only /bin/sh + /usr/bin/env, so a hook failed with
+  # `perhaps the script interpreter "/bin/bash" is missing`. envfs (the
+  # nixpkgs built-in module) is a FUSE filesystem that makes /bin/* and
+  # /usr/bin/* resolve any binary on PATH, so those shebangs work
+  # without patching every plugin. The idiomatic NixOS fix for
+  # "third-party scripts assume FHS", and a self-hosted CI agent runs a
+  # lot of such scripts. SEA-830.
+  services.envfs.enable = true;
+
   # Shared token-read group every agent joins. The buildkite-agents
   # module creates per-agent users (buildkite-agent-sealed, -sealed-2)
   # each with its own primary group; this shared group is what the one
