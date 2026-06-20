@@ -140,17 +140,17 @@ darwin-mbp:
   - '.github/path-filters/nix-config.yml'
   - '.github/path-filters/nix-config-hosts.yml'
 
-# mattmacpro (x86_64 darwin, stable nix-darwin + stable nixpkgs-darwin
+# mattmini (aarch64 darwin, stable nix-darwin + stable nixpkgs-darwin
 # stack). Distinct from Matts-MacBook-Pro: separate `pkgs` constructed
 # inline in flake.nix with its own overlay (jjFromUnstable), and the
 # user import set only carries shared/home.nix (not shared/dev.nix or
 # shared/load-secrets.nix — this is a CI runner, not a dev box).
-mattmacpro:
+mattmini:
   - 'nix-config/flake.nix'
   - 'nix-config/flake.lock'
   - 'nix-config/shared/home.nix'
   - 'nix-config/shared/dotfiles/**'
-  - 'nix-config/darwin/mattmacpro/**'
+  - 'nix-config/darwin/mattmini/**'
   - '.github/workflows/nix-config.yml'
   - '.github/workflows/ci-base-nix.yml'
   - '.github/path-filters/nix-config.yml'

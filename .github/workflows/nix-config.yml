@@ -72,7 +72,7 @@ jobs:
       mattfw: ${{ steps.filter.outputs.mattfw }}
       mattpc-wsl: ${{ steps.filter.outputs.mattpc-wsl }}
       darwin-mbp: ${{ steps.filter.outputs.darwin-mbp }}
-      mattmacpro: ${{ steps.filter.outputs.mattmacpro }}
+      mattmini: ${{ steps.filter.outputs.mattmini }}
     steps:
       - uses: actions/checkout@v6
       - id: filter
@@ -195,25 +195,23 @@ jobs:
         working-directory: nix-config
         run: nix eval --raw '.#darwinConfigurations.Matts-MacBook-Pro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
 
-  flake-eval-mattmacpro:
-    name: flake eval (mattmacpro)
+  flake-eval-mattmini:
+    name: flake eval (mattmini)
     needs: [optimize_ci, host-changes]
     if: |
       needs.optimize_ci.outputs.skip == 'false' &&
-      needs.host-changes.outputs.mattmacpro == 'true'
-    # x86_64 darwin host. GitHub's macos-latest is aarch64-darwin; the
-    # x86_64 nix-darwin attrs evaluate fine cross-arch (nix eval doesn't
-    # build), so macos-latest is the cheapest path. If we ever need a
-    # native x86_64 eval (e.g. for derivations that actually build), this
-    # becomes macos-13 or a self-hosted x86_64 runner.
+      needs.host-changes.outputs.mattmini == 'true'
+    # aarch64 darwin host. GitHub's macos-latest is aarch64-darwin, so
+    # this matches the target arch natively (nix eval doesn't build, but
+    # the arch lines up regardless).
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/determinate-nix-action@v3
-      - name: nix eval mattmacpro
+      - name: nix eval mattmini
         working-directory: nix-config
-        run: nix eval --raw '.#darwinConfigurations.mattmacpro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+        run: nix eval --raw '.#darwinConfigurations.mattmini.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
 
   # ─── Rollup gate ────────────────────────────────────────────────────
   # Single stable check context for branch protection (`nix-config CI`).
@@ -238,7 +236,7 @@ jobs:
       - flake-eval-mattfw
       - flake-eval-mattpc-wsl
       - flake-eval-darwin
-      - flake-eval-mattmacpro
+      - flake-eval-mattmini
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
@@ -256,7 +254,7 @@ jobs:
             [flake-eval-mattfw]='${{ needs.flake-eval-mattfw.result }}'
             [flake-eval-mattpc-wsl]='${{ needs.flake-eval-mattpc-wsl.result }}'
             [flake-eval-darwin]='${{ needs.flake-eval-darwin.result }}'
-            [flake-eval-mattmacpro]='${{ needs.flake-eval-mattmacpro.result }}'
+            [flake-eval-mattmini]='${{ needs.flake-eval-mattmini.result }}'
           )
           failed=0
           for job in "${!results[@]}"; do

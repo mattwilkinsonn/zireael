@@ -206,7 +206,7 @@ The deliberate posture choices on this host:
   GID-by-`output` rule both mis-scopes (supplementary group) and
   misses the hook (container egress is `forward`/`postrouting`). It
   was dropped rather than shipped failing-open. Container-aware LAN
-  egress isolation is tracked in **SEA-835**. (mattmacpro runs jobs
+  egress isolation is tracked in **SEA-835**. (mattmini runs jobs
   natively, so its pf egress rule is still correctly scoped.)
 
 ## Buildkite agent token

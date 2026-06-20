@@ -56,15 +56,15 @@
       url = "github:nix-darwin/nix-darwin/master";
       inputs.nixpkgs.follows = "nixpkgs-unstable";
     };
-    # Stable-branch nix-darwin for mattmacpro. The Mac Pro 2013 is
-    # nixpkgs's last x86_64-darwin generation (deprecated after
-    # 26.05); pairing stable nixpkgs with the matching stable
-    # nix-darwin avoids the strict-branch check that pairs nix-darwin
-    # master with nixpkgs-unstable on the MBP. Also dodges the
-    # infinite-recursion issue in home-manager-master's eager
-    # `pkgs.formats.toml` evaluation when `_module.args.pkgs` is
-    # `lib.mkForce`-replaced via shared/unstable-wholesale.nix —
-    # mattmacpro doesn't use unstable-wholesale (it's a server host).
+    # Stable-branch nix-darwin for mattmini. Pairing stable nixpkgs
+    # with the matching stable nix-darwin avoids the strict-branch
+    # check that pairs nix-darwin master with nixpkgs-unstable on the
+    # MBP. Also dodges the infinite-recursion issue in
+    # home-manager-master's eager `pkgs.formats.toml` evaluation when
+    # `_module.args.pkgs` is `lib.mkForce`-replaced via
+    # shared/unstable-wholesale.nix — mattmini doesn't use
+    # unstable-wholesale (it's a server-class CI host where
+    # cache-aligned + bug-free matters more than tracking master).
     nix-darwin-stable = {
       url = "github:nix-darwin/nix-darwin/nix-darwin-25.11";
       inputs.nixpkgs.follows = "nixpkgs-darwin";
@@ -148,14 +148,15 @@
         ];
       };
 
-      # mattmacpro — Mac Pro 2013 trashcan (Intel Xeon E5 + 64 GB DDR3),
-      # OCLP'd up to macOS Sonoma. Headless self-hosted GitHub Actions
-      # runner pool for the sealedsecurity org (macOS x64 primary).
+      # mattmini — Apple Silicon Mac mini (M2 Pro, 16 GB, 512 GB).
+      # Headless self-hosted Buildkite agent for the sealedsecurity org
+      # (native macOS arm64). See darwin/mattmini/system.nix for the
+      # agent setup (SEA-840).
       #
       # Server-class host — uses STABLE nixpkgs + stable nix-darwin +
       # stable home-manager, NOT the unstable-wholesale path the MBP
       # uses. The MBP is an interactive dev box where staying close to
-      # upstream master matters; mattmacpro is a CI runner where
+      # upstream master matters; mattmini is a CI runner where
       # cache-aligned + bug-free is what matters. Same split as
       # mattserver vs. mattfw on the Linux side.
       #
@@ -164,7 +165,7 @@
       # extraSpecialArgs. This is structurally different from how the
       # other hosts do it (they rely on useGlobalPkgs + a generated
       # pkgs), but it's the only way to short-circuit a stable
-      # home-manager evaluation cycle on x86_64-darwin:
+      # home-manager evaluation cycle:
       #
       #   - System eval needs config.assertions
       #   - home-manager-nixos/common.nix flattens assertions from
@@ -177,14 +178,13 @@
       #
       # Passing pkgs as a specialArg means the function signature
       # `{ pkgs, ... }:` resolves at call time without going through
-      # _module.args.pkgs. Same pattern Apple Silicon nix-darwin uses
-      # internally — it just isn't the default with useGlobalPkgs.
+      # _module.args.pkgs.
       #
       # Targeted overlays (jj etc.) still come via shared/overlays.nix,
       # applied as part of the pkgs construction below.
-      darwinConfigurations."mattmacpro" =
+      darwinConfigurations."mattmini" =
         let
-          system = "x86_64-darwin";
+          system = "aarch64-darwin";
           # Inline overlay: jj from unstable (same as shared/overlays.nix
           # gives mattserver). Can't import shared/overlays.nix here
           # because it's structured as a NixOS-style module
@@ -210,7 +210,7 @@
           };
           modules = [
             { nixpkgs.pkgs = pkgs; }
-            ./darwin/mattmacpro/system.nix
+            ./darwin/mattmini/system.nix
             home-manager.darwinModules.home-manager
             {
               home-manager.useGlobalPkgs = true;
@@ -218,7 +218,7 @@
               home-manager.extraSpecialArgs = {
                 inherit inputs pkgs;
               };
-              home-manager.users.mattw = import ./darwin/mattmacpro/home.nix;
+              home-manager.users.mattw = import ./darwin/mattmini/home.nix;
             }
           ];
         };

@@ -207,8 +207,8 @@ jobs:
       - working-directory: nix-config
         run: nix eval --raw '.#darwinConfigurations.Matts-MacBook-Pro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
 
-  flake-eval-mattmacpro-nightly:
-    name: flake eval mattmacpro (nightly)
+  flake-eval-mattmini-nightly:
+    name: flake eval mattmini (nightly)
     needs: changes
     if: needs.changes.outputs.run == 'true'
     runs-on: macos-latest
@@ -220,7 +220,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/determinate-nix-action@v3
       - working-directory: nix-config
-        run: nix eval --raw '.#darwinConfigurations.mattmacpro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+        run: nix eval --raw '.#darwinConfigurations.mattmini.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
 
   validate-tap:
     name: validate tap install (nightly, ${{ matrix.os }})
@@ -279,7 +279,7 @@ jobs:
       - flake-eval-mattfw-nightly
       - flake-eval-mattpc-wsl-nightly
       - flake-eval-darwin-nightly
-      - flake-eval-mattmacpro-nightly
+      - flake-eval-mattmini-nightly
     if: always() && needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     permissions:

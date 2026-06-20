@@ -410,12 +410,12 @@ ci-nix-config-eval:
         else
             echo "→ skipping darwinConfigurations.Matts-MacBook-Pro (no path-filter match)"
         fi
-        if should_eval mattmacpro; then
-            echo "→ nix eval darwinConfigurations.mattmacpro"
-            nix eval --raw '.#darwinConfigurations.mattmacpro.config.system.build.toplevel.outPath' \
+        if should_eval mattmini; then
+            echo "→ nix eval darwinConfigurations.mattmini"
+            nix eval --raw '.#darwinConfigurations.mattmini.config.system.build.toplevel.outPath' \
                 --no-warn-dirty --accept-flake-config >/dev/null
         else
-            echo "→ skipping darwinConfigurations.mattmacpro (no path-filter match)"
+            echo "→ skipping darwinConfigurations.mattmini (no path-filter match)"
         fi
     else
         echo "→ skipping darwinConfigurations (not on macOS)"
