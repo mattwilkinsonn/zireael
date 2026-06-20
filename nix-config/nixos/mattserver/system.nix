@@ -449,6 +449,13 @@ in
   systemd.tmpfiles.rules = [
     "d /cache 0755 root root -"
     "d /cache/bkcache 2775 root ${agentCacheGroup} -"
+    # sccache multi-level disk L0. Per-agent subdirs are created by the
+    # CI job (mkdir under BUILDKITE_AGENT_NAME); this just provisions
+    # the shared parent group-writable + setgid so either agent's
+    # container (running as the in-image uid after ci-entrypoint
+    # chowns it) can create + own its subdir. Same pattern as
+    # /cache/bkcache. SEA-834.
+    "d /cache/sccache 2775 root ${agentCacheGroup} -"
   ];
 
   # Token provisioning. The agents register with the Buildkite *Agent*
