@@ -5,8 +5,9 @@
 //! All `gh` invocations request structured JSON output to avoid parsing
 //! gh's human-readable tables.
 
+use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use serde::Deserialize;
 
@@ -191,6 +192,33 @@ pub fn list_prs_by_head_prefix(
     Ok(parsed.into_iter().map(PrInfo::from).collect())
 }
 
+/// `gh pr view <number> --json body --jq .body`
+///
+/// Reads the current PR description so the link-hoisting step can
+/// reconcile its managed block into it.
+pub fn pr_body(workspace_root: &Path, number: u32) -> Result<String> {
+    let n = number.to_string();
+    let raw = gh_capture(
+        workspace_root,
+        &["pr", "view", &n, "--json", "body", "--jq", ".body"],
+    )?;
+    // `--jq .body` already unwraps the JSON string; gh appends a
+    // trailing newline we don't want to round-trip into the body.
+    Ok(raw.strip_suffix('\n').unwrap_or(&raw).to_owned())
+}
+
+/// `gh pr edit <number> --body-file -` (body piped on stdin).
+///
+/// Stdin avoids shell-escaping a multi-line body through `--body`.
+pub fn set_pr_body(workspace_root: &Path, number: u32, body: &str) -> Result<()> {
+    let n = number.to_string();
+    gh_run_with_stdin(
+        workspace_root,
+        &["pr", "edit", &n, "--body-file", "-"],
+        body,
+    )
+}
+
 fn gh_capture(cwd: &Path, args: &[&str]) -> Result<String> {
     tracing::info!("running: gh {:?}", args);
     let out = Command::new("gh")
@@ -208,6 +236,44 @@ fn gh_capture(cwd: &Path, args: &[&str]) -> Result<String> {
         });
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Run `gh <args>` with `input` piped to stdin. Used for
+/// `gh pr edit --body-file -`, which reads the body from stdin and so
+/// sidesteps shell-escaping a multi-line description through an arg.
+fn gh_run_with_stdin(cwd: &Path, args: &[&str], input: &str) -> Result<()> {
+    tracing::info!("running: gh {:?} (stdin: {} bytes)", args, input.len());
+    let mut child = Command::new("gh")
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| JjGtError::GhFailed {
+            status: -1,
+            stderr: format!("failed to spawn gh: {e}"),
+        })?;
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(input.as_bytes())
+        .map_err(|e| JjGtError::GhFailed {
+            status: -1,
+            stderr: format!("failed to write gh stdin: {e}"),
+        })?;
+    let out = child.wait_with_output().map_err(|e| JjGtError::GhFailed {
+        status: -1,
+        stderr: format!("failed to wait for gh: {e}"),
+    })?;
+    if !out.status.success() {
+        return Err(JjGtError::GhFailed {
+            status: out.status.code().unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

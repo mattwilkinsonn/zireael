@@ -13,6 +13,7 @@ pub mod gt;
 pub mod hooks;
 pub mod init;
 pub mod jj;
+pub mod links;
 pub mod lock;
 pub mod progress;
 pub mod reconcile;
@@ -659,6 +660,16 @@ fn submit_cmd(
         }
     }
 
+    // 5.5. Hoist magic-word issue references from each bookmark's
+    // commit messages into its PR description. Runs after `gt submit`
+    // has created/updated the PRs (so they exist to edit) and before
+    // the tracking sweep. Off with `--no-links`; skipped on dry-run.
+    // Per-bookmark failures are warnings, never fatal — a description
+    // edit failing shouldn't unwind a successful submit.
+    if !submit.dry_run && !submit.no_links {
+        hoist_links_step(jj, &workspace_root, &all_sorted, &trunk, verbosity);
+    }
+
     // 6. Track each pushed bookmark with jj so the next op doesn't
     // import the remote ref as untracked. See
     // jj::track_bookmark_on_remote for the rationale.
@@ -792,6 +803,104 @@ fn submit_cmd(
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+/// Hoist magic-word issue references from each submitted bookmark's
+/// commit range into its PR description. One UI step covering the
+/// whole stack; per-bookmark outcomes are folded into the summary.
+///
+/// For each bookmark: read the `<parent>..<name>` commit messages,
+/// extract + normalize references ([`links::extract_references`]),
+/// resolve the PR, read its body, reconcile the managed block, and
+/// write it back only if it changed. A bookmark with no open PR
+/// (pre-push WIP that gt didn't submit) or no references is silently
+/// skipped. All failures are non-fatal warnings.
+fn hoist_links_step(
+    jj: &JjCli,
+    workspace_root: &std::path::Path,
+    all_sorted: &[stack::StackedBookmark],
+    trunk: &str,
+    verbosity: ui::Verbosity,
+) {
+    let step = ui::Step::start("Hoisting issue references into PR descriptions", verbosity);
+    let mut updated = 0usize;
+    let mut unchanged = 0usize;
+    let mut no_refs = 0usize;
+    let mut no_pr = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+
+    for sb in all_sorted {
+        let parent = sb.parent.as_branch_name(trunk);
+        let messages = match jj::commit_messages_in_range(jj, parent, &sb.name) {
+            Ok(m) => m,
+            Err(e) => {
+                errors.push(format!("{}: reading commit messages: {e}", sb.name));
+                continue;
+            }
+        };
+        let refs = links::extract_references(&messages);
+        if refs.is_empty() {
+            no_refs += 1;
+            continue;
+        }
+        let pr = match gh::find_pr_for_branch(workspace_root, &sb.name) {
+            Ok(Some(pr)) => pr,
+            Ok(None) => {
+                no_pr += 1;
+                continue;
+            }
+            Err(e) => {
+                errors.push(format!("{}: resolving PR: {e}", sb.name));
+                continue;
+            }
+        };
+        let body = match gh::pr_body(workspace_root, pr.number) {
+            Ok(b) => b,
+            Err(e) => {
+                errors.push(format!(
+                    "{} (#{}): reading PR body: {e}",
+                    sb.name, pr.number
+                ));
+                continue;
+            }
+        };
+        let new_body = links::reconcile_body(&body, &refs);
+        if new_body == body {
+            unchanged += 1;
+            continue;
+        }
+        match gh::set_pr_body(workspace_root, pr.number, &new_body) {
+            Ok(()) => updated += 1,
+            Err(e) => errors.push(format!(
+                "{} (#{}): updating PR body: {e}",
+                sb.name, pr.number
+            )),
+        }
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    if updated > 0 {
+        parts.push(format!("{updated} updated"));
+    }
+    if unchanged > 0 {
+        parts.push(format!("{unchanged} already current"));
+    }
+    if no_refs > 0 {
+        parts.push(format!("{no_refs} no references"));
+    }
+    if no_pr > 0 {
+        parts.push(format!("{no_pr} no open PR"));
+    }
+    let summary = if parts.is_empty() {
+        "nothing to hoist".to_owned()
+    } else {
+        parts.join(", ")
+    };
+    if errors.is_empty() {
+        step.success(&summary, None);
+    } else {
+        step.warn(&summary, Some(&errors.join("\n")));
+    }
 }
 
 fn track_cmd(
