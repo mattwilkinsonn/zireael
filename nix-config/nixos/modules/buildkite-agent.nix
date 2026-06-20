@@ -240,12 +240,14 @@ let
     }) cfg.agentNames
   );
 
-  # Space-joined list of each agent's dataDir for the cache-cleanup
+  # Each agent's dataDir, escaped as shell args for the cache-cleanup
   # find. The module puts each agent's checkouts under
-  # /var/lib/buildkite-agent-<name>/builds/.
-  agentBuildDirs = lib.concatMapStringsSep " " (
-    name: "/var/lib/buildkite-agent-${name}"
-  ) cfg.agentNames;
+  # /var/lib/buildkite-agent-<name>/builds/. escapeShellArgs keeps the
+  # find robust if an agent name ever contains a space or other
+  # word-splitting character.
+  agentBuildDirs = lib.escapeShellArgs (
+    map (name: "/var/lib/buildkite-agent-${name}") cfg.agentNames
+  );
 in
 {
   options.sealed.buildkiteAgent = {
