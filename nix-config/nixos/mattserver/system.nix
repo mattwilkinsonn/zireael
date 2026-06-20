@@ -27,6 +27,19 @@ let
   # job is shared token-read.)
   agentTokenGroup = "buildkite-token";
 
+  # Shared group owning the Buildkite cache dir (/cache/bkcache). The
+  # Buildkite cache plugin (used by test-linux/lints/live-tests for the
+  # cargo target/ + bun-install caches) symlinks each job's cache paths
+  # under /cache/bkcache and the docker plugin mounts that root into the
+  # container. Pre-propagate-uid-gid the container started as root and
+  # chowned the cache mount, so the host dir's owner didn't matter; now
+  # the container (and the cache plugin) run as the agent uid, which must
+  # be able to create + write entries under /cache/bkcache. The two agents
+  # have distinct primary uids, so a single owner can't satisfy both — a
+  # shared group + setgid dir (2775, declared via tmpfiles below) lets both
+  # write and makes new entries inherit the group. SEA-830.
+  agentCacheGroup = "buildkite-cache";
+
   # Git credential helper for checkout-time clone auth — mints a
   # sealedsecurity-ci App installation token over HTTPS. Shared with
   # mattmacpro (shared/buildkite-git-credential-app.nix); this host
@@ -131,10 +144,12 @@ let
     extraConfig = ''plugins-path="/var/lib/buildkite-agent-${name}/plugins"'';
 
     # Join the shared token-read group (so every agent can read the one
-    # decrypted agent-token) and the podman group (docker-compat socket
-    # access).
+    # decrypted agent-token), the cache group (so both agents can write
+    # the shared /cache/bkcache dir under propagate-uid-gid), and the
+    # podman group (docker-compat socket access).
     extraGroups = [
       agentTokenGroup
+      agentCacheGroup
       "podman"
     ];
   };
@@ -378,6 +393,20 @@ in
   # decrypted agent-token file is chgrp'd to so every agent can read
   # it regardless of instance count.
   users.groups.${agentTokenGroup} = { };
+
+  # Shared cache group + the setgid cache dir. Both agents are members
+  # (extraGroups above); the dir is group-owned mode 2775 so either
+  # agent can create entries and the setgid bit makes those entries
+  # inherit the group (so the OTHER agent can then read/evict them on a
+  # later job). Replaces the ad-hoc backup-owned /cache/bkcache that the
+  # agent uid couldn't write under propagate-uid-gid. The `d` rule
+  # adjusts the existing dir's owner+mode in place; stale backup-owned
+  # contents underneath are cleared once by hand (they predate this).
+  users.groups.${agentCacheGroup} = { };
+  systemd.tmpfiles.rules = [
+    "d /cache 0755 root root -"
+    "d /cache/bkcache 2775 root ${agentCacheGroup} -"
+  ];
 
   # Token provisioning. The agents register with the Buildkite *Agent*
   # token (org Agents page) — distinct from the BUILDKITE_API_TOKEN the
