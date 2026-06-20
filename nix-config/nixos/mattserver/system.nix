@@ -540,12 +540,28 @@ in
     # the leak unconditionally. /run/docker.sock is dockerd's (podman's
     # docker-compat socket is forced off on this host).
     environment.DOCKER_HOST = "unix:///run/docker.sock";
+    # Keep the per-agent checkout's Rust build cache across jobs.
+    # Buildkite's default checkout runs `git clean -ffxdq` (the `-x`
+    # removes gitignored files), which nukes target/ + the in-checkout
+    # cargo registry every job — so a persistent agent would rebuild
+    # cold every time despite the dir surviving on disk. Exclude them
+    # from the clean (`-e <pattern>`) so they persist in-place,
+    # per-agent (each agent has its own checkout dir), the way the
+    # GHA self-hosted runners relied on (SEA-640). target-clippy is
+    # the clippy step's separate target dir (CARGO_TARGET_DIR in the
+    # pipeline) — kept apart so clippy's rmeta-only build doesn't
+    # poison the test step's rlib cache. The agent-cache-cleanup timer
+    # prunes stale target/ dirs. Self-hosted-only: hosted runners get
+    # a fresh checkout each job, so this is meaningless there — which
+    # is why it lives on the agent, not in the portable pipeline YAML.
+    environment.BUILDKITE_GIT_CLEAN_FLAGS = "-ffxdq -e target -e target-clippy -e .cargo-home";
   };
   systemd.services.buildkite-agent-sealed-2 = {
     after = [ "decrypt-agent-token.service" ];
     requires = [ "decrypt-agent-token.service" ];
     environment.GIT_CONFIG_GLOBAL = "${agentGitConfig}";
     environment.DOCKER_HOST = "unix:///run/docker.sock";
+    environment.BUILDKITE_GIT_CLEAN_FLAGS = "-ffxdq -e target -e target-clippy -e .cargo-home";
   };
 
   # (git config for the agents lives in agentGitConfig, pointed at via
@@ -562,14 +578,20 @@ in
   # can reach 10-20 GB. 30-day window keeps warm-ish trees for
   # infrequent-push branches while bounding disk. (target/ inside the
   # *container* is separate; this is just the host-side checkout state.)
+  #
+  # Covers `target`, `target-clippy` (the clippy step's separate
+  # CARGO_TARGET_DIR), and `.cargo-home` — all kept across jobs by the
+  # BUILDKITE_GIT_CLEAN_FLAGS exclude above (SEA-834), so they need the
+  # same staleness prune.
   systemd.services.agent-cache-cleanup = {
-    description = "Prune stale Rust target/ directories from agent build dirs";
+    description = "Prune stale Rust build caches from agent build dirs";
     serviceConfig = {
       Type = "oneshot";
       ExecStart = pkgs.writeShellScript "agent-cache-cleanup" ''
         find /var/lib/buildkite-agent-sealed /var/lib/buildkite-agent-sealed-2 \
           -maxdepth 6 \
-          -name "target" -type d \
+          \( -name "target" -o -name "target-clippy" -o -name ".cargo-home" \) \
+          -type d \
           -mtime +30 \
           -print0 2>/dev/null | xargs -0 -r rm -rf
       '';
