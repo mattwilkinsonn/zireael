@@ -522,11 +522,23 @@ in
     after = [ "decrypt-agent-token.service" ];
     requires = [ "decrypt-agent-token.service" ];
     environment.GIT_CONFIG_GLOBAL = "${agentGitConfig}";
+    # Pin the docker CLI at the real dockerd socket. shared/linux.nix's
+    # shell init exports DOCKER_HOST at the rootless podman socket for
+    # interactive user tooling, and that value leaks into the agent's
+    # service environment — so the docker plugin's `docker` invocations
+    # were silently hitting podman (5.7.0) instead of dockerd, which
+    # reintroduced podman's netavark networking (a dead 169.254.1.1
+    # first nameserver -> ~5s DNS timeout per daemon lookup -> 60-70x
+    # slower e2e tests). An explicit service-env DOCKER_HOST overrides
+    # the leak unconditionally. /run/docker.sock is dockerd's (podman's
+    # docker-compat socket is forced off on this host).
+    environment.DOCKER_HOST = "unix:///run/docker.sock";
   };
   systemd.services.buildkite-agent-sealed-2 = {
     after = [ "decrypt-agent-token.service" ];
     requires = [ "decrypt-agent-token.service" ];
     environment.GIT_CONFIG_GLOBAL = "${agentGitConfig}";
+    environment.DOCKER_HOST = "unix:///run/docker.sock";
   };
 
   # (git config for the agents lives in agentGitConfig, pointed at via
