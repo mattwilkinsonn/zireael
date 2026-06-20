@@ -77,11 +77,18 @@ let
   # runtime. The Rust toolchain, sccache, dbus, protobuf, etc. all
   # live in the seal-ci image now — none of it belongs on the agent.
   #
-  # `docker-client` is the CLI only (no dockerd); it talks to podman's
-  # docker-compat socket at /run/docker.sock (virtualisation.podman
-  # .dockerSocket.enable in nixos/common.nix symlinks it there). The
-  # agent user joins the `podman` group (relaxed to 0660 in common.nix)
-  # so the socket is reachable.
+  # `docker` is the real CLI + talks to the dockerd this host enables
+  # (virtualisation.docker below). mattserver runs real dockerd for CI
+  # rather than podman's docker-compat socket: the bwrap-in-container
+  # sandbox tests need the same container-exec behavior the hosted
+  # Buildkite agents (docker) and future GCP VMs (docker) provide, and
+  # podman's rootless-userns nesting diverges from docker for the
+  # in-container `bwrap --proc` mount. Standardizing on dockerd keeps
+  # ONE portable pipeline across hosted + self-hosted + cloud. The agent
+  # user joins the `docker` group to reach /run/docker.sock. (Shared
+  # nixos/common.nix still enables podman for the rpis' oci-containers;
+  # this host overrides its docker-compat socket off — see below — so
+  # dockerd owns /run/docker.sock.)
   agentRuntimePackages = with pkgs; [
     bash
     coreutils
@@ -98,8 +105,9 @@ let
     openssl
     gnugrep
     gnused
-    # Container CLI — the docker plugin shells out to `docker`.
-    docker-client
+    # Container CLI — the docker plugin shells out to `docker`, talking
+    # to the real dockerd enabled on this host.
+    docker
   ];
 
   # Two agent instances, 1:1 with the old runner count. Concurrency is
@@ -113,6 +121,27 @@ let
   # below) — keyed by `name`.
   mkAgent = name: {
     enable = true;
+
+    # pre-checkout poisoning cleanup. Under docker + ci-entrypoint the
+    # job container starts as root and chowns the bind-mounted checkout
+    # to uid 1000 (the in-image workload uid). On a PERSISTENT agent the
+    # next job's checkout/cleanup runs as the agent user (uid != 1000)
+    # and can't unlink those root/1000-owned files ("dubious ownership"
+    # + permission denied on .git/*). Hosted agents never hit this —
+    # they're ephemeral. Before each checkout, chown the build tree back
+    # to the agent uid via a throwaway ROOT container (the agent can
+    # launch containers but isn't root itself, so a bare chown can't
+    # cross the uid). Idempotent + self-heals a job killed before its
+    # own cleanup. SEA-830.
+    hooks.pre-checkout = ''
+      if [ -n "''${BUILDKITE_BUILD_CHECKOUT_PATH:-}" ] && [ -d "''${BUILDKITE_BUILD_CHECKOUT_PATH}" ]; then
+        docker run --rm \
+          -v "''${BUILDKITE_BUILD_CHECKOUT_PATH}:/reown" \
+          --entrypoint chown \
+          ghcr.io/sealedsecurity/seal-ci:latest \
+          -R "$(id -u):$(id -g)" /reown || true
+      fi
+    '';
 
     # Registration token — the Buildkite *Agent* token (org Agents
     # page), NOT the BUILDKITE_API_TOKEN used by the `bk` CLI. Decrypted
@@ -146,11 +175,11 @@ let
     # Join the shared token-read group (so every agent can read the one
     # decrypted agent-token), the cache group (so both agents can write
     # the shared /cache/bkcache dir under propagate-uid-gid), and the
-    # podman group (docker-compat socket access).
+    # docker group (so the docker plugin can reach /run/docker.sock).
     extraGroups = [
       agentTokenGroup
       agentCacheGroup
-      "podman"
+      "docker"
     ];
   };
 in
@@ -386,6 +415,18 @@ in
   # "third-party scripts assume FHS", and a self-hosted CI agent runs a
   # lot of such scripts. SEA-830.
   services.envfs.enable = true;
+
+  # Real dockerd as the CI container engine (see agentRuntimePackages
+  # comment for the why: bwrap-in-container parity with hosted Buildkite
+  # + future GCP VMs, which both run docker). The shared nixos/common.nix
+  # enables podman with dockerCompat + dockerSocket (it symlinks
+  # /run/docker.sock at podman for the rpis' oci-containers). On this
+  # host dockerd must own /run/docker.sock instead, so force podman's
+  # docker-compat socket off here. Podman stays installed (the shared
+  # config still enables the engine) but no longer claims the socket.
+  virtualisation.docker.enable = true;
+  virtualisation.podman.dockerCompat = lib.mkForce false;
+  virtualisation.podman.dockerSocket.enable = lib.mkForce false;
 
   # Shared token-read group every agent joins. The buildkite-agents
   # module creates per-agent users (buildkite-agent-sealed, -sealed-2)
