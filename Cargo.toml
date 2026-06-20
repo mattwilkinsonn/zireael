@@ -21,6 +21,7 @@ anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive", "env"] }
 clap_complete = { version = "4.6.5", features = ["unstable-dynamic"] }
 dialoguer = { version = "0.12.0", default-features = false }
+dunce = "1.0.5"
 indoc = "2.0.6"
 owo-colors = { version = "4.3.0", features = ["supports-colors"] }
 regex = "1.12.3"
