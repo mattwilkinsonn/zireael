@@ -1,27 +1,28 @@
 { pkgs, lib, ... }:
 
-# mattmacpro — Mac Pro 2013 trashcan (Intel Xeon E5 + 64 GB DDR3 ECC,
-# FirePro D300/500/700 dual GPUs, ~512 GB Apple SSD).
+# mattmini — Apple Silicon Mac mini (M2 Pro, 16 GB unified memory,
+# 512 GB SSD).
 #
 # Roles:
-#   1. Self-hosted Buildkite CI agents for the sealedsecurity org
-#      (macOS x64 primary pool, queue `macos-x64-selfhosted`).
+#   1. Self-hosted Buildkite CI agent for the sealedsecurity org
+#      (native macOS arm64, queue `macos-arm64-selfhosted`). arm64
+#      matches the seal user majority + the release.yml arm64-macOS
+#      target, and current macOS on supported hardware means the
+#      sandbox-exec tests behave the same as production.
 #
-# OS strategy: macOS Sonoma 14.x via OpenCore Legacy Patcher.
-# Mac Pro 2013 is natively stuck on Monterey (Apple dropped it from
-# Ventura+); Monterey is already past security-update EOL and modern
-# Homebrew formulae are starting to drop it. OCLP forward to Sonoma
-# keeps the box inside a security-update window through late 2026.
-# Re-run the patcher after every macOS point release (~quarterly) per
-# darwin/mattmacpro/INSTALL.md. Box is headless so the FirePro GPU
-# root-patch quality doesn't matter much; we only need the desktop
-# to render at all for occasional VNC/screen sharing debug.
+# Headless / always-on. Lives on wired ethernet; Tailscale SSH
+# (LAN-side native sshd is intentionally unloaded) is the only
+# user-facing interface. pmset is locked into "never sleep, never
+# hibernate, autorestart on power loss" — see the pmset activation
+# block below.
 #
-# Headless / always-on. Lives in a closet on wired ethernet;
-# Tailscale SSH (LAN-side native sshd is intentionally unloaded)
-# is the only user-facing interface. pmset is locked into "never
-# sleep, never hibernate, autorestart on power loss" — see the
-# pmset activation block below.
+# RAM note: 16 GB unified memory. A SINGLE agent instance runs here —
+# one cold-cache `cargo build -j` on the workspace can spike several
+# GB across codegen workers, and a single instance keeps the box
+# inside 16 GB without swap pressure. Single instance also keeps
+# sccache simple: with no concurrent agents, the agent's own
+# auto-spawned sccache server + per-agent cache dirs are race-free by
+# construction.
 
 let
   # Git credential helper for checkout-time clone auth — mints a
@@ -60,49 +61,39 @@ let
   agentUser = "_buildkite-agent";
   agentUid = 533;
 
-  # Two agent instances. Xeon E5 in the Mac Pro 2013 is typically
-  # 6 physical / 12 logical cores (E5-1650v2 / 2697v2 variants); 2
-  # instances × 6 CARGO_BUILD_JOBS = 12 threads matches that.
-  # Pre-SEA-672 this was 3 instances × 4 jobs; round-3 load test
-  # showed 3 concurrent cold-cache builds saturated the box 1:1 on
-  # cores and stretched per-compile times ~3×, blowing past a
-  # 40min step cap. Dropping to 2 gives each ~6 cores avg and cuts
-  # cold-cache build duration roughly in half.
+  # Single agent instance. The M2 Pro mini has 16 GB unified memory;
+  # one cold-cache cargo build on the seal workspace spikes several GB
+  # across codegen workers, so a single instance is the safe ceiling.
+  # CARGO_BUILD_JOBS is tuned below for the mini's core count.
   #
   # Unlike mattserver (Linux), macOS PR jobs run NATIVELY on the
   # agent — test-macos.yml has no docker plugin (`just
   # nextest-macos-pr` runs directly, using the macOS-built
   # sandbox-exec path). So the agent keeps the full toolchain
-  # (rustup, sccache, the brew/Xcode shims) and the shared sccache
-  # server, exactly as the old runner did. The only swap is the
-  # service: a hand-rolled launchd buildkite-agent daemon in place
-  # of the github-runner LaunchDaemon.
+  # (rustup, sccache, the brew/Xcode shims). With a single instance
+  # the agent auto-spawns its own sccache server on first
+  # `RUSTC_WRAPPER=sccache` call — no separate shared-server daemon
+  # needed (the SEA-672 shared-server consolidation only mattered for
+  # concurrent agents racing one cache).
   #
-  # State lives at /var/lib/buildkite-agents/<name>/ (kept as-is to
-  # preserve the warm cargo/sccache caches across the cutover).
+  # State lives at /var/lib/buildkite-agents/<name>/.
 
   # Homebrew wrappers for the agent PATH. The hand-rolled launchd
   # daemon (below) sets PATH explicitly from the package list; macOS
-  # GUI/CI tools like `brew` live under /usr/local/bin which isn't on
-  # that curated PATH, so we shim them in as Nix-managed bin scripts.
-  # SEA-640 (carried forward from the github-runner setup).
-  # coreutils + git + gnutar + gzip + extraPackages). `/usr/local/bin`
-  # (Intel Homebrew prefix on this box) is NOT on that PATH, so
-  # workflow actions like `tecolicom/actions-use-homebrew-tools` that
-  # shell out to `brew` fail with "command not found". Shim them into
-  # the runner's PATH by writing thin wrappers as Nix-managed bin/
-  # scripts. SEA-640.
+  # GUI/CI tools like `brew` live under /opt/homebrew/bin (the Apple
+  # Silicon Homebrew prefix) which isn't on that curated PATH, so we
+  # shim them in as Nix-managed bin scripts. SEA-640 / SEA-840.
   #
-  # Wrapping (vs. directly prepending /usr/local/bin to the runner
+  # Wrapping (vs. directly prepending /opt/homebrew/bin to the runner
   # PATH) keeps the shim list explicit: only `brew` and `brew`-
   # installed binaries we actually depend on get a wrapper. If a
   # workflow ever needs a different Homebrew-managed tool, add it to
-  # this list rather than blanket-mounting /usr/local/bin.
+  # this list rather than blanket-mounting /opt/homebrew/bin.
   brewShims = pkgs.symlinkJoin {
     name = "brew-shims";
     paths = [
       (pkgs.writeShellScriptBin "brew" ''
-        exec /usr/local/bin/brew "$@"
+        exec /opt/homebrew/bin/brew "$@"
       '')
     ];
   };
@@ -232,61 +223,50 @@ let
   # launchd daemon merges this into EnvironmentVariables. Same shape
   # the github-runner module's `extraEnvironment` carried.
   mkAgentEnv = name: {
-    # Per-instance cargo home. Pre-SEA-672 this pointed at a
-    # /shared subdir to keep one warm registry across all
-    # runners — but concurrent cargo invocations on different
-    # runners race during crate-source extraction: cargo creates
-    # `registry/src/<crate>-<ver>/` before unpacking, sccache
-    # tries to hash the source files mid-unpack, and gets ENOENT
-    # on files that haven't been extracted yet. The
-    # index-lockfile that cargo uses serializes registry *index*
-    # updates, NOT source unpacks — so a shared registry is only
-    # safe when at most one cargo runs at a time, which doesn't
-    # hold on a 3-runner box. See mattserver/system.nix for the
-    # full incident write-up. Per-instance CARGO_HOME costs
-    # ~1-2 GB extra per runner for the warm registry.
+    # Per-agent cargo home. A pool-wide /shared registry was the
+    # SEA-672 failure shape on the multi-runner boxes: concurrent
+    # cargo invocations race during crate-source extraction (cargo
+    # creates `registry/src/<crate>-<ver>/` before unpacking, sccache
+    # tries to hash the source mid-unpack, gets ENOENT). The
+    # index-lockfile serializes registry *index* updates, NOT source
+    # unpacks, so a shared registry is only safe when at most one
+    # cargo runs at a time. The mini runs a single agent so the race
+    # can't happen — but per-agent CARGO_HOME is kept anyway as the
+    # correct default (cheap, ~1-2 GB, and right if a 2nd instance is
+    # ever added). Confirmed on GHA too: a shared cargo dir between
+    # agents broke; per-agent is the rule.
     CARGO_HOME = "/var/lib/buildkite-agents/${name}/.cargo";
 
-    # Isolated per instance — rustup has no concurrent-write
-    # protection and will corrupt toolchain state if two instances
-    # install simultaneously.
+    # Isolated per agent — rustup has no concurrent-write protection
+    # and corrupts toolchain state if two agents install at once.
     RUSTUP_HOME = "/var/lib/buildkite-agents/${name}/.rustup";
 
-    # 6 build jobs per instance × 2 instances = 12 threads = Xeon E5
-    # logical core count. Bumped from 4 → 6 when sealed-macos-3
-    # was retired (SEA-672 round 3 load-test fallout).
+    # M2 Pro core count. The 10-core M2 Pro is 6 performance + 4
+    # efficiency; the 12-core is 8P + 4E. CARGO_BUILD_JOBS is set to
+    # the performance-core count to keep heavy parallel codegen on the
+    # P-cores (and bounded for 16 GB RAM with a single agent). VERIFY
+    # ON BOX: `sysctl -n hw.perflevel0.physicalcpu` (P-cores) and bump
+    # to 8 if this mini is the 12-core variant.
     CARGO_BUILD_JOBS = "6";
 
-    # sccache wiring. Runner-level RUSTC_WRAPPER means cargo uses
-    # sccache automatically without per-workflow opt-in. The runners
-    # connect to a *shared* sccache server running as its own
-    # launchd daemon (see `launchd.daemons.sccache-server` below).
-    # Pre-SEA-672 each runner's first `RUSTC_WRAPPER=sccache` call
-    # auto-spawned its own server, which on Linux turned into a
-    # concurrent-bind race + per-server cache-state divergence. The
-    # Mac side hasn't surfaced the failure yet (lower contention on
-    # this 64 GB box) but the consolidation is the right hygiene
-    # shape on both runner hosts. SEA-672.
+    # sccache wiring. Agent-level RUSTC_WRAPPER means cargo uses
+    # sccache automatically without per-workflow opt-in. With a single
+    # agent the first `RUSTC_WRAPPER=sccache` call auto-spawns a
+    # per-agent sccache server — no separate shared-server launchd
+    # daemon (the SEA-672 consolidation existed only to stop multiple
+    # agents racing one shared cache; one agent has no such race). The
+    # server persists across that agent's jobs, keeping the local
+    # compile cache warm.
     RUSTC_WRAPPER = "sccache";
-    SCCACHE_DIR = "/var/lib/buildkite-agents/shared/.sccache";
+    SCCACHE_DIR = "/var/lib/buildkite-agents/${name}/.sccache";
     SCCACHE_CACHE_SIZE = "30G";
-    # Point the sccache client at the dedicated server unit.
-    # Default is 4226; pin it explicitly so a future port change
-    # only needs one edit.
-    SCCACHE_SERVER_PORT = "4226";
+    # SEA-680: never idle-exit. Re-reading the LRU index off disk on
+    # every 10-min idle re-spawn costs ~1-2s; keep the server up.
+    SCCACHE_IDLE_TIMEOUT = "0";
 
-    # Per-instance bun + uv install caches. Bun is used by docs/site
-    # + linear-auto-done bundles; uv isn't called by today's seal CI
-    # but is staged so a future Python tool gets a warm cache for
-    # free. Pre-warm cost is one bun-install per instance (~3-5s on
-    # cold cache, then the runner-local path is reused across that
-    # instance's subsequent jobs). Per-instance (not /shared) for
-    # the same reason CARGO_HOME is per-instance — concurrent writes
-    # to a pool-wide install dir were the SEA-672 failure shape, and
-    # the cross-instance warm-up payoff is small enough that the
-    # extra GB of disk per runner is the right tradeoff. Both tools
-    # `mkdir -p` their cache dir on first use, so no activation-
-    # script entry needed.
+    # Per-agent bun + uv install caches. Bun backs docs/site +
+    # linear-auto-done bundles; uv is staged for a future Python tool.
+    # Both `mkdir -p` their dir on first use, so no activation entry.
     BUN_INSTALL_CACHE_DIR = "/var/lib/buildkite-agents/${name}/.bun-install";
     UV_CACHE_DIR = "/var/lib/buildkite-agents/${name}/.uv-cache";
   };
@@ -302,7 +282,7 @@ let
   #      world-readable in the Nix store), so the wrapper reads it at
   #      launch from the tmpfs file the decrypt-agent-secrets daemon
   #      stages and exports it in-process.
-  #   2. Tags. The tag string contains `=` (queue=macos-x64-selfhosted),
+  #   2. Tags. The tag string contains `=` (queue=macos-arm64-selfhosted),
   #      which launchd's EnvironmentVariables parser mangles — it splits
   #      on the first `=` and treats the rest as the value. Passing tags
   #      as a `--tags` ARG sidesteps launchd env parsing entirely.
@@ -326,8 +306,8 @@ let
           BUILDKITE_AGENT_TOKEN="$(cat /var/run/buildkite-agent/agent-token)"
           export BUILDKITE_AGENT_TOKEN
           exec ${pkgs.buildkite-agent}/bin/buildkite-agent start \
-            --name mattmacpro-${name} \
-            --tags queue=macos-x64-selfhosted,os=macos,arch=x64,host=mattmacpro \
+            --name mattmini-${name} \
+            --tags queue=macos-arm64-selfhosted,os=macos,arch=arm64,host=mattmini \
             --build-path /var/lib/buildkite-agents/${name}/builds \
             --hooks-path ${pkgs.buildkite-agent}/share/buildkite-agent/hooks \
             --plugins-path /var/lib/buildkite-agents/${name}/plugins
@@ -361,9 +341,9 @@ in
   # Hostname + user
   # ============================================================
 
-  networking.hostName = "mattmacpro";
-  networking.computerName = "mattmacpro";
-  networking.localHostName = "mattmacpro";
+  networking.hostName = "mattmini";
+  networking.computerName = "mattmini";
+  networking.localHostName = "mattmini";
 
   # User registration. nix-darwin needs `users.users.<name>` declared
   # so home-manager.users.<name> resolves. The actual macOS account
@@ -411,7 +391,7 @@ in
   #
   # This diverges from the MBP (`nix.enable = false`) because the MBP
   # runs Determinate Nix which has its own daemon-management model
-  # where letting nix-darwin take over would conflict. mattmacpro uses
+  # where letting nix-darwin take over would conflict. The mini uses
   # the standard nixos.org daemon, so nix-darwin manages the plist.
   nix.enable = true;
 
@@ -446,8 +426,7 @@ in
   ];
 
   # Same direnv check-phase skip the MBP needs on aarch64-darwin's
-  # 25.11. Carrying it forward to x86_64-darwin too because the fish
-  # test runner SIGKILL inside the build sandbox isn't arch-specific.
+  # 25.11 — the fish test runner SIGKILLs inside the build sandbox.
   nixpkgs.overlays = [
     (_: prev: {
       direnv = prev.direnv.overrideAttrs (_: {
@@ -484,11 +463,9 @@ in
       "coreutils"
       # NOTE: no Swift toolchain managers (xcodes / swiftly) here. seal's
       # macOS CI needs only the Xcode Command Line Tools (clang/ld via
-      # the xcodeShims above), not full Xcode — and newer Xcode versions
-      # won't run on the Mac Pro 2013 anyway, so a Swift-version manager
-      # has no future on this box. `xcodes` also has no x86_64 bottle as
-      # of 2.0.2 (Homebrew Tier 3), so leaving it in made every
-      # nix-switch fail its auto-upgrade. SEA-830.
+      # the xcodeShims above), not full Xcode or a pinned Swift version.
+      # Adding a Swift-version manager would be dead weight for this CI
+      # workload. SEA-840.
       # zstd: same rationale as the MBP — podman links against
       # libzstd at runtime, so brew can't autoremove it. Declaring
       # it explicitly keeps the situation visible.
@@ -510,8 +487,8 @@ in
       #      from SSH. Same problem for any root LaunchDaemon trying
       #      to call `tailscale serve` (e.g. our Glances serve hook).
       # The formula sidesteps both:
-      #   /usr/local/sbin/tailscaled — root-owned system daemon
-      #   /usr/local/bin/tailscale   — CLI that talks to it via
+      #   /opt/homebrew/sbin/tailscaled — root-owned system daemon
+      #   /opt/homebrew/bin/tailscale   — CLI that talks to it via
       #                                /var/run/tailscaled.socket
       # The daemon runs as a launchd SYSTEM daemon via
       #   sudo brew services start tailscale
@@ -533,13 +510,13 @@ in
   # Sleep + power management
   # ============================================================
   #
-  # Strict always-on policy. Mac Pro 2013 is a headless CI host with
+  # Strict always-on policy. The mini is a headless CI host with
   # no other role — every sleep mode is disabled so SSH stays
   # reachable and CI jobs land instantly. Wake-on-magic-packet and
   # autorestart-on-power-loss as safety nets in case the box ever
   # does power-cycle (closet circuit breaker trip, etc.).
   #
-  # pmset is per-power-source on laptops; the Mac Pro is AC-only so
+  # pmset is per-power-source on laptops; the mini is AC-only so
   # `-a` (all sources) applies uniformly. Setting all of these
   # idempotently every activation matches how darwin/system.nix on
   # the MBP handles its displaysleep tuning.
@@ -591,7 +568,7 @@ in
     # other state, so re-running is idempotent. The `|| true`
     # covers the brief first-boot window where tailscaled isn't
     # yet up.
-    /usr/local/bin/tailscale set --ssh=true 2>/dev/null || true
+    /opt/homebrew/bin/tailscale set --ssh=true 2>/dev/null || true
   '';
 
   # ============================================================
@@ -611,7 +588,7 @@ in
   #   sudo brew services restart tailscale
   #
   # Auth happens once via `tailscale up --auth-key=... --ssh
-  # --hostname=mattmacpro` (bootstrap step 4). After that the
+  # --hostname=mattmini` (bootstrap step 4). After that the
   # daemon keeps state in /Library/Tailscale and stays joined
   # across reboots.
 
@@ -622,12 +599,12 @@ in
   # Glances runs in web-server mode on localhost; Tailscale Serve
   # fronts it with TLS on the tailnet hostname. Reachable from any
   # tailnet device at:
-  #     https://mattmacpro.tail08a5c5.ts.net:9443/
+  #     https://mattmini.tail08a5c5.ts.net:9443/
   #
   # No HTTP basic auth on Glances itself — the tailnet boundary
   # provides authentication (only tailnet members can resolve the
   # hostname / reach the IP). Tailscale ACLs already gate which
-  # devices can talk to mattmacpro; we trust that as the auth layer.
+  # devices can talk to mattmini; we trust that as the auth layer.
   # If we ever want a second factor on the dashboard specifically,
   # Glances supports `--username/--password` for HTTP basic auth.
   #
@@ -648,7 +625,7 @@ in
     serviceConfig = {
       Label = "com.sealedsecurity.glances";
       ProgramArguments = [
-        "/usr/local/bin/glances"
+        "/opt/homebrew/bin/glances"
         "-w"
         "--bind"
         "127.0.0.1"
@@ -686,7 +663,7 @@ in
           # race: the formula's tailscaled launchd daemon and this
           # one are both RunAtLoad=true with no explicit ordering.
           for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-            if /usr/local/bin/tailscale status --json 2>/dev/null \
+            if /opt/homebrew/bin/tailscale status --json 2>/dev/null \
                | grep -q '"BackendState":"Running"'; then
               break
             fi
@@ -696,7 +673,7 @@ in
           # `tailscale serve` is persistent across reboots once set;
           # re-running it is idempotent. Output is captured to the
           # log file below for debugging.
-          /usr/local/bin/tailscale serve --bg --https=9443 \
+          /opt/homebrew/bin/tailscale serve --bg --https=9443 \
             http://127.0.0.1:61208 || true
         ''
       ];
@@ -844,9 +821,9 @@ in
   # Buildkite agents (self-hosted PR-time CI)
   # ============================================================
   #
-  # SEA-830: the box runs self-hosted Buildkite agents (was self-hosted
-  # GitHub Actions runners pre-SEA-587 migration). test-macos.yml routes
-  # to the `macos-x64-selfhosted` queue these agents register.
+  # SEA-840: the mini runs a self-hosted Buildkite agent. test-macos.yml
+  # routes to the `macos-arm64-selfhosted` queue this agent registers
+  # (repointed from hosted `macos-medium` once the box is green).
   #
   # nix-darwin has no services.buildkite-agents module, so the agent
   # launchd daemons are hand-rolled (mkAgentDaemon in the let block).
@@ -868,16 +845,14 @@ in
   # cargo/sccache caches survive the cutover.
   system.activationScripts.extraActivation.text = ''
     echo >&2 "setting up Buildkite agent dirs..."
-    /bin/mkdir -p /var/lib/buildkite-agents/shared/.sccache
     /bin/mkdir -p /var/lib/buildkite-agents/sealed-macos/.cargo
-    /bin/mkdir -p /var/lib/buildkite-agents/sealed-macos-2/.cargo
+    /bin/mkdir -p /var/lib/buildkite-agents/sealed-macos/.sccache
     # chown by numeric uid:gid, not name. This activation slot runs
     # BEFORE nix-darwin's user-creation step, so `_buildkite-agent`
     # isn't resolvable yet — `chown _buildkite-agent:_buildkite-agent`
     # fails "illegal group name". The numeric 533:533 (pinned in the
     # users.users/groups block above) needs no name lookup.
     /usr/sbin/chown -R ${toString agentUid}:${toString agentUid} /var/lib/buildkite-agents
-    /bin/chmod 0755 /var/lib/buildkite-agents/shared
 
     # Spotlight + Time Machine exclusions on the agent state tree.
     # Two hygiene concerns specific to macOS:
@@ -950,76 +925,34 @@ in
   # — NOT /etc/gitconfig, so it doesn't rewrite mattw's own git. See the
   # agentGitConfig comment in the let block.)
 
-  # Two agent instances. SEA-672 dropped from 3 → 2: the Mac Pro 2013
-  # has 12 logical cores and 64 GB RAM; 3 concurrent cold-cache cargo
-  # builds put 12 parallel rustc on 12 cores 1:1, stretching individual
-  # compiles ~3× and blowing past a 40min cap. The macOS path filter
-  # only fires when sandbox / process-spawn / TLS code changes (a
-  # cheaper-to-skip layer than Linux), so N=2 is plenty; warm-cache
-  # steady state hits ~1m per macOS job.
+  # Single agent instance. 16 GB unified memory is the constraint —
+  # one cold-cache cargo build on the workspace can spike several GB
+  # across parallel codegen workers, so one agent keeps the box inside
+  # 16 GB without swap. The macOS path filter only fires when sandbox /
+  # process-spawn / TLS code changes (a cheaper-to-skip layer than
+  # Linux), so a single agent is plenty; warm-cache steady state hits
+  # ~1m per macOS job. Add a second instance only if the box proves it
+  # has the RAM headroom under real concurrent load.
   #
   # launchd has no dependency-ordering primitive like systemd's
   # After=/Requires=. The agent daemon retries the token-file read on
   # its own (KeepAlive restarts it until decrypt-agent-secrets has staged
   # the file), so a boot-time race just costs a restart or two.
   launchd.daemons.buildkite-agent-sealed-macos = mkAgentDaemon "sealed-macos";
-  launchd.daemons.buildkite-agent-sealed-macos-2 = mkAgentDaemon "sealed-macos-2";
 
   # ============================================================
-  # Shared sccache server
+  # sccache
   # ============================================================
   #
-  # SEA-672: one supervised sccache server shared across all
-  # runner instances, replacing the pre-SEA-672 layout where each
-  # runner's `RUSTC_WRAPPER=sccache` invocation auto-spawned its
-  # own server. Mirrors `systemd.services.sccache-server` on
-  # mattserver — same shape, launchd-adapted. KeepAlive=true
-  # makes launchd restart the server on crash (the launchd
-  # equivalent of systemd's `Restart=on-failure`).
-  #
-  # The 64 GB on this box has more headroom than mattserver's
-  # 32 GB, so we don't surface the OOM-the-sccache failure mode
-  # here. The consolidation is still right on hygiene grounds:
-  # one supervised server, one cache-state owner, restart-on-
-  # crash by the OS-level supervisor.
-
-  launchd.daemons.sccache-server = {
-    serviceConfig = {
-      Label = "com.sealedsecurity.sccache-server";
-      ProgramArguments = [
-        "${pkgs.sccache}/bin/sccache"
-      ];
-      EnvironmentVariables = {
-        SCCACHE_DIR = "/var/lib/buildkite-agents/shared/.sccache";
-        SCCACHE_CACHE_SIZE = "30G";
-        SCCACHE_SERVER_PORT = "4226";
-        SCCACHE_LOG = "warn";
-        # Foreground mode — keep the process attached so launchd
-        # supervises it directly. Without this `sccache` double-
-        # forks and launchd immediately marks the job exited.
-        SCCACHE_START_SERVER = "1";
-        SCCACHE_NO_DAEMON = "1";
-        # SEA-680: disable the default 10-minute idle timeout.
-        # launchd's `KeepAlive = true` re-spawns on clean exit
-        # too (unlike systemd's `Restart=on-failure`) so the macOS
-        # side doesn't see the dead-server cascade mattserver hit,
-        # but letting the server idle-exit + re-spawn every 10
-        # minutes still costs ~1-2s per cycle to re-read the LRU
-        # index off disk. `0` keeps the server permanently up,
-        # which is the right shape for a supervised always-on
-        # cache server. SEA-680.
-        SCCACHE_IDLE_TIMEOUT = "0";
-      };
-      RunAtLoad = true;
-      KeepAlive = true;
-      # Run as the buildkite-agent service user so the cache dir
-      # ownership matches what the agent-side reads + writes.
-      UserName = agentUser;
-      GroupName = agentUser;
-      StandardOutPath = "/var/log/sccache-server.log";
-      StandardErrorPath = "/var/log/sccache-server.log";
-    };
-  };
+  # No separate sccache-server launchd daemon. With a single agent the
+  # agent's own `RUSTC_WRAPPER=sccache` call auto-spawns a per-agent
+  # server (SCCACHE_DIR + SCCACHE_IDLE_TIMEOUT=0 set in mkAgentEnv),
+  # which persists across that agent's jobs. The SEA-672 shared-server
+  # consolidation existed only to give multiple concurrent agents one
+  # cache-state owner + restart supervision; a single agent has neither
+  # the race nor the need. If a 2nd instance is ever added, run a
+  # shared sccache server as its own launchd daemon (one cache-state
+  # owner for the concurrent agents) instead of per-agent auto-spawn.
 
   # ============================================================
   # Agent cache cleanup — weekly launchd job

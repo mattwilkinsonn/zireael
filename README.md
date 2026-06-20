@@ -63,7 +63,7 @@ machine I use:
 | Host | Platform | Role | Flake target |
 | --- | --- | --- | --- |
 | Matts-MacBook-Pro | aarch64 darwin | Primary dev box | `darwinConfigurations.Matts-MacBook-Pro` |
-| mattmacpro | x86_64 darwin (Mac Pro 2013) | Headless GitHub Actions runner pool | `darwinConfigurations.mattmacpro` |
+| mattmini | aarch64 darwin (M2 Pro Mac mini) | Native macOS CI runner (Buildkite) | `darwinConfigurations.mattmini` |
 | mattfw | x86_64 NixOS (Framework Desktop) | Secondary dev box + local-LLM target | `nixosConfigurations.mattfw` |
 | mattserver | x86_64 NixOS | ZFS backup target + actions runners + gaming | `nixosConfigurations.mattserver` |
 | mattpc-wsl | x86_64 NixOS (WSL2) | Windows-host dev environment | `nixosConfigurations.mattpc-wsl` |

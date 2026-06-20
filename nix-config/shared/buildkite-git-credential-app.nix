@@ -20,7 +20,7 @@
 #   appId   the GitHub App's numeric App ID (a public identifier, not a
 #           secret — sealedsecurity-ci is 4045728)
 #   keyPath absolute path to the staged App private-key .pem on the host
-#           (mattserver: /run/buildkite-agent/ci-app-key.pem; mattmacpro:
+#           (mattserver: /run/buildkite-agent/ci-app-key.pem; mattmini:
 #           /var/run/buildkite-agent/ci-app-key.pem)
 
 {
@@ -82,7 +82,7 @@ pkgs.writeShellApplication {
     # then account.id, etc.); `grep -o` prints EVERY match on the line,
     # so pipe through `head -n1` to take only the first. `grep -oE`
     # (ERE) keeps `+` portable to macOS's BSD grep (grep isn't in
-    # runtimeInputs, so mattmacpro uses /usr/bin/grep).
+    # runtimeInputs, so mattmini uses /usr/bin/grep).
     install_id="$(api "https://api.github.com/orgs/sealedsecurity/installation" \
       | grep -oE '"id":[[:space:]]*[0-9]+' | head -n1 | grep -oE '[0-9]+')"
     [ -n "$install_id" ] || { echo "buildkite-git-credential-app: no installation id" >&2; exit 0; }

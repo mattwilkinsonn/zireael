@@ -22,7 +22,7 @@
 #     this flake doesn't resolve at eval time.
 #
 # Imported ONLY by dev hosts (Matts-MacBook-Pro, mattfw, mattpc-wsl).
-# Server / runner hosts (mattserver, mattmacpro, rpi4, rpi5) don't
+# Server / runner hosts (mattserver, mattmini, rpi4, rpi5) don't
 # have privatefiles cloned and shouldn't try to symlink into a
 # non-existent repo.
 

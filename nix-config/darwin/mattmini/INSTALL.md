@@ -1,37 +1,37 @@
-# mattmacpro — Install Procedure
+# mattmini — Install Procedure
 
-Mac Pro 2013 "trashcan" repurposed as a self-hosted Buildkite CI agent
-host for the sealedsecurity org (macOS x64 pool, queue `macos-x64-selfhosted`).
+Apple Silicon Mac mini (M2 Pro) self-hosted Buildkite CI agent host
+for the sealedsecurity org (macOS arm64 pool, queue
+`macos-arm64-selfhosted`).
 
 **Hardware:**
 
-- Apple Mac Pro 6,1 (Late 2013)
-- Intel Xeon E5 (E5-1650v2 / 2697v2 — 6c/12t typical; verify with `sysctl -n hw.ncpu`)
-- 64 GB DDR3 ECC
-- Dual AMD FirePro (D300 / D500 / D700 — irrelevant; box is headless)
-- Apple SSD (~256 GB – 1 TB depending on variant)
+- Apple Mac mini (M2 Pro)
+- 10- or 12-core M2 Pro (verify P-core count with
+  `sysctl -n hw.perflevel0.physicalcpu`)
+- 16 GB unified memory
+- 512 GB SSD
 
-**OS strategy:** OCLP-installed macOS Sonoma 14.x. The Mac Pro 2013 is
-natively stuck on macOS Monterey (Apple dropped it from Ventura+), but
-Monterey is already past security-update EOL and the Homebrew / CI
-toolchain ecosystem is starting to drop it. Sonoma via OpenCore Legacy
-Patcher keeps the box inside a supported window through ~late 2026.
+**OS strategy:** current macOS, installed natively. Keep the OS on
+the latest point release; standard Software Update applies. The
+sandbox-exec tests behave the same as production (no OS-version
+divergence to work around).
 
 ## TL;DR
 
-1. [Install macOS Sonoma via OCLP](#oclp-install).
+1. [Install macOS](#macos-install) (standard, native).
 2. [Apply the basic hardening settings](#network--basic-hardening) in
    System Settings.
 3. Plug in a USB stick containing this `nix-config` repo (or `gh repo
    clone mattwilkinsonn/zireael /tmp/dotfiles` if you have an SSH/LAN
    path in already).
-4. `bash <path-to>/nix-config/darwin/scripts/mattmacpro-bootstrap.sh`.
+4. `bash <path-to>/nix-config/darwin/scripts/mattmini-bootstrap.sh`.
 
 The bootstrap script handles everything else: Xcode CLT, Nix
-(upstream, via the Determinate installer), Homebrew, `gh` + zireael
-checkout, Buildkite agent token, `darwin-rebuild`, Tailscale auth.
-You'll get three interactive prompts: `gh auth login` flow, Buildkite
-agent token, Tailscale pre-auth key. That's it.
+(upstream nixos.org installer), Homebrew, `gh` + zireael checkout,
+Buildkite agent token, `darwin-rebuild`, Tailscale auth. You'll get
+three interactive prompts: `gh auth login` flow, Buildkite agent
+token, Tailscale pre-auth key. That's it.
 
 ## Pre-install checklist
 
@@ -42,45 +42,21 @@ agent token, Tailscale pre-auth key. That's it.
 - [ ] Buildkite agent token ready (org Agents page → Reveal Agent
       Token) at
       <https://buildkite.com/organizations/sealedsecurity/agents>.
-- [ ] Bootable Sonoma installer USB created via OpenCore Legacy Patcher
-      (see [OCLP install](#oclp-install) below).
 
-## OCLP install
+## macOS install
 
-One-time OS migration. Skip the bullet points you've already done.
+Native install — no OCLP. Apple Silicon runs current macOS directly.
 
-1. **Boot the current Monterey install on the Mac Pro.** Sign in as an
-   admin user.
-2. **Download OCLP** from
-   <https://github.com/dortania/OpenCore-Legacy-Patcher/releases>
-   (latest stable). Run the `.dmg`, drag to `/Applications/`.
-3. **Create the macOS Sonoma installer**. In OCLP → Create macOS
-   Installer → "Download macOS Installer" → pick Sonoma 14.x →
-   download. Then "Create macOS Installer" → flash to a 16 GB+ USB.
-4. **Build OpenCore + install to disk**. OCLP → "Build and Install
-   OpenCore" → "Install to Disk" → pick the internal SSD. Reboot.
-5. **Reboot with OPTION held.** Pick "EFI Boot", then pick the Sonoma
-   installer.
-6. **Wipe + install Sonoma**. Disk Utility → erase internal SSD as
-   APFS, name it "Macintosh HD". Quit Disk Utility, run the Sonoma
-   installer. The box will reboot a few times — at each reboot hold
-   OPTION and pick "EFI Boot" (or "Macintosh HD" once the first apply
-   pass completes).
-7. **Initial setup**. Create the `mattw` admin user (full name
-   "Matt Wilkinson", short name `mattw`, password from 1Password —
-   create the item `op://Dev/mattmacpro Password` if not already
-   present). Skip iCloud, skip Siri, skip Find My, skip everything
-   else — this is a headless CI host.
-8. **Run OCLP root patches**. After login, open OCLP →
-   "Post-Install Root Patch" → "Start Root Patching". Reboot when
-   prompted. Applies FirePro GPU root patches + USB fixes. GPU
-   patches will degrade Metal perf vs. native — irrelevant for a
-   headless box.
+1. **Initial setup**. Boot the mini, run through Setup Assistant.
+   Create the `mattw` admin user (full name "Matt Wilkinson", short
+   name `mattw`, password from 1Password — create the item
+   `op://Dev/mattmini Password` if not already present). Skip iCloud,
+   skip Siri, skip Find My, skip everything else — this is a headless
+   CI host.
+2. **Update to the latest point release**. System Settings → General →
+   Software Update → install all pending updates before bootstrapping.
 
-**Future macOS updates**: every macOS point release (14.x → 14.y),
-re-run the root-patch step after applying the update. OCLP catches
-this automatically and prompts. See
-<https://dortania.github.io/OpenCore-Legacy-Patcher/UNIVERSAL.html>.
+**Future macOS updates**: standard Software Update.
 
 ## Network + basic hardening
 
@@ -108,7 +84,7 @@ Get the `nix-config` repo onto the box (USB or `gh repo clone` —
 whichever's easier; the script handles either path), then:
 
 ```bash
-bash <path-to>/nix-config/darwin/scripts/mattmacpro-bootstrap.sh
+bash <path-to>/nix-config/darwin/scripts/mattmini-bootstrap.sh
 ```
 
 The script is fully self-contained. It walks 11 steps in an order
@@ -118,18 +94,18 @@ debuggable remotely (no more USB-shuffling to copy errors back):
 1. **Xcode Command Line Tools** — triggers `xcode-select --install`
    if missing, waits for the GUI prompt to complete.
 2. **macOS hostname** — sets `HostName` / `LocalHostName` /
-   `ComputerName` all to `mattmacpro` via `scutil`. nix-darwin will
+   `ComputerName` all to `mattmini` via `scutil`. nix-darwin will
    re-apply later; doing it now means Tailscale registers with the
    correct name in step 4.
-3. **Homebrew** — `/usr/local` prefix (x86_64). Needed for the
-   Tailscale cask + gh + op in the next steps.
+3. **Homebrew** — `/opt/homebrew` prefix (Apple Silicon). Needed for
+   the Tailscale cask + gh + op in the next steps.
 4. **Tailscale** — installs the `tailscale` Homebrew **formula**
    (not the `tailscale-app` cask), starts `tailscaled` as a launchd
    system daemon via `sudo brew services start tailscale`, prompts
    for a pre-auth key (or reads `--auth-key` / `TAILSCALE_AUTH_KEY`),
-   and runs `tailscale up --ssh --hostname=mattmacpro`. Once this
+   and runs `tailscale up --ssh --hostname=mattmini`. Once this
    completes you can SSH from your laptop:
-   `ssh mattw@mattmacpro.tail08a5c5.ts.net` — and re-run the script
+   `ssh mattw@mattmini.tail08a5c5.ts.net` — and re-run the script
    over SSH instead of via the console.
 
    The formula is used instead of the cask because the cask is a
@@ -140,17 +116,17 @@ debuggable remotely (no more USB-shuffling to copy errors back):
    `tailscaled` + `tailscale` binaries — same as Linux.
 5. **gh + dotfiles** — installs `gh`, prompts for `gh auth login`,
    clones your dotfiles into `~` (colocated git+jj at `~/.git`).
-6. **Nix** — Determinate Systems installer minus the `--determinate`
-   flag (their proprietary fork doesn't ship x86_64-darwin). Upstream
-   Nix; same installer machinery handles the synthetic-fs dance +
-   daemon plist.
+6. **Nix** — upstream nixos.org multi-user installer (not Determinate's
+   fork). The standard daemon lets nix-darwin manage the daemon plist
+   declaratively (`nix.enable = true`); same installer machinery
+   handles the synthetic-fs dance + daemon plist.
 7. **Buildkite agent token** — prompts for the org agent token and
    writes it to `/etc/buildkite-agent/agent-token` (mode 600
    root:wheel). Must be in place before step 8 since the agent
-   daemons read it at launch.
+   daemon reads it at launch.
 8. **darwin-rebuild switch** — keeps native sshd disabled (Tailscale
-   SSH is the only access path), locks pmset, lays down the two agent
-   LaunchDaemons + the decrypt-agent-token daemon (start immediately),
+   SSH is the only access path), locks pmset, lays down the agent
+   LaunchDaemon + the decrypt-agent-secrets daemon (start immediately),
    and Glances + tailscale-serve-glances.
 9. **Sanity checks** — confirms native sshd is off, Tailscale SSH +
    agents + Glances are all up.
@@ -158,7 +134,7 @@ debuggable remotely (no more USB-shuffling to copy errors back):
 The script is re-runnable: every step skips if already done. Safe to
 ctrl-C at any point and resume — including via SSH after step 4.
 
-**Security posture:** mattmacpro deliberately keeps no 1Password
+**Security posture:** mattmini deliberately keeps no 1Password
 service-account tokens on disk — the host runs untrusted CI
 workflows via the self-hosted Buildkite agent pool, so any SA
 accessible to processes here is a credential a compromised agent
@@ -176,29 +152,29 @@ rm -f ~/.ssh/id_ed25519_inter_server ~/.ssh/id_ed25519_inter_server.pub
 After it completes, you should be able to SSH from your MBP:
 
 ```bash
-ssh mattw@mattmacpro.tail08a5c5.ts.net
+ssh mattw@mattmini.tail08a5c5.ts.net
 ```
 
-And the agents should appear at
+And the agent should appear at
 <https://buildkite.com/organizations/sealedsecurity/agents>
-with the tag `queue=macos-x64-selfhosted`.
+with the tag `queue=macos-arm64-selfhosted`.
 
 ## Glances dashboard
 
 System metrics dashboard at
-`https://mattmacpro.tail08a5c5.ts.net:9443/` (after Tailscale is up
+`https://mattmini.tail08a5c5.ts.net:9443/` (after Tailscale is up
 and the `glances` + `tailscale-serve-glances` launchd daemons have
 run at least once). Reachable from any device on your tailnet.
 
 If the page returns 404 on first visit, check
 `/var/log/tailscale-serve-glances.log` — the serve hook re-runs
 idempotently on every nix-switch, so a `sudo darwin-rebuild switch
---flake .#mattmacpro` typically fixes it.
+--flake .#mattmini` typically fixes it.
 
 ## Permissions / Gatekeeper
 
 The agent binary lives in the nix store; the hand-rolled launchd
-daemon (`darwin/mattmacpro/system.nix`) runs it as the
+daemon (`darwin/mattmini/system.nix`) runs it as the
 `_buildkite-agent` user. Gatekeeper doesn't gate launchd-launched
 binaries in the nix store path, so no first-launch
 `xattr -d com.apple.quarantine` dance is needed.
@@ -212,23 +188,22 @@ approval.
 
 ## Updates / re-patches
 
-After every macOS Sonoma point release:
+After every macOS point release:
 
-1. Open OCLP → it'll prompt to re-run root patches. Confirm; reboot.
-2. SSH back in and `sudo darwin-rebuild switch --flake .#mattmacpro`
+1. Apply the update via System Settings → Software Update; reboot.
+2. SSH back in and `sudo darwin-rebuild switch --flake .#mattmini`
    to re-apply pmset + sshd (point releases sometimes reset
    SystemSetup defaults).
 
-> **⚠️ A macOS reinstall (and sometimes an OCLP root-patch / OS
-> update) can wipe `/nix`.** Observed once on this box: after an
-> OCLP-driven reinstall, `/nix` was emptied (store gone, `nix` not on
-> PATH, no `/nix/var/nix/profiles`) while the nix-darwin `/etc`
-> symlinks (`/etc/zshrc → /etc/static → /nix/store/…`) were left
-> behind pointing at a store path that no longer existed. Symptoms:
-> SSH lands in a **bare prompt** (dangling `/etc/static` means the
-> login shell can't source `path_helper`), and system tools fail with
-> `scutil: command not found` / `shutdown: command not found` because
-> `/usr/sbin` + `/sbin` never made it onto PATH.
+> **⚠️ A macOS reinstall can wipe `/nix`.** If a full reinstall (or a
+> botched OS update) empties the nix store, `/nix` ends up gone (store
+> missing, `nix` not on PATH, no `/nix/var/nix/profiles`) while the
+> nix-darwin `/etc` symlinks (`/etc/zshrc → /etc/static → /nix/store/…`)
+> are left behind pointing at a store path that no longer exists.
+> Symptoms: SSH lands in a **bare prompt** (dangling `/etc/static`
+> means the login shell can't source `path_helper`), and system tools
+> fail with `scutil: command not found` / `shutdown: command not found`
+> because `/usr/sbin` + `/sbin` never made it onto PATH.
 >
 > **Diagnosis:** `ls /nix/var/nix/profiles/` (empty) + `which nix`
 > (not found) + `ls -d /run/current-system` (missing) = nix store
@@ -239,7 +214,7 @@ After every macOS Sonoma point release:
 > 1. Restore a usable PATH for the session:
 >
 >    ```bash
->    export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
+>    export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
 >    ```
 >
 > 2. Re-run the bootstrap from scratch — it reinstalls Nix, Homebrew,
@@ -248,7 +223,7 @@ After every macOS Sonoma point release:
 >    repairs the dangling `/etc/static` symlinks:
 >
 >    ```bash
->    bash ~/repos/zireael/nix-config/darwin/scripts/mattmacpro-bootstrap.sh
+>    bash ~/repos/zireael/nix-config/darwin/scripts/mattmini-bootstrap.sh
 >    ```
 >
 >    (The bootstrap script self-exports the base PATH at its top, so it
@@ -256,11 +231,6 @@ After every macOS Sonoma point release:
 >    zireael checkout itself was also wiped, `gh repo clone
 >    mattwilkinsonn/zireael ~/repos/zireael` first — needs `gh` auth,
 >    or copy the repo from a USB stick.)
-
-After a major macOS release (Sonoma 14 → 15+), OCLP support for the
-Mac Pro 2013 may lag — wait for the OCLP project to officially bless
-the new version before updating. See
-<https://dortania.github.io/OpenCore-Legacy-Patcher/MODELS.html>.
 
 ## Rotating the agent token
 
@@ -271,10 +241,9 @@ When the agent token rotates:
 # the right mode first, then write the token via tee.
 sudo install -m 600 -o root -g wheel /dev/null /etc/buildkite-agent/agent-token
 printf '%s' 'new-token...' | sudo tee /etc/buildkite-agent/agent-token >/dev/null
-sudo launchctl kickstart -k system/com.sealedsecurity.decrypt-agent-token
+sudo launchctl kickstart -k system/com.sealedsecurity.decrypt-agent-secrets
 sudo launchctl kickstart -k \
-  system/com.sealedsecurity.buildkite-agent-sealed-macos \
-  system/com.sealedsecurity.buildkite-agent-sealed-macos-2
+  system/com.sealedsecurity.buildkite-agent-sealed-macos
 ```
 
 No `darwin-rebuild` needed — the decrypt daemon re-stages the token

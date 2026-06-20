@@ -42,7 +42,7 @@ let
 
   # Git credential helper for checkout-time clone auth — mints a
   # sealedsecurity-ci App installation token over HTTPS. Shared with
-  # mattmacpro (shared/buildkite-git-credential-app.nix); this host
+  # mattmini (shared/buildkite-git-credential-app.nix); this host
   # decrypts the App key to /run/buildkite-agent/ci-app-key.pem via
   # decrypt-agent-token.service below (which stages both secrets). App
   # ID 4045728 is a public identifier, not a secret.
@@ -636,7 +636,7 @@ in
   # tracked in SEA-835. The threat model (malicious CI job pivoting to
   # the home LAN; upstream PR-approval + dep cooldowns are the primary
   # defense) is unchanged — only the enforcement point needs redoing
-  # for the container model. mattmacpro still runs jobs natively, so
+  # for the container model. mattmini still runs jobs natively, so
   # its pf egress rule remains correctly scoped.
 
   # Unload the bootstrap-time native sshd. The mattserver-bootstrap

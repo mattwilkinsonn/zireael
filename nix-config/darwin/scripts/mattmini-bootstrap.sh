@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# First-boot bootstrap for mattmacpro (Mac Pro 2013 CI host).
+# First-boot bootstrap for mattmini (Apple Silicon Mac mini, M2 Pro).
 #
-# Pre-reqs (see darwin/mattmacpro/INSTALL.md for the full procedure):
-#   - macOS Sonoma installed via OCLP, root-patched.
+# Pre-reqs (see darwin/mattmini/INSTALL.md for the full procedure):
+#   - macOS (current release) freshly installed — native, no OCLP.
 #   - mattw admin user created during macOS setup.
 #   - Energy Saver tuned per the hardening section of INSTALL.md.
 #     (Remote Login is intentionally left OFF — Tailscale SSH is the
@@ -15,8 +15,8 @@
 # instead of with USB stick + console keyboard:
 #
 #   1. Xcode CLT (needed for brew + git)
-#   2. macOS hostname set to `mattmacpro` (must precede tailscale up
-#      or your tailnet hostname will be `mattmacpro-local` or similar)
+#   2. macOS hostname set to `mattmini` (must precede tailscale up
+#      or your tailnet hostname will be `mattmini-local` or similar)
 #   3. Homebrew (needed for tailscale, gh)
 #   4. Tailscale install + auth (you can now SSH in and copy-paste)
 #   5. gh install + auth + dotfiles clone
@@ -26,7 +26,7 @@
 #   9. Sanity checks
 #
 # Security posture: zero standing 1Password service-account tokens on
-# this host. mattmacpro runs untrusted CI workflows via the
+# this host. mattmini runs untrusted CI workflows via the
 # self-hosted Buildkite agent pool, so any SA token on disk is a
 # credential a compromised agent could exfiltrate. The agent token in
 # step 7 is the only secret here, and it's mode-600 root-wheel
@@ -36,23 +36,22 @@
 # Re-runnable: every step skips if already done.
 #
 # Usage:
-#   bash mattmacpro-bootstrap.sh
-#   bash mattmacpro-bootstrap.sh --auth-key tskey-auth-...
-#   TAILSCALE_AUTH_KEY=tskey-auth-... bash mattmacpro-bootstrap.sh
+#   bash mattmini-bootstrap.sh
+#   bash mattmini-bootstrap.sh --auth-key tskey-auth-...
+#   TAILSCALE_AUTH_KEY=tskey-auth-... bash mattmini-bootstrap.sh
 
 set -euo pipefail
 
-# Guarantee the standard macOS system paths + the Intel Homebrew prefix
-# are on PATH before anything else. This script shells out to system
-# tools in /usr/sbin (scutil) and /sbin (shutdown, reboot) and to
-# /usr/local/bin (brew, tailscale). On a fresh macOS account — or a box
-# whose nix-darwin /etc/static symlinks are dangling (e.g. after an OCLP
-# reinstall wiped /nix but left /etc behind) — the login shell's
+# Guarantee the standard macOS system paths + the Apple Silicon Homebrew
+# prefix are on PATH before anything else. This script shells out to
+# system tools in /usr/sbin (scutil) and /sbin (shutdown, reboot) and to
+# /opt/homebrew/bin (brew, tailscale). On a fresh macOS account — or a box
+# whose nix-darwin /etc/static symlinks are dangling — the login shell's
 # path_helper never runs, so these dirs are missing and the script dies
 # with "scutil: command not found". Setting PATH explicitly here makes
 # bootstrap robust to that state. nix bits get prepended later once the
 # nix profile exists.
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/usr/local/sbin:$PATH"
+export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR/../../shared/scripts
@@ -63,12 +62,12 @@ ZIREAEL_REPO_SLUG="mattwilkinsonn/zireael"
 NIX_CONFIG_DIR="$HOME/repos/zireael/nix-config"
 SEALED_TOKEN_FILE="/etc/buildkite-agent/agent-token"
 CI_APP_KEY_FILE="/etc/buildkite-agent/ci-app-key.pem"
-TARGET_HOSTNAME="mattmacpro"
+TARGET_HOSTNAME="mattmini"
 TS_HOSTNAME="${TARGET_HOSTNAME}.tail08a5c5.ts.net"
 
 require_non_root
 parse_tailscale_auth_key "$@"
-require_hostname mattmacpro
+require_hostname mattmini
 
 echo "Bootstrapping host: $(hostname)"
 echo
@@ -105,7 +104,7 @@ fi
 # 2. macOS hostname
 # ---------------------------------------------------------------------
 # Set all three name surfaces before Tailscale registers — otherwise
-# `tailscale up` picks up `mattmacpro.local` (the LocalHostName /
+# `tailscale up` picks up `mattmini.local` (the LocalHostName /
 # Bonjour name) or worse, and the tailnet ends up with a wrong name.
 # nix-darwin's networking.hostName/computerName/localHostName will
 # re-apply these declaratively later; doing it now is just so the
@@ -131,20 +130,20 @@ else
 fi
 
 # ---------------------------------------------------------------------
-# 3. Homebrew (x86_64 prefix /usr/local)
+# 3. Homebrew (Apple Silicon prefix /opt/homebrew)
 # ---------------------------------------------------------------------
 # Moved before Tailscale + gh because both come from brew. The cask
 # install in step 4 needs `brew` on PATH; the formula installs in
 # steps 4+5 too.
 step "Homebrew"
-if [ -x /usr/local/bin/brew ]; then
+if [ -x /opt/homebrew/bin/brew ]; then
 	echo "  already installed"
 else
 	echo "  installing — you'll be prompted for sudo"
 	/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-	[ -x /usr/local/bin/brew ] || err "brew not at /usr/local/bin/brew after install"
+	[ -x /opt/homebrew/bin/brew ] || err "brew not at /opt/homebrew/bin/brew after install"
 fi
-eval "$(/usr/local/bin/brew shellenv)"
+eval "$(/opt/homebrew/bin/brew shellenv)"
 
 # ---------------------------------------------------------------------
 # 4. Tailscale (formula) — install + auth
@@ -195,11 +194,11 @@ if brew list --cask tailscale-app >/dev/null 2>&1; then
 	# /Library/Tailscale state the cask left behind. The formula
 	# uses /var/lib/tailscale / /var/run/tailscaled.socket, so the
 	# old state is just clutter.
-	sudo rm -f /usr/local/bin/tailscale 2>/dev/null || true
+	sudo rm -f /opt/homebrew/bin/tailscale 2>/dev/null || true
 fi
 
-if [ -x /usr/local/sbin/tailscaled ] && [ -x /usr/local/bin/tailscale ]; then
-	echo "  tailscale formula already installed ($(/usr/local/bin/tailscale version | head -1))"
+if [ -x /opt/homebrew/sbin/tailscaled ] && [ -x /opt/homebrew/bin/tailscale ]; then
+	echo "  tailscale formula already installed ($(/opt/homebrew/bin/tailscale version | head -1))"
 else
 	brew install tailscale
 fi
@@ -217,8 +216,8 @@ fi
 step "tailscale up"
 # sudo here is correct — formula's tailscaled is root-owned, and
 # `tailscale up` needs root for the initial wireguard setup.
-if sudo /usr/local/bin/tailscale status >/dev/null 2>&1; then
-	echo "  Already authenticated: $(sudo /usr/local/bin/tailscale ip -4 2>/dev/null | head -1)"
+if sudo /opt/homebrew/bin/tailscale status >/dev/null 2>&1; then
+	echo "  Already authenticated: $(sudo /opt/homebrew/bin/tailscale ip -4 2>/dev/null | head -1)"
 else
 	if [ -z "${TAILSCALE_AUTH_KEY:-}" ]; then
 		echo "  Generate a pre-auth key at:"
@@ -228,12 +227,12 @@ else
 		echo
 	fi
 	[ -n "${TAILSCALE_AUTH_KEY:-}" ] || err "no auth key provided"
-	sudo /usr/local/bin/tailscale up \
+	sudo /opt/homebrew/bin/tailscale up \
 		--auth-key="$TAILSCALE_AUTH_KEY" \
 		--ssh \
 		--hostname="$TARGET_HOSTNAME"
 	unset TAILSCALE_AUTH_KEY
-	echo "  Tailnet IP: $(sudo /usr/local/bin/tailscale ip -4 2>/dev/null | head -1)"
+	echo "  Tailnet IP: $(sudo /opt/homebrew/bin/tailscale ip -4 2>/dev/null | head -1)"
 fi
 
 cat <<EOF
@@ -267,11 +266,10 @@ fi
 # 6. Nix (upstream installer from nixos.org)
 # ---------------------------------------------------------------------
 # We use the official upstream installer from nixos.org rather than
-# Determinate Systems' installer. The Determinate installer is the
-# default on the MBP, but for x86_64-darwin (Mac Pro 2013's arch)
-# it errors with "x86_64-darwin not supported" — Determinate has
-# narrowed their platform support. Upstream Nix supports
-# x86_64-darwin officially.
+# Determinate Systems' installer (which the MBP uses). This CI host
+# runs the standard nixos.org multi-user daemon so nix-darwin manages
+# the daemon plist declaratively (nix.enable = true in system.nix);
+# Determinate's daemon-management model would conflict with that.
 #
 # `--daemon` selects the multi-user install (per-user is deprecated
 # on macOS). The installer creates the nixbld* build users, the
@@ -296,7 +294,7 @@ fi
 # 7. Buildkite agent token → /etc/buildkite-agent/agent-token
 # ---------------------------------------------------------------------
 # Must exist BEFORE darwin-rebuild because the agent launchd daemons
-# read it at launch (see darwin/mattmacpro/system.nix). The decrypt-
+# read it at launch (see darwin/mattmini/system.nix). The decrypt-
 # agent-token daemon stages it from this root-owned source into
 # /var/run/buildkite-agent/agent-token on each boot. Without the file,
 # `darwin-rebuild` lays down the daemons but they fail to register.
@@ -367,7 +365,7 @@ echo "  owner: root:wheel mode 600 (re-staged by decrypt-ci-app-key)"
 # ---------------------------------------------------------------------
 # Lays down:
 #   - Tailscale cask (re-confirmation; already installed in step 4)
-#   - Tailscale CLI symlink at /usr/local/bin/tailscale (re-confirmation)
+#   - Tailscale CLI symlink at /opt/homebrew/bin/tailscale (re-confirmation)
 #   - Native sshd intentionally unloaded (see system.nix postActivation)
 #   - Strict pmset (sleep 0, autorestart, etc.)
 #   - pf egress filter for the runner UID (see system.nix
@@ -380,13 +378,13 @@ echo "  owner: root:wheel mode 600 (re-staged by decrypt-ci-app-key)"
 # darwin-rebuild from the user nix profile.
 if ! command -v darwin-rebuild >/dev/null 2>&1; then
 	step "First-time nix-darwin bootstrap"
-	echo "  nix run nix-darwin -- switch --flake .#mattmacpro"
+	echo "  nix run nix-darwin -- switch --flake .#mattmini"
 	sudo HOME="$HOME" nix run --extra-experimental-features 'nix-command flakes' \
-		nix-darwin -- switch --flake "$NIX_CONFIG_DIR#mattmacpro" --show-trace
+		nix-darwin -- switch --flake "$NIX_CONFIG_DIR#mattmini" --show-trace
 else
-	step "darwin-rebuild switch --flake .#mattmacpro"
+	step "darwin-rebuild switch --flake .#mattmini"
 	sudo HOME="$HOME" darwin-rebuild switch \
-		--flake "$NIX_CONFIG_DIR#mattmacpro" \
+		--flake "$NIX_CONFIG_DIR#mattmini" \
 		--show-trace
 fi
 
@@ -426,10 +424,10 @@ else
 fi
 
 echo "[tailscale]"
-if [ -x /usr/local/bin/tailscale ]; then
-	/usr/local/bin/tailscale status 2>&1 | head -5
+if [ -x /opt/homebrew/bin/tailscale ]; then
+	/opt/homebrew/bin/tailscale status 2>&1 | head -5
 else
-	warn "  /usr/local/bin/tailscale missing — brew install tailscale failed?"
+	warn "  /opt/homebrew/bin/tailscale missing — brew install tailscale failed?"
 fi
 
 echo "[buildkite-agents]"
@@ -444,7 +442,7 @@ done
 
 echo "[glances]"
 if sudo launchctl list 2>/dev/null | grep -q com.sealedsecurity.glances; then
-	echo "  glances: loaded (reachable at https://mattmacpro.tail08a5c5.ts.net:9443/)"
+	echo "  glances: loaded (reachable at https://mattmini.tail08a5c5.ts.net:9443/)"
 else
 	warn "  glances launchd daemon not loaded"
 fi
@@ -492,11 +490,11 @@ cat <<EOF
 
 Bootstrap complete for $(hostname).
 
-Tailscale: $(/usr/local/bin/tailscale status --json 2>/dev/null | grep -o '"DNSName":"[^"]*"' | head -1 | sed 's/"DNSName":"\(.*\).$/\1/' || echo "$TS_HOSTNAME")
+Tailscale: $(/opt/homebrew/bin/tailscale status --json 2>/dev/null | grep -o '"DNSName":"[^"]*"' | head -1 | sed 's/"DNSName":"\(.*\).$/\1/' || echo "$TS_HOSTNAME")
 
 Verify the agents registered at:
   https://buildkite.com/organizations/sealedsecurity/agents
 
 They should appear with the tag:
-  queue=macos-x64-selfhosted
+  queue=macos-arm64-selfhosted
 EOF
