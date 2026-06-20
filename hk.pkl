@@ -168,6 +168,9 @@ local flake_eval_steps = new Mapping<String, Step> {
     ["flake-eval-mattmini"] {
         check = "cd nix-config && nix eval --raw '.#darwinConfigurations.mattmini.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
     }
+    ["flake-eval-awsmac"] {
+        check = "cd nix-config && nix eval --raw '.#darwinConfigurations.awsmac.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
+    }
 }
 
 local doc_steps = new Mapping<String, Step> {

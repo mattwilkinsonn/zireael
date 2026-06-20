@@ -417,6 +417,13 @@ ci-nix-config-eval:
         else
             echo "→ skipping darwinConfigurations.mattmini (no path-filter match)"
         fi
+        if should_eval awsmac; then
+            echo "→ nix eval darwinConfigurations.awsmac"
+            nix eval --raw '.#darwinConfigurations.awsmac.config.system.build.toplevel.outPath' \
+                --no-warn-dirty --accept-flake-config >/dev/null
+        else
+            echo "→ skipping darwinConfigurations.awsmac (no path-filter match)"
+        fi
     else
         echo "→ skipping darwinConfigurations (not on macOS)"
     fi

@@ -175,3 +175,17 @@ mattmini:
   - '.github/workflows/ci-base-nix.yml'
   - '.github/path-filters/nix-config.yml'
   - '.github/path-filters/nix-config-hosts.yml'
+
+# awsmac (aarch64 darwin) — EC2 mac2-m2.metal, most-disposable stopgap
+# macOS CI runner. Same stable-darwin stack + import set as mattmini;
+# distinct host dir + flake entry (account is ec2-user).
+awsmac:
+  - 'nix-config/flake.nix'
+  - 'nix-config/flake.lock'
+  - 'nix-config/shared/home.nix'
+  - 'nix-config/shared/dotfiles/**'
+  - 'nix-config/darwin/awsmac/**'
+  - '.github/workflows/nix-config.yml'
+  - '.github/workflows/ci-base-nix.yml'
+  - '.github/path-filters/nix-config.yml'
+  - '.github/path-filters/nix-config-hosts.yml'

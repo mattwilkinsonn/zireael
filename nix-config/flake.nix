@@ -223,6 +223,53 @@
           ];
         };
 
+      # awsmac — AWS EC2 mac2-m2.metal (Apple M2, 8-core, 24 GB),
+      # most-disposable STOPGAP macOS arm64 Buildkite agent (billed
+      # hourly on AWS credits, terminated once a longer-lived box is
+      # up). Same `macos-arm64-selfhosted` queue as mattmini, distinct
+      # agent name + host tag. Account is `ec2-user` (the AMI default),
+      # not `mattw`. See darwin/awsmac/system.nix (SEA-840).
+      #
+      # Identical stable-darwin wiring + eval-cycle short-circuit as the
+      # mattmini entry above (pkgs built in the `let`, passed via
+      # specialArgs + extraSpecialArgs).
+      darwinConfigurations."awsmac" =
+        let
+          system = "aarch64-darwin";
+          # Inline overlay: jj from unstable (same as mattmini). See the
+          # mattmini entry for why shared/overlays.nix can't be imported
+          # here directly.
+          jjFromUnstable = _final: _prev: {
+            inherit (inputs.nixpkgs-unstable.legacyPackages.${system}) jujutsu jjui;
+          };
+          pkgs = import inputs.nixpkgs-darwin {
+            inherit system;
+            config = {
+              allowUnfree = true;
+            };
+            overlays = [ jjFromUnstable ];
+          };
+        in
+        inputs.nix-darwin-stable.lib.darwinSystem {
+          inherit system;
+          specialArgs = {
+            inherit inputs system pkgs;
+          };
+          modules = [
+            { nixpkgs.pkgs = pkgs; }
+            ./darwin/awsmac/system.nix
+            home-manager.darwinModules.home-manager
+            {
+              home-manager.useGlobalPkgs = true;
+              home-manager.useUserPackages = true;
+              home-manager.extraSpecialArgs = {
+                inherit inputs pkgs;
+              };
+              home-manager.users.ec2-user = import ./darwin/awsmac/home.nix;
+            }
+          ];
+        };
+
       # Raspberry Pi 5 (headless): Tailscale exit node + Kimai for
       # hours.sealedsecurity.com. Technitium DNS lives on rpi4.
       # Add ./nixos/rpi5/desktop.nix to modules to re-enable KDE for debug.
