@@ -839,7 +839,8 @@ fn hoist_links_step(
             }
         };
         let refs = links::extract_references(&messages);
-        if refs.is_empty() {
+        let coauthors = links::extract_coauthors(&messages);
+        if refs.is_empty() && coauthors.is_empty() {
             no_refs += 1;
             continue;
         }
@@ -864,7 +865,7 @@ fn hoist_links_step(
                 continue;
             }
         };
-        let new_body = links::reconcile_body(&body, &refs);
+        let new_body = links::reconcile_body(&body, &refs, &coauthors);
         if new_body == body {
             unchanged += 1;
             continue;

@@ -62,7 +62,12 @@ means a few opinionated defaults you might want to opt out of:
   keeping references; without the hoist, issues strand un-linked on
   merge. The block is regenerated every submit (a review-cycle commit
   that adds a reference gets picked up automatically) and is
-  idempotent. Opt out with `--no-links`.
+  idempotent. `Co-Authored-By:` trailers are hoisted the same way
+  (deduped by identity, one per distinct co-author, rendered last so
+  the squash body's trailing lines are valid GitHub trailers) — so
+  `seal` and any human pair show up as contributors on the squash
+  commit, which a Graphite squash-merge would otherwise drop. Opt out
+  with `--no-links`.
 - Both `jj-gt submit` and `jj-gt fetch` auto-shelter any pending
   working-copy edits via `jj new @` before doing anything. After
   the shelter, the user's edits are committed against the *old*
