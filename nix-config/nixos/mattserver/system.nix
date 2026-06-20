@@ -131,14 +131,16 @@ let
     # they're ephemeral. Before each checkout, chown the build tree back
     # to the agent uid via a throwaway ROOT container (the agent can
     # launch containers but isn't root itself, so a bare chown can't
-    # cross the uid). Idempotent + self-heals a job killed before its
-    # own cleanup. SEA-830.
+    # cross the uid). Uses busybox — tiny + cached, decoupled from the
+    # seal-ci image so a poisoned dir gets cleaned even if the seal-ci
+    # pull is what failed. Idempotent + self-heals a job killed before
+    # its own cleanup. SEA-830.
     hooks.pre-checkout = ''
       if [ -n "''${BUILDKITE_BUILD_CHECKOUT_PATH:-}" ] && [ -d "''${BUILDKITE_BUILD_CHECKOUT_PATH}" ]; then
         docker run --rm \
           -v "''${BUILDKITE_BUILD_CHECKOUT_PATH}:/reown" \
           --entrypoint chown \
-          ghcr.io/sealedsecurity/seal-ci:latest \
+          busybox:latest \
           -R "$(id -u):$(id -g)" /reown || true
       fi
     '';
