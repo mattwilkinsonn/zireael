@@ -162,6 +162,21 @@ jobs:
       - working-directory: nix-config
         run: nix eval --raw '.#nixosConfigurations.mattserver.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
 
+  flake-eval-mattlinuxpro-nightly:
+    name: flake eval mattlinuxpro (nightly)
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - working-directory: nix-config
+        run: nix eval --raw '.#nixosConfigurations.mattlinuxpro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+
   flake-eval-mattfw-nightly:
     name: flake eval mattfw (nightly)
     needs: changes
@@ -276,6 +291,7 @@ jobs:
       - flake-eval-rpi4-nightly
       - flake-eval-rpi5-nightly
       - flake-eval-mattserver-nightly
+      - flake-eval-mattlinuxpro-nightly
       - flake-eval-mattfw-nightly
       - flake-eval-mattpc-wsl-nightly
       - flake-eval-darwin-nightly

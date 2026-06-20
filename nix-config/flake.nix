@@ -355,6 +355,39 @@
         ];
       };
 
+      # mattlinuxpro — 2013 "trashcan" Mac Pro (Intel Xeon E5, 64 GB
+      # DDR3), converted from a retired macOS Buildkite runner to a
+      # headless NixOS Linux runner (SEA-839). Role: self-hosted
+      # Buildkite CI agents on the `linux-x64-selfhosted` queue, adding
+      # x64 Linux capacity alongside mattserver. No desktop / gaming /
+      # ZFS — single-purpose CI box, so no nix-flatpak + no desktop.nix
+      # (unlike mattserver). Same stable-25.11 stack + zero-standing-
+      # secret posture as the other NixOS hosts.
+      nixosConfigurations."mattlinuxpro" = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        specialArgs = { inherit inputs; };
+        modules = [
+          ./shared/overlays.nix
+          ./nixos/common.nix
+          ./nixos/mattlinuxpro/system.nix
+          home-manager.nixosModules.home-manager
+          hmModule
+          {
+            home-manager.users.mattw = {
+              imports = [
+                ./shared/home.nix
+                ./shared/linux.nix
+                # No ./shared/load-secrets.nix — mattlinuxpro runs no
+                # OP service-account tokens (see nixos/mattserver/INSTALL.md
+                # "Security posture"; same posture). Secret loading via
+                # `op inject` would have nothing to authenticate with.
+                ./nixos/mattlinuxpro/home.nix
+              ];
+            };
+          }
+        ];
+      };
+
       # Raspberry Pi 4 (headless DNS server: Technitium + Cockpit). Built
       # from this config via:
       #   nix build .#nixosConfigurations.rpi4.config.system.build.sdImage

@@ -392,7 +392,7 @@ ci-nix-config-eval:
         # The filter file lives at the repo root, not at nix-config/.
         (cd .. && just _filter-touched nix-config-hosts "$1") >/dev/null
     }
-    for host in rpi4 rpi5 mattfw mattserver mattpc-wsl; do
+    for host in rpi4 rpi5 mattfw mattserver mattlinuxpro mattpc-wsl; do
         if should_eval "$host"; then
             echo "→ nix eval nixosConfigurations.$host"
             nix eval --raw ".#nixosConfigurations.$host.config.system.build.toplevel.outPath" \

@@ -156,6 +156,9 @@ local flake_eval_steps = new Mapping<String, Step> {
     ["flake-eval-mattserver"] {
         check = "cd nix-config && nix eval --raw '.#nixosConfigurations.mattserver.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
     }
+    ["flake-eval-mattlinuxpro"] {
+        check = "cd nix-config && nix eval --raw '.#nixosConfigurations.mattlinuxpro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
+    }
     ["flake-eval-mattpc-wsl"] {
         check = "cd nix-config && nix eval --raw '.#nixosConfigurations.mattpc-wsl.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
     }
