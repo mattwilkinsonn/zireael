@@ -66,6 +66,7 @@ machine I use:
 | mattmini | aarch64 darwin (M2 Pro Mac mini) | Native macOS CI runner (Buildkite) | `darwinConfigurations.mattmini` |
 | mattfw | x86_64 NixOS (Framework Desktop) | Secondary dev box + local-LLM target | `nixosConfigurations.mattfw` |
 | mattserver | x86_64 NixOS | ZFS backup target + actions runners + gaming | `nixosConfigurations.mattserver` |
+| mattlinuxpro | x86_64 NixOS (Mac Pro 2013) | Self-hosted Buildkite CI runner | `nixosConfigurations.mattlinuxpro` |
 | mattpc-wsl | x86_64 NixOS (WSL2) | Windows-host dev environment | `nixosConfigurations.mattpc-wsl` |
 | rpi4 | aarch64 NixOS | Headless DNS (Technitium) | `nixosConfigurations.rpi4` |
 | rpi5 | aarch64 NixOS | Tailscale exit node + Kimai (`hours.sealedsecurity.com`) | `nixosConfigurations.rpi5` |
@@ -102,7 +103,7 @@ Per-platform bootstrap scripts under
 installs: Determinate Nix installer, gh auth + zireael clone, first
 `darwin-rebuild` / `nixos-rebuild switch`. See the per-host
 `INSTALL.md` files for the click-through walkthroughs (Framework
-laptop, Mac Pro 2013, mattserver, rpi4/5, mattpc-wsl,
+laptop, Mac mini, mattserver, mattlinuxpro, rpi4/5, mattpc-wsl,
 Matts-MacBook-Pro).
 
 ## Development

@@ -69,6 +69,7 @@ jobs:
       rpi4: ${{ steps.filter.outputs.rpi4 }}
       rpi5: ${{ steps.filter.outputs.rpi5 }}
       mattserver: ${{ steps.filter.outputs.mattserver }}
+      mattlinuxpro: ${{ steps.filter.outputs.mattlinuxpro }}
       mattfw: ${{ steps.filter.outputs.mattfw }}
       mattpc-wsl: ${{ steps.filter.outputs.mattpc-wsl }}
       darwin-mbp: ${{ steps.filter.outputs.darwin-mbp }}
@@ -149,6 +150,21 @@ jobs:
       - name: nix eval mattserver
         working-directory: nix-config
         run: nix eval --raw '.#nixosConfigurations.mattserver.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+
+  flake-eval-mattlinuxpro:
+    name: flake eval (mattlinuxpro)
+    needs: [optimize_ci, host-changes]
+    if: |
+      needs.optimize_ci.outputs.skip == 'false' &&
+      needs.host-changes.outputs.mattlinuxpro == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - name: nix eval mattlinuxpro
+        working-directory: nix-config
+        run: nix eval --raw '.#nixosConfigurations.mattlinuxpro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
 
   flake-eval-mattfw:
     name: flake eval (mattfw)
@@ -233,6 +249,7 @@ jobs:
       - flake-eval-rpi4
       - flake-eval-rpi5
       - flake-eval-mattserver
+      - flake-eval-mattlinuxpro
       - flake-eval-mattfw
       - flake-eval-mattpc-wsl
       - flake-eval-darwin
@@ -251,6 +268,7 @@ jobs:
             [flake-eval-rpi4]='${{ needs.flake-eval-rpi4.result }}'
             [flake-eval-rpi5]='${{ needs.flake-eval-rpi5.result }}'
             [flake-eval-mattserver]='${{ needs.flake-eval-mattserver.result }}'
+            [flake-eval-mattlinuxpro]='${{ needs.flake-eval-mattlinuxpro.result }}'
             [flake-eval-mattfw]='${{ needs.flake-eval-mattfw.result }}'
             [flake-eval-mattpc-wsl]='${{ needs.flake-eval-mattpc-wsl.result }}'
             [flake-eval-darwin]='${{ needs.flake-eval-darwin.result }}'

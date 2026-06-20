@@ -74,7 +74,27 @@ mattserver:
   - 'nix-config/shared/dotfiles/**'
   - 'nix-config/nixos/common.nix'
   - 'nix-config/nixos/home.nix'
+  - 'nix-config/nixos/modules/buildkite-agent.nix'
   - 'nix-config/nixos/mattserver/**'
+  - '.github/workflows/nix-config.yml'
+  - '.github/workflows/ci-base-nix.yml'
+  - '.github/path-filters/nix-config.yml'
+  - '.github/path-filters/nix-config-hosts.yml'
+
+# mattlinuxpro — converted 2013 trashcan Mac Pro, headless Buildkite CI
+# runner (SEA-839). Minimal import set (no dev/load-secrets), plus the
+# shared buildkite-agent module it consumes.
+mattlinuxpro:
+  - 'nix-config/flake.nix'
+  - 'nix-config/flake.lock'
+  - 'nix-config/shared/home.nix'
+  - 'nix-config/shared/linux.nix'
+  - 'nix-config/shared/overlays.nix'
+  - 'nix-config/shared/dotfiles/**'
+  - 'nix-config/nixos/common.nix'
+  - 'nix-config/nixos/home.nix'
+  - 'nix-config/nixos/modules/buildkite-agent.nix'
+  - 'nix-config/nixos/mattlinuxpro/**'
   - '.github/workflows/nix-config.yml'
   - '.github/workflows/ci-base-nix.yml'
   - '.github/path-filters/nix-config.yml'
