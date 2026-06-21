@@ -117,81 +117,10 @@ jobs:
   # path-filter on a PR. Defined inline (not via ci-base-nix.yml)
   # because nightly's "always run every host" shape differs from
   # nix-config.yml's per-host gating.
-  flake-eval-rpi4-nightly:
-    name: flake eval rpi4 (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - working-directory: nix-config
-        run: nix eval --raw '.#nixosConfigurations.rpi4.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-rpi5-nightly:
-    name: flake eval rpi5 (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - working-directory: nix-config
-        run: nix eval --raw '.#nixosConfigurations.rpi5.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-mattserver-nightly:
-    name: flake eval mattserver (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - working-directory: nix-config
-        run: nix eval --raw '.#nixosConfigurations.mattserver.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-mattlinuxpro-nightly:
-    name: flake eval mattlinuxpro (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - working-directory: nix-config
-        run: nix eval --raw '.#nixosConfigurations.mattlinuxpro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-mattfw-nightly:
-    name: flake eval mattfw (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - working-directory: nix-config
-        run: nix eval --raw '.#nixosConfigurations.mattfw.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
+  #
+  # Only the personal hosts (mattpc-wsl + Matts-MacBook-Pro) — the
+  # sealedsecurity fleet moved to the sealed repo's infra/nix flake and
+  # is evaluated by sealed's own nightly.
   flake-eval-mattpc-wsl-nightly:
     name: flake eval mattpc-wsl (nightly)
     needs: changes
@@ -221,51 +150,6 @@ jobs:
       - uses: DeterminateSystems/determinate-nix-action@v3
       - working-directory: nix-config
         run: nix eval --raw '.#darwinConfigurations.Matts-MacBook-Pro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-mattmini-nightly:
-    name: flake eval mattmini (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - working-directory: nix-config
-        run: nix eval --raw '.#darwinConfigurations.mattmini.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-awsmac-nightly:
-    name: flake eval awsmac (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - working-directory: nix-config
-        run: nix eval --raw '.#darwinConfigurations.awsmac.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-dedicatedmacio-mini-nightly:
-    name: flake eval dedicatedmacio-mini (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - working-directory: nix-config
-        run: nix eval --raw '.#darwinConfigurations.dedicatedmacio-mini.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
 
   validate-tap:
     name: validate tap install (nightly, ${{ matrix.os }})
@@ -318,16 +202,8 @@ jobs:
       - validate-tap
       - docs
       - nix-config-lints
-      - flake-eval-rpi4-nightly
-      - flake-eval-rpi5-nightly
-      - flake-eval-mattserver-nightly
-      - flake-eval-mattlinuxpro-nightly
-      - flake-eval-mattfw-nightly
       - flake-eval-mattpc-wsl-nightly
       - flake-eval-darwin-nightly
-      - flake-eval-mattmini-nightly
-      - flake-eval-awsmac-nightly
-      - flake-eval-dedicatedmacio-mini-nightly
     if: always() && needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     permissions:

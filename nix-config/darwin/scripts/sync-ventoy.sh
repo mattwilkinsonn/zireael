@@ -9,10 +9,11 @@
 # Bootstrap entry points after sync, run from the freshly-installed
 # target machine with Ventoy plugged in:
 #   bash /Volumes/Ventoy/home-manager/darwin/scripts/mac-setup.sh
-#   bash /run/media/$USER/Ventoy/home-manager/nixos/scripts/rpi-bootstrap.sh
-#   bash /run/media/$USER/Ventoy/home-manager/nixos/scripts/framework-bootstrap.sh
-#   bash /run/media/$USER/Ventoy/home-manager/nixos/scripts/mattserver-bootstrap.sh
 #   # Windows: \\?\Volume{...}\home-manager\windows\windows-setup.ps1
+#
+# This syncs the personal-host tree (MBP + WSL). The sealedsecurity
+# fleet (CI runners + inference box) bootstraps from the sealed repo —
+# see sealed/infra/nix/nixos/scripts/ + darwin/scripts/.
 #
 # Mac-only — Ventoy's authoring side is where the tree gets edited;
 # Linux hosts are read-only consumers. Run from Linux too if/when it

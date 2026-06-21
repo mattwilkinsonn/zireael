@@ -4,12 +4,9 @@
 # flake-eval-<host> job on the matching output. Goal: skip flake eval
 # for hosts not affected by the PR's diff, save GitHub Actions minutes.
 #
-# Filters are deliberately explicit (no YAML anchors) since
-# dorny/paths-filter's nested-sequence semantics aren't friendly to
-# anchor-spreading. The redundancy is the cost of clarity; when
-# updating, propagate shared changes by hand and rely on actionlint
-# / the file's own self-reference at the bottom of each filter to
-# catch drift.
+# Only the personal hosts (mattpc-wsl + Matts-MacBook-Pro) live here.
+# The sealedsecurity fleet (CI runners + inference box) moved to the
+# sealed repo's infra/nix flake and is gated by sealed's own CI.
 #
 # Liberal on purpose. False positives (running eval when strictly not
 # needed) are cheap relative to the cost of missing a regression.
@@ -22,106 +19,9 @@
 #     declarations in shared/home.nix and darwin/home.nix.
 #   - this filter file itself + the workflow + ci-base-nix.yml (so edits
 #     to the gating logic fire the gates).
-#
-# Lint-only files (statix.toml, .gitignore, .markdownlint.jsonc,
-# 1password.md) don't trigger any host — they affect linting and docs,
-# not flake eval. Per-host install docs (nix-config/{host}/INSTALL.md)
-# do trigger that host (markdownlint catches them via the docs filter,
-# but content drift could surface assumptions about the host config).
 
-# ─── Linux hosts ─────────────────────────────────────────────────────
-
-# rpi4 — minimal (no dev tooling, no desktop, no overlays).
-rpi4:
-  - 'nix-config/flake.nix'
-  - 'nix-config/flake.lock'
-  - 'nix-config/shared/home.nix'
-  - 'nix-config/shared/linux.nix'
-  - 'nix-config/shared/dotfiles/**'
-  - 'nix-config/nixos/common.nix'
-  - 'nix-config/nixos/home.nix'
-  - 'nix-config/nixos/rpi4/**'
-  - '.github/workflows/nix-config.yml'
-  - '.github/workflows/ci-base-nix.yml'
-  - '.github/path-filters/nix-config.yml'
-  - '.github/path-filters/nix-config-hosts.yml'
-
-# rpi5 — has shared/overlays.nix (jj from unstable) on top of linux.
-rpi5:
-  - 'nix-config/flake.nix'
-  - 'nix-config/flake.lock'
-  - 'nix-config/shared/home.nix'
-  - 'nix-config/shared/linux.nix'
-  - 'nix-config/shared/overlays.nix'
-  - 'nix-config/shared/dotfiles/**'
-  - 'nix-config/nixos/common.nix'
-  - 'nix-config/nixos/home.nix'
-  - 'nix-config/nixos/rpi5/**'
-  - '.github/workflows/nix-config.yml'
-  - '.github/workflows/ci-base-nix.yml'
-  - '.github/path-filters/nix-config.yml'
-  - '.github/path-filters/nix-config-hosts.yml'
-
-# mattserver — same overlay set as rpi5, plus load-secrets, dev tooling.
-mattserver:
-  - 'nix-config/flake.nix'
-  - 'nix-config/flake.lock'
-  - 'nix-config/shared/home.nix'
-  - 'nix-config/shared/linux.nix'
-  - 'nix-config/shared/dev.nix'
-  - 'nix-config/shared/overlays.nix'
-  - 'nix-config/shared/load-secrets.nix'
-  - 'nix-config/shared/dotfiles/**'
-  - 'nix-config/nixos/common.nix'
-  - 'nix-config/nixos/home.nix'
-  - 'nix-config/nixos/modules/buildkite-agent.nix'
-  - 'nix-config/nixos/mattserver/**'
-  - '.github/workflows/nix-config.yml'
-  - '.github/workflows/ci-base-nix.yml'
-  - '.github/path-filters/nix-config.yml'
-  - '.github/path-filters/nix-config-hosts.yml'
-
-# mattlinuxpro — converted 2013 trashcan Mac Pro, headless Buildkite CI
-# runner (SEA-839). Minimal import set (no dev/load-secrets), plus the
-# shared buildkite-agent module it consumes.
-mattlinuxpro:
-  - 'nix-config/flake.nix'
-  - 'nix-config/flake.lock'
-  - 'nix-config/shared/home.nix'
-  - 'nix-config/shared/linux.nix'
-  - 'nix-config/shared/overlays.nix'
-  - 'nix-config/shared/dotfiles/**'
-  - 'nix-config/nixos/common.nix'
-  - 'nix-config/nixos/home.nix'
-  - 'nix-config/nixos/modules/buildkite-agent.nix'
-  - 'nix-config/nixos/mattlinuxpro/**'
-  - '.github/workflows/nix-config.yml'
-  - '.github/workflows/ci-base-nix.yml'
-  - '.github/path-filters/nix-config.yml'
-  - '.github/path-filters/nix-config-hosts.yml'
-
-# mattfw — full dev stack (unstable wholesale, dev, linux-build-deps,
-# load-secrets, openclaw, overlays-master).
-mattfw:
-  - 'nix-config/flake.nix'
-  - 'nix-config/flake.lock'
-  - 'nix-config/shared/home.nix'
-  - 'nix-config/shared/linux.nix'
-  - 'nix-config/shared/dev.nix'
-  - 'nix-config/shared/linux-build-deps.nix'
-  - 'nix-config/shared/load-secrets.nix'
-  - 'nix-config/shared/unstable-wholesale.nix'
-  - 'nix-config/shared/overlays-master.nix'
-  - 'nix-config/shared/dotfiles/**'
-  - 'nix-config/nixos/common.nix'
-  - 'nix-config/nixos/home.nix'
-  - 'nix-config/nixos/mattfw/**'
-  - '.github/workflows/nix-config.yml'
-  - '.github/workflows/ci-base-nix.yml'
-  - '.github/path-filters/nix-config.yml'
-  - '.github/path-filters/nix-config-hosts.yml'
-
-# mattpc-wsl — full dev stack like mattfw, minus openclaw / GUI.
+# mattpc-wsl — full dev stack (unstable wholesale, dev, linux-build-deps,
+# load-secrets), minus openclaw / GUI.
 mattpc-wsl:
   - 'nix-config/flake.nix'
   - 'nix-config/flake.lock'
@@ -131,17 +31,14 @@ mattpc-wsl:
   - 'nix-config/shared/linux-build-deps.nix'
   - 'nix-config/shared/load-secrets.nix'
   - 'nix-config/shared/unstable-wholesale.nix'
-  - 'nix-config/shared/overlays-master.nix'
+  - 'nix-config/shared/privatefiles-symlinks.nix'
   - 'nix-config/shared/dotfiles/**'
   - 'nix-config/nixos/common.nix'
-  - 'nix-config/nixos/home.nix'
   - 'nix-config/nixos/mattpc-wsl/**'
   - '.github/workflows/nix-config.yml'
   - '.github/workflows/ci-base-nix.yml'
   - '.github/path-filters/nix-config.yml'
   - '.github/path-filters/nix-config-hosts.yml'
-
-# ─── Darwin hosts ────────────────────────────────────────────────────
 
 # Matts-MacBook-Pro (aarch64 darwin, unstable-wholesale stack).
 darwin-mbp:
@@ -151,57 +48,10 @@ darwin-mbp:
   - 'nix-config/shared/dev.nix'
   - 'nix-config/shared/load-secrets.nix'
   - 'nix-config/shared/unstable-wholesale.nix'
-  - 'nix-config/shared/overlays-master.nix'
+  - 'nix-config/shared/privatefiles-symlinks.nix'
   - 'nix-config/shared/dotfiles/**'
   - 'nix-config/darwin/home.nix'
   - 'nix-config/darwin/system.nix'
-  - '.github/workflows/nix-config.yml'
-  - '.github/workflows/ci-base-nix.yml'
-  - '.github/path-filters/nix-config.yml'
-  - '.github/path-filters/nix-config-hosts.yml'
-
-# mattmini (aarch64 darwin, stable nix-darwin + stable nixpkgs-darwin
-# stack). Distinct from Matts-MacBook-Pro: separate `pkgs` constructed
-# inline in flake.nix with its own overlay (jjFromUnstable), and the
-# user import set only carries shared/home.nix (not shared/dev.nix or
-# shared/load-secrets.nix — this is a CI runner, not a dev box).
-mattmini:
-  - 'nix-config/flake.nix'
-  - 'nix-config/flake.lock'
-  - 'nix-config/shared/home.nix'
-  - 'nix-config/shared/dotfiles/**'
-  - 'nix-config/darwin/mattmini/**'
-  - 'nix-config/darwin/modules/buildkite-agent-macos.nix'
-  - '.github/workflows/nix-config.yml'
-  - '.github/workflows/ci-base-nix.yml'
-  - '.github/path-filters/nix-config.yml'
-  - '.github/path-filters/nix-config-hosts.yml'
-
-# awsmac (aarch64 darwin) — EC2 mac2-m2.metal, most-disposable stopgap
-# macOS CI runner. Same stable-darwin stack + import set as mattmini;
-# distinct host dir + flake entry (account is ec2-user).
-awsmac:
-  - 'nix-config/flake.nix'
-  - 'nix-config/flake.lock'
-  - 'nix-config/shared/home.nix'
-  - 'nix-config/shared/dotfiles/**'
-  - 'nix-config/darwin/awsmac/**'
-  - 'nix-config/darwin/modules/buildkite-agent-macos.nix'
-  - '.github/workflows/nix-config.yml'
-  - '.github/workflows/ci-base-nix.yml'
-  - '.github/path-filters/nix-config.yml'
-  - '.github/path-filters/nix-config-hosts.yml'
-
-# dedicatedmacio-mini (aarch64 darwin) — rented M4 Mac mini, stopgap
-# macOS CI runner. Same stable-darwin stack + shared agent module as
-# mattmini / awsmac; distinct host dir + flake entry.
-dedicatedmacio-mini:
-  - 'nix-config/flake.nix'
-  - 'nix-config/flake.lock'
-  - 'nix-config/shared/home.nix'
-  - 'nix-config/shared/dotfiles/**'
-  - 'nix-config/darwin/dedicatedmacio-mini/**'
-  - 'nix-config/darwin/modules/buildkite-agent-macos.nix'
   - '.github/workflows/nix-config.yml'
   - '.github/workflows/ci-base-nix.yml'
   - '.github/path-filters/nix-config.yml'

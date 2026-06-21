@@ -53,7 +53,7 @@ jobs:
 
   # ─── Per-host filters ──────────────────────────────────────────────
   # One filter per flake target so we can skip eval for hosts not
-  # affected by the diff. Each output (rpi4, rpi5, …) is wired to its
+  # affected by the diff. Each output is wired to its
   # matching flake-eval job below.
 
   host-changes:
@@ -66,16 +66,8 @@ jobs:
       pull-requests: read
     timeout-minutes: 3
     outputs:
-      rpi4: ${{ steps.filter.outputs.rpi4 }}
-      rpi5: ${{ steps.filter.outputs.rpi5 }}
-      mattserver: ${{ steps.filter.outputs.mattserver }}
-      mattlinuxpro: ${{ steps.filter.outputs.mattlinuxpro }}
-      mattfw: ${{ steps.filter.outputs.mattfw }}
       mattpc-wsl: ${{ steps.filter.outputs.mattpc-wsl }}
       darwin-mbp: ${{ steps.filter.outputs.darwin-mbp }}
-      mattmini: ${{ steps.filter.outputs.mattmini }}
-      awsmac: ${{ steps.filter.outputs.awsmac }}
-      dedicatedmacio-mini: ${{ steps.filter.outputs.dedicatedmacio-mini }}
     steps:
       - uses: actions/checkout@v6
       - id: filter
@@ -107,81 +99,10 @@ jobs:
   # The Determinate Nix install dominates the runtime here (~3 min
   # vs the eval itself which is seconds-to-low-minutes once warm),
   # so skipping a host saves real CI minutes.
-
-  flake-eval-rpi4:
-    name: flake eval (rpi4)
-    needs: [optimize_ci, host-changes]
-    if: |
-      needs.optimize_ci.outputs.skip == 'false' &&
-      needs.host-changes.outputs.rpi4 == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - name: nix eval rpi4
-        working-directory: nix-config
-        run: nix eval --raw '.#nixosConfigurations.rpi4.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-rpi5:
-    name: flake eval (rpi5)
-    needs: [optimize_ci, host-changes]
-    if: |
-      needs.optimize_ci.outputs.skip == 'false' &&
-      needs.host-changes.outputs.rpi5 == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - name: nix eval rpi5
-        working-directory: nix-config
-        run: nix eval --raw '.#nixosConfigurations.rpi5.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-mattserver:
-    name: flake eval (mattserver)
-    needs: [optimize_ci, host-changes]
-    if: |
-      needs.optimize_ci.outputs.skip == 'false' &&
-      needs.host-changes.outputs.mattserver == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - name: nix eval mattserver
-        working-directory: nix-config
-        run: nix eval --raw '.#nixosConfigurations.mattserver.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-mattlinuxpro:
-    name: flake eval (mattlinuxpro)
-    needs: [optimize_ci, host-changes]
-    if: |
-      needs.optimize_ci.outputs.skip == 'false' &&
-      needs.host-changes.outputs.mattlinuxpro == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - name: nix eval mattlinuxpro
-        working-directory: nix-config
-        run: nix eval --raw '.#nixosConfigurations.mattlinuxpro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-mattfw:
-    name: flake eval (mattfw)
-    needs: [optimize_ci, host-changes]
-    if: |
-      needs.optimize_ci.outputs.skip == 'false' &&
-      needs.host-changes.outputs.mattfw == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - name: nix eval mattfw
-        working-directory: nix-config
-        run: nix eval --raw '.#nixosConfigurations.mattfw.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+  #
+  # Only the personal hosts live here — the sealedsecurity fleet (CI
+  # runners + inference box) moved to the sealed repo's infra/nix flake
+  # and is evaluated by sealed's own CI.
 
   flake-eval-mattpc-wsl:
     name: flake eval (mattpc-wsl)
@@ -213,60 +134,6 @@ jobs:
         working-directory: nix-config
         run: nix eval --raw '.#darwinConfigurations.Matts-MacBook-Pro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
 
-  flake-eval-mattmini:
-    name: flake eval (mattmini)
-    needs: [optimize_ci, host-changes]
-    if: |
-      needs.optimize_ci.outputs.skip == 'false' &&
-      needs.host-changes.outputs.mattmini == 'true'
-    # aarch64 darwin host. GitHub's macos-latest is aarch64-darwin, so
-    # this matches the target arch natively (nix eval doesn't build, but
-    # the arch lines up regardless).
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - name: nix eval mattmini
-        working-directory: nix-config
-        run: nix eval --raw '.#darwinConfigurations.mattmini.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-awsmac:
-    name: flake eval (awsmac)
-    needs: [optimize_ci, host-changes]
-    if: |
-      needs.optimize_ci.outputs.skip == 'false' &&
-      needs.host-changes.outputs.awsmac == 'true'
-    # aarch64 darwin host. GitHub's macos-latest is aarch64-darwin, so
-    # this matches the target arch natively (nix eval doesn't build, but
-    # the arch lines up regardless).
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - name: nix eval awsmac
-        working-directory: nix-config
-        run: nix eval --raw '.#darwinConfigurations.awsmac.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
-  flake-eval-dedicatedmacio-mini:
-    name: flake eval (dedicatedmacio-mini)
-    needs: [optimize_ci, host-changes]
-    if: |
-      needs.optimize_ci.outputs.skip == 'false' &&
-      needs.host-changes.outputs['dedicatedmacio-mini'] == 'true'
-    # aarch64 darwin host. GitHub's macos-latest is aarch64-darwin, so
-    # this matches the target arch natively (nix eval doesn't build, but
-    # the arch lines up regardless).
-    runs-on: macos-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-      - uses: DeterminateSystems/determinate-nix-action@v3
-      - name: nix eval dedicatedmacio-mini
-        working-directory: nix-config
-        run: nix eval --raw '.#darwinConfigurations.dedicatedmacio-mini.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
-
   # ─── Rollup gate ────────────────────────────────────────────────────
   # Single stable check context for branch protection (`nix-config CI`).
   # Rolls up the linter chain AND every per-host flake-eval — a failure
@@ -284,16 +151,8 @@ jobs:
       - optimize_ci
       - changes
       - lints-dispatch
-      - flake-eval-rpi4
-      - flake-eval-rpi5
-      - flake-eval-mattserver
-      - flake-eval-mattlinuxpro
-      - flake-eval-mattfw
       - flake-eval-mattpc-wsl
       - flake-eval-darwin
-      - flake-eval-mattmini
-      - flake-eval-awsmac
-      - flake-eval-dedicatedmacio-mini
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
@@ -305,16 +164,8 @@ jobs:
           # success/skipped → contribute pass; failure/cancelled → fail the gate.
           declare -A results=(
             [lints-dispatch]='${{ needs.lints-dispatch.result }}'
-            [flake-eval-rpi4]='${{ needs.flake-eval-rpi4.result }}'
-            [flake-eval-rpi5]='${{ needs.flake-eval-rpi5.result }}'
-            [flake-eval-mattserver]='${{ needs.flake-eval-mattserver.result }}'
-            [flake-eval-mattlinuxpro]='${{ needs.flake-eval-mattlinuxpro.result }}'
-            [flake-eval-mattfw]='${{ needs.flake-eval-mattfw.result }}'
             [flake-eval-mattpc-wsl]='${{ needs.flake-eval-mattpc-wsl.result }}'
             [flake-eval-darwin]='${{ needs.flake-eval-darwin.result }}'
-            [flake-eval-mattmini]='${{ needs.flake-eval-mattmini.result }}'
-            [flake-eval-awsmac]='${{ needs.flake-eval-awsmac.result }}'
-            [flake-eval-dedicatedmacio-mini]='${{ needs.flake-eval-dedicatedmacio-mini.result }}'
           )
           failed=0
           for job in "${!results[@]}"; do
