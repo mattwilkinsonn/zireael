@@ -207,11 +207,18 @@ fn references_in_list(list: &str, closing: bool, out: &mut Vec<RawRef>) {
         out.push(RawRef { reference, closing });
         rest = &rest[m.end()..];
         // Consume a joiner before looking for the next reference.
-        // Anything else terminates the list.
+        // Anything else terminates the list. The `and` joiner needs a
+        // word boundary after it, else a list like `SEA-1 android-5`
+        // would consume the `and` prefix of `android` and then match
+        // the `roid-5` tail as a spurious reference.
         let trimmed = rest.trim_start();
         let after_joiner = trimmed
             .strip_prefix(',')
-            .or_else(|| trimmed.strip_prefix("and"))
+            .or_else(|| {
+                trimmed.strip_prefix("and").filter(|after| {
+                    after.is_empty() || after.starts_with(|c: char| !c.is_ascii_alphanumeric())
+                })
+            })
             .or_else(|| trimmed.strip_prefix('&'));
         match after_joiner {
             Some(next) => rest = next.trim_start(),
@@ -302,9 +309,11 @@ fn render_block_lines(refs: &[HoistedRef], ai_body: &str) -> Option<String> {
     }
 }
 
-/// True if the AI body already contains `line` as a standalone line
-/// (trimmed). Substring-on-a-line so `Closes SEA-1` in prose counts,
-/// but `Closes SEA-12` does not satisfy `Closes SEA-1`.
+/// True if the AI body already contains `line` as an exact standalone
+/// line (after trimming). Only a line whose trimmed content equals
+/// `line` exactly suppresses the corresponding block entry: `Closes
+/// SEA-12` does not satisfy `Closes SEA-1`, and a prose line like
+/// `See Closes SEA-1 above` does not satisfy `Closes SEA-1` either.
 fn body_already_has(body: &str, line: &str) -> bool {
     body.lines().any(|l| l.trim() == line)
 }
@@ -561,6 +570,42 @@ mod tests {
         // `refactor` must not match `ref`; `prefix` must not match.
         let out = extract_references(&msgs(&["refactor: tidy prefix handling SEA-9"]));
         assert!(out.is_empty(), "got {out:?}");
+    }
+
+    #[test]
+    fn and_joiner_requires_word_boundary() {
+        // `SEA-1 android-5` must NOT consume the `and` prefix of
+        // `android` and spuriously hoist `roid-5`. Only SEA-1 is a
+        // valid reference; `android-5` is not preceded by a real
+        // joiner, so the list ends after SEA-1.
+        let out = extract_references(&msgs(&["Closes SEA-1 android-5"]));
+        assert_eq!(
+            out,
+            vec![HoistedRef::Issue {
+                id: "SEA-1".into(),
+                closing: true
+            }]
+        );
+    }
+
+    #[test]
+    fn and_joiner_still_works_as_real_joiner() {
+        // The boundary guard must not break the legitimate `and`
+        // joiner with following whitespace.
+        let out = extract_references(&msgs(&["Closes SEA-1 and SEA-2"]));
+        assert_eq!(
+            out,
+            vec![
+                HoistedRef::Issue {
+                    id: "SEA-1".into(),
+                    closing: true
+                },
+                HoistedRef::Issue {
+                    id: "SEA-2".into(),
+                    closing: true
+                },
+            ]
+        );
     }
 
     // ---- block reconcile -----------------------------------------
