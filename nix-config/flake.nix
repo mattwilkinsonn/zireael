@@ -6,11 +6,6 @@
     # Base channel for the dev hosts via shared/unstable-wholesale.nix —
     # the Mac + WSL dev boxes pull every package through this.
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixos-unstable";
-    # For fast-moving CLI tools (jj, etc.) where even nixos-unstable lags
-    # the upstream release. Master skips Hydra's full build set, so cache
-    # hits are worse — keep this input limited to packages that actually
-    # need bleeding-edge versions (see shared/overlays.nix).
-    nixpkgs-master.url = "github:nixos/nixpkgs/master";
     # home-manager master drops support for stable nixpkgs (refers to lib
     # paths only in 26.05+); the dev hosts track unstable, so we use the
     # master branch following nixpkgs-unstable.
