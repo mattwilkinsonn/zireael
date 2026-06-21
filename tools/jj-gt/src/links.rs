@@ -352,7 +352,7 @@ fn render_block_lines(refs: &[HoistedRef], coauthors: &[String], ai_body: &str) 
         .filter(|line| !body_already_has(ai_body, line))
         .collect();
     for value in coauthors {
-        let line = format!("Co-authored-by: {value}");
+        let line = format!("Co-Authored-By: {value}");
         if !body_already_has(ai_body, &line) {
             lines.push(line);
         }
@@ -800,7 +800,7 @@ mod tests {
             out,
             format!(
                 "Prose.\n\n{BLOCK_OPEN}\nCloses SEA-1\n\
-                 Co-authored-by: seal <noreply@sealedsecurity.com>\n{BLOCK_CLOSE}"
+                 Co-Authored-By: seal <noreply@sealedsecurity.com>\n{BLOCK_CLOSE}"
             )
         );
     }
@@ -816,7 +816,7 @@ mod tests {
             out,
             format!(
                 "Prose.\n\n{BLOCK_OPEN}\n\
-                 Co-authored-by: seal <noreply@sealedsecurity.com>\n{BLOCK_CLOSE}"
+                 Co-Authored-By: seal <noreply@sealedsecurity.com>\n{BLOCK_CLOSE}"
             )
         );
     }
@@ -834,7 +834,9 @@ mod tests {
     fn reconcile_skips_coauthor_already_in_prose() {
         // A coauthor trailer already echoed into the prose isn't
         // duplicated; with nothing else to hoist, no block is added.
-        let body = "Summary.\n\nCo-authored-by: seal <noreply@sealedsecurity.com>";
+        // The prose uses the same canonical casing the hoist renders
+        // (`body_already_has` is exact-match, so casing must align).
+        let body = "Summary.\n\nCo-Authored-By: seal <noreply@sealedsecurity.com>";
         let out = reconcile_body(body, &[], &["seal <noreply@sealedsecurity.com>".to_owned()]);
         assert_eq!(out, body);
     }

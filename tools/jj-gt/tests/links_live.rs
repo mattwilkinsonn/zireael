@@ -222,7 +222,7 @@ fn submit_hoists_magic_word_references_into_pr_body() {
         "PR body missing the managed-block fence:\n{body}"
     );
     assert!(
-        body.contains("Co-authored-by: seal <noreply@sealedsecurity.com>"),
+        body.contains("Co-Authored-By: seal <noreply@sealedsecurity.com>"),
         "PR body missing the hoisted co-author trailer:\n{body}"
     );
 
