@@ -128,11 +128,15 @@ can drop the SG's inbound-SSH rule):
    `tailscale` — same as Linux.
 5. **gh + dotfiles** — installs `gh`, prompts for `gh auth login`,
    clones your dotfiles into `~` (colocated git+jj at `~/.git`).
-6. **Nix** — Determinate Systems installer (same as the MBP). The
-   upstream nixos.org installer's launchd daemon crash-loops on the EC2
-   macOS AMI (dyld library-validation rejects /nix/store dylibs in the
-   hardened launchd context — the AMI's /nix isn't a firmlink-blessed
-   mount); Determinate sets the volume + firmlink + daemon up correctly.
+6. **Nix** — Determinate Nix via the Determinate Systems installer
+   (`--determinate`). The upstream nixos.org installer's launchd daemon
+   crash-loops on the EC2 macOS AMI (dyld library-validation rejects
+   /nix/store dylibs in the hardened launchd context — the AMI's /nix
+   isn't a firmlink-blessed mount); Determinate sets the volume +
+   firmlink + daemon up correctly. On EC2 the script detects the
+   instance via IMDS and installs with `install macos
+   --use-ec2-instance-store` so the store lands on the fast local
+   instance-store disk instead of the slow EBS-root /nix volume.
    nix-darwin doesn't manage the daemon (`nix.enable = false`); the step
    also writes `/etc/nix/nix.custom.conf` for trust + binary caches.
 7. **Buildkite agent token + CI App key** — writes the org agent token

@@ -291,24 +291,36 @@ fi
 # ---------------------------------------------------------------------
 # 6. Nix (Determinate Systems installer)
 # ---------------------------------------------------------------------
-# We use the Determinate Systems installer (same as the MBP), NOT the
-# upstream nixos.org one. On the EC2 macOS AMI the upstream installer's
-# launchd nix-daemon crash-loops: dyld's library-validation refuses to
-# load /nix/store dylibs into a hardened launchd-spawned process when
-# /nix isn't a firmlink-blessed mount (the AMI ships /nix as a plain
-# APFS volume with no /etc/synthetic.conf — a manual `nix-daemon` works
-# but the launchd one fails with "file system sandbox blocked open()" /
-# OS_REASON_DYLD). Determinate's installer sets the volume + firmlink +
-# daemon up as one coherent unit that doesn't trip that validation.
-# Determinate manages its own daemon, so system.nix sets
-# `nix.enable = false`.
+# We install Determinate Nix (the `--determinate` flavor) via the
+# Determinate Systems installer, NOT upstream nixos.org. On the EC2
+# macOS AMI the upstream installer's launchd nix-daemon crash-loops:
+# dyld's library-validation refuses to load /nix/store dylibs into a
+# hardened launchd-spawned process when /nix isn't a firmlink-blessed
+# mount (the AMI ships /nix as a plain APFS volume with no
+# /etc/synthetic.conf — a manual `nix-daemon` works but the launchd one
+# fails with "file system sandbox blocked open()" / OS_REASON_DYLD).
+# Determinate's installer sets the volume + firmlink + daemon up as one
+# coherent unit that doesn't trip that validation. Determinate manages
+# its own daemon, so system.nix sets `nix.enable = false`.
+#
+# EC2 macs additionally need `macos --use-ec2-instance-store`: the AMI's
+# default /nix volume on the EBS root is slow and the firmlink dance is
+# fragile, so Determinate stages the store on the local instance-store
+# disk instead. That flag is EC2-only — the owned/rental minis have no
+# instance store, so it's gated behind is_ec2_mac (IMDS probe).
 step "Nix (Determinate)"
 if command -v nix >/dev/null 2>&1; then
 	echo "  already installed ($(nix --version | head -1))"
 else
-	echo "  installing Determinate Nix — you'll be prompted to confirm"
-	curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix |
-		sh -s -- install --no-confirm
+	if is_ec2_mac; then
+		echo "  EC2 mac detected — installing Determinate Nix on the instance store"
+		curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix |
+			sh -s -- install macos --no-confirm --use-ec2-instance-store --determinate
+	else
+		echo "  installing Determinate Nix — you'll be prompted to confirm"
+		curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix |
+			sh -s -- install --no-confirm --determinate
+	fi
 	# Source the daemon profile so `nix` is on PATH in this shell.
 	# shellcheck disable=SC1091
 	. /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh

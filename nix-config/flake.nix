@@ -122,6 +122,35 @@
         # unstable nixpkgs.
         home-manager.extraSpecialArgs = { inherit inputs; };
       };
+
+      # Overlays for the macOS Buildkite runner hosts (awsmac, mattmini,
+      # dedicatedmacio-mini). These three wire pkgs as a pre-imported set
+      # (`nixpkgs.pkgs = pkgs` below), and when nixpkgs.pkgs is set
+      # nixpkgs IGNORES every module-level `nixpkgs.overlays`. So any
+      # overlay a runner needs MUST be applied here, at the `import
+      # nixpkgs-darwin` site — not in a darwin module. (A module-level
+      # overlay silently no-ops; that bug is exactly why direnv built
+      # with checks on and the fish test got OOM-killed.)
+      #
+      #   - jujutsu/jjui from unstable: even nixos-unstable lags the jj
+      #     release, so these two come from unstable. shared/overlays.nix
+      #     can't be imported here because it's a NixOS-style module
+      #     (`{ nixpkgs.overlays = [...]; }`), not a bare overlay function.
+      #   - direnv doCheck=false: direnv's fish test runner is SIGKILL'd
+      #     in the build sandbox on aarch64-darwin 25.11 (`make: ***
+      #     test-fish Killed: 9`). Skip checks until the upstream fix
+      #     (tracking nixpkgs#513971, not yet backported to release-25.11)
+      #     lands.
+      macRunnerOverlays = system: [
+        (_final: _prev: {
+          inherit (inputs.nixpkgs-unstable.legacyPackages.${system}) jujutsu jjui;
+        })
+        (_final: prev: {
+          direnv = prev.direnv.overrideAttrs (_: {
+            doCheck = false;
+          });
+        })
+      ];
     in
     {
       # macOS (Apple Silicon) — nix-darwin + home-manager
@@ -185,22 +214,12 @@
       darwinConfigurations."mattmini" =
         let
           system = "aarch64-darwin";
-          # Inline overlay: jj from unstable (same as shared/overlays.nix
-          # gives mattserver). Can't import shared/overlays.nix here
-          # because it's structured as a NixOS-style module
-          # (`{ nixpkgs.overlays = [...]; }`), not a bare overlay
-          # function. If this list grows, factor out into a shared
-          # overlays-as-list module that both this entry and
-          # shared/overlays.nix can consume.
-          jjFromUnstable = _final: _prev: {
-            inherit (inputs.nixpkgs-unstable.legacyPackages.${system}) jujutsu jjui;
-          };
           pkgs = import inputs.nixpkgs-darwin {
             inherit system;
             config = {
               allowUnfree = true;
             };
-            overlays = [ jjFromUnstable ];
+            overlays = macRunnerOverlays system;
           };
         in
         inputs.nix-darwin-stable.lib.darwinSystem {
@@ -236,18 +255,12 @@
       darwinConfigurations."awsmac" =
         let
           system = "aarch64-darwin";
-          # Inline overlay: jj from unstable (same as mattmini). See the
-          # mattmini entry for why shared/overlays.nix can't be imported
-          # here directly.
-          jjFromUnstable = _final: _prev: {
-            inherit (inputs.nixpkgs-unstable.legacyPackages.${system}) jujutsu jjui;
-          };
           pkgs = import inputs.nixpkgs-darwin {
             inherit system;
             config = {
               allowUnfree = true;
             };
-            overlays = [ jjFromUnstable ];
+            overlays = macRunnerOverlays system;
           };
         in
         inputs.nix-darwin-stable.lib.darwinSystem {
@@ -286,18 +299,12 @@
       darwinConfigurations."dedicatedmacio-mini" =
         let
           system = "aarch64-darwin";
-          # Inline overlay: jj from unstable (same as mattmini). See the
-          # mattmini entry for why shared/overlays.nix can't be imported
-          # here directly.
-          jjFromUnstable = _final: _prev: {
-            inherit (inputs.nixpkgs-unstable.legacyPackages.${system}) jujutsu jjui;
-          };
           pkgs = import inputs.nixpkgs-darwin {
             inherit system;
             config = {
               allowUnfree = true;
             };
-            overlays = [ jjFromUnstable ];
+            overlays = macRunnerOverlays system;
           };
         in
         inputs.nix-darwin-stable.lib.darwinSystem {
