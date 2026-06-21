@@ -16,6 +16,9 @@ and on-demand gaming station.
 
 - [ ] `nix-config` repo pushed (run `config status` on the Mac to confirm).
 - [ ] Tailscale pre-auth key ready at <https://login.tailscale.com/admin/settings/keys>.
+      Single-use, tagged `tag:server,tag:ci-runner` (mattserver also gets
+      `tag:redis` for the sccache L1 — assign it after enrolment, or add it
+      to the key's tags too).
 - [ ] Buildkite agent token ready (org Agents page → Reveal Agent Token; see
       "Buildkite agent token" section below).
 - [ ] New `mattw` + `root` password ready to type at the bootstrap prompt

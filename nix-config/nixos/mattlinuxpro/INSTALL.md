@@ -21,7 +21,10 @@ alongside mattserver.
       runs `tailscale up --ssh` and prints a login URL — easiest on the
       headless console) or have a pre-auth key ready at
       <https://login.tailscale.com/admin/settings/keys> to pass via
-      `--auth-key`.
+      `--auth-key`. Either way the node needs `tag:server,tag:ci-runner`
+      (tag the pre-auth key, or assign the tags in the admin console after
+      interactive enrolment) — `tag:ci-runner` is what grants it sccache
+      Redis L1 access.
 - [ ] Buildkite agent token ready (org Agents page → Reveal Agent Token; see
       "Buildkite agent token" section below).
 - [ ] sealedsecurity-ci App `.pem` ready (see "Buildkite agent token").
