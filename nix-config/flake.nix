@@ -420,20 +420,18 @@
         ];
       };
 
-      # mattserver — Old gaming PC (AMD Ryzen 3600 + RX 5700 XT, 32 GB DDR4).
-      # Roles: ZFS backup receive target, self-hosted GitHub Actions runners
-      # (personal + sealedsecurity org), KDE gaming station. Boots straight
-      # to SDDM by default — flip `bootToDesktop` in desktop.nix to revert
-      # to headless boot.
+      # mattserver — Old gaming PC (AMD Ryzen 3600 + RX 5700 XT, 64 GB DDR4),
+      # now a headless server: ZFS backup-receive target + self-hosted
+      # Buildkite CI runners (+ the sccache Redis L1). The KDE/Steam gaming
+      # desktop was dropped; nixos/modules/gaming-desktop.nix keeps that
+      # setup reusable for another box if wanted.
       nixosConfigurations."mattserver" = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
         specialArgs = { inherit inputs; };
         modules = [
-          nix-flatpak.nixosModules.nix-flatpak
           ./shared/overlays.nix
           ./nixos/common.nix
           ./nixos/mattserver/system.nix
-          ./nixos/mattserver/desktop.nix
           home-manager.nixosModules.home-manager
           hmModule
           {

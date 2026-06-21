@@ -1,5 +1,10 @@
-# mattserver desktop module — KDE Plasma 6 + Steam. Boots straight to SDDM
+# Gaming desktop module — KDE Plasma 6 + Steam. Boots straight to SDDM
 # by default; no manual `systemctl start sddm` needed.
+#
+# Generic + reusable: import this from any host's module list to turn it
+# into a KDE gaming station. Hardware-specific bits (GPU driver,
+# 32-bit graphics, firmware) belong in the host's own system.nix — this
+# module assumes hardware.graphics is already configured there.
 #
 # To temporarily go headless without rebuilding:
 #
@@ -7,6 +12,10 @@
 #   sudo systemctl isolate graphical.target   # back to DE
 #
 # To make headless the default again, flip `bootToDesktop` below to false.
+#
+# Requires the host's flake entry to include the nix-flatpak NixOS module
+# (the services.flatpak block below depends on it) and the
+# plasma-manager home-manager module (the home-manager layer below).
 
 {
   pkgs,
@@ -101,9 +110,9 @@ in
         "org.kde.krunner.desktop"."_launch" = "Meta+Space";
       };
 
-      # Display off after 10min, never suspend the box. Defense-in-depth
-      # alongside the systemd target masks in system.nix — Plasma stops
-      # asking, systemd stops obeying.
+      # Display off after 10min, never suspend the box. Pairs with any
+      # host-level systemd sleep-target masking (e.g. an always-on
+      # server/runner host) — Plasma stops asking, systemd stops obeying.
       powerdevil.AC = {
         powerButtonAction = "shutDown";
         autoSuspend.action = "nothing";

@@ -4,12 +4,15 @@
   ...
 }:
 
-# mattserver — Old gaming PC (AMD Ryzen 3600 + RX 5700 XT, 64 GB DDR4).
-# Roles:
+# mattserver — Old gaming PC (AMD Ryzen 3600 + RX 5700 XT, 64 GB DDR4),
+# now a headless server. Roles:
 #   1. ZFS backup receive target (btrfs root on 1TB NVMe; ZFS pool on 2TB SATA SSHD)
-#   2. Self-hosted Buildkite CI agents (sealedsecurity org)
-#   3. KDE Plasma gaming station (boots to SDDM by default; flip
-#      `bootToDesktop` in desktop.nix to go headless)
+#   2. Self-hosted Buildkite CI agents (sealedsecurity org) + the
+#      sccache Redis L1 tier
+#
+# The KDE Plasma / Steam gaming desktop was removed (it's a server now);
+# that setup lives on as the reusable nixos/modules/gaming-desktop.nix
+# for another box if wanted.
 
 {
   imports = [ ../modules/buildkite-agent.nix ];
@@ -57,30 +60,25 @@
   hardware = {
     cpu.amd.updateMicrocode = true;
 
-    # RDNA 1 (gfx1010 / Navi 10) — Mesa RADV handles Vulkan; radeonsi for
-    # OpenGL. 32-bit support required for Steam/Proton.
-    graphics = {
-      enable = true;
-      enable32Bit = true;
-    };
-
+    # No hardware.graphics — this is a headless server. The RX 5700 XT
+    # is unused (no GL/Vulkan rendering, no 32-bit Steam stack); only
+    # the firmware below is kept so the GPU + other devices initialise
+    # cleanly at the console.
     enableRedistributableFirmware = true;
     enableAllFirmware = true;
   };
 
   # Performance CPU governor — avoids frequency ramp-up delay at the start
-  # of a CI job or game session. The 3600 idles at ~2.2 GHz under schedutil;
+  # of a CI job. The 3600 idles at ~2.2 GHz under schedutil;
   # `performance` holds it at boost clocks from the first instruction.
   powerManagement.cpuFreqGovernor = "performance";
 
-  # Never let the box sleep. It's a backup target + runner host first; gaming
-  # is a sometimes role. A suspended host means missed snapshots and CI jobs
-  # falling back to GitHub-hosted runners.
+  # Never let the box sleep. It's a backup target + CI runner host, so a
+  # suspended host means missed snapshots and CI jobs falling back to
+  # Buildkite-hosted runners.
   #
   # Masks at the systemd target level so `systemctl suspend`, idle timers,
-  # and any session-level "sleep now" call all become no-ops. KDE PowerDevil
-  # still controls screen DPMS (monitors can still go to sleep), only the
-  # box-level sleep paths are blocked.
+  # and any session-level "sleep now" call all become no-ops.
   systemd.targets = {
     sleep.enable = false;
     suspend.enable = false;
@@ -99,7 +97,6 @@
     # (pciutils, usbutils, lm_sensors, dmidecode, lshw, …) lives in
     # nixos/common.nix and applies here automatically.
     btrfs-progs
-    radeontop
   ];
 
   # ============================================================
@@ -169,7 +166,7 @@
     fileSystems = [ "/" ];
   };
 
-  # 16 GB swap — enough for OOM headroom alongside gaming + runner workloads.
+  # 16 GB swap — OOM headroom alongside the CI runner + Redis workloads.
   swapDevices = [
     {
       device = "/dev/disk/by-label/swap";
