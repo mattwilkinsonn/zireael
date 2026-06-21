@@ -424,6 +424,13 @@ ci-nix-config-eval:
         else
             echo "→ skipping darwinConfigurations.awsmac (no path-filter match)"
         fi
+        if should_eval dedicatedmacio-mini; then
+            echo "→ nix eval darwinConfigurations.dedicatedmacio-mini"
+            nix eval --raw '.#darwinConfigurations.dedicatedmacio-mini.config.system.build.toplevel.outPath' \
+                --no-warn-dirty --accept-flake-config >/dev/null
+        else
+            echo "→ skipping darwinConfigurations.dedicatedmacio-mini (no path-filter match)"
+        fi
     else
         echo "→ skipping darwinConfigurations (not on macOS)"
     fi

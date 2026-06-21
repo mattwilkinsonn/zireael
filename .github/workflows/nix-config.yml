@@ -75,6 +75,7 @@ jobs:
       darwin-mbp: ${{ steps.filter.outputs.darwin-mbp }}
       mattmini: ${{ steps.filter.outputs.mattmini }}
       awsmac: ${{ steps.filter.outputs.awsmac }}
+      dedicatedmacio-mini: ${{ steps.filter.outputs.dedicatedmacio-mini }}
     steps:
       - uses: actions/checkout@v6
       - id: filter
@@ -248,6 +249,24 @@ jobs:
         working-directory: nix-config
         run: nix eval --raw '.#darwinConfigurations.awsmac.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
 
+  flake-eval-dedicatedmacio-mini:
+    name: flake eval (dedicatedmacio-mini)
+    needs: [optimize_ci, host-changes]
+    if: |
+      needs.optimize_ci.outputs.skip == 'false' &&
+      needs.host-changes.outputs.dedicatedmacio-mini == 'true'
+    # aarch64 darwin host. GitHub's macos-latest is aarch64-darwin, so
+    # this matches the target arch natively (nix eval doesn't build, but
+    # the arch lines up regardless).
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - name: nix eval dedicatedmacio-mini
+        working-directory: nix-config
+        run: nix eval --raw '.#darwinConfigurations.dedicatedmacio-mini.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+
   # ─── Rollup gate ────────────────────────────────────────────────────
   # Single stable check context for branch protection (`nix-config CI`).
   # Rolls up the linter chain AND every per-host flake-eval — a failure
@@ -274,6 +293,7 @@ jobs:
       - flake-eval-darwin
       - flake-eval-mattmini
       - flake-eval-awsmac
+      - flake-eval-dedicatedmacio-mini
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
@@ -294,6 +314,7 @@ jobs:
             [flake-eval-darwin]='${{ needs.flake-eval-darwin.result }}'
             [flake-eval-mattmini]='${{ needs.flake-eval-mattmini.result }}'
             [flake-eval-awsmac]='${{ needs.flake-eval-awsmac.result }}'
+            [flake-eval-dedicatedmacio-mini]='${{ needs.flake-eval-dedicatedmacio-mini.result }}'
           )
           failed=0
           for job in "${!results[@]}"; do
