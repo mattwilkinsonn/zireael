@@ -17,7 +17,11 @@ alongside mattserver.
 ## Pre-install checklist
 
 - [ ] `nix-config` repo pushed (run `config status` on the Mac to confirm).
-- [ ] Tailscale pre-auth key ready at <https://login.tailscale.com/admin/settings/keys>.
+- [ ] Tailscale: either approve interactively at first boot (the bootstrap
+      runs `tailscale up --ssh` and prints a login URL — easiest on the
+      headless console) or have a pre-auth key ready at
+      <https://login.tailscale.com/admin/settings/keys> to pass via
+      `--auth-key`.
 - [ ] Buildkite agent token ready (org Agents page → Reveal Agent Token; see
       "Buildkite agent token" section below).
 - [ ] sealedsecurity-ci App `.pem` ready (see "Buildkite agent token").

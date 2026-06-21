@@ -111,17 +111,19 @@ tailscale_up_if_needed() {
 		return 0
 	fi
 	step "Joining tailnet"
-	if [ -z "${TAILSCALE_AUTH_KEY:-}" ]; then
-		echo "No auth key provided. Generate one at:"
-		echo "  https://login.tailscale.com/admin/settings/keys"
-		echo "Paste the tskey-auth-... string (input hidden):"
-		read -r -s TAILSCALE_AUTH_KEY
-		echo
-	fi
-	[ -n "${TAILSCALE_AUTH_KEY:-}" ] || err "no auth key provided"
 	# shellcheck disable=SC2086 # extra_flags intentionally unquoted so
 	# it can be empty or multi-flag; values are script-controlled.
-	sudo tailscale up --auth-key="$TAILSCALE_AUTH_KEY" $extra_flags
+	if [ -n "${TAILSCALE_AUTH_KEY:-}" ]; then
+		sudo tailscale up --auth-key="$TAILSCALE_AUTH_KEY" $extra_flags
+	else
+		# No pre-auth key: fall through to interactive auth. `tailscale
+		# up` prints a short login URL to approve the node in a browser —
+		# far easier on a headless console than typing a tskey-auth-...
+		# blob into a box with no paste.
+		echo "No auth key provided — using interactive login."
+		echo "Open the URL below and approve this node:"
+		sudo tailscale up $extra_flags
+	fi
 	echo "Tailscale up: $(tailscale ip -4)"
 }
 
