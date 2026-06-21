@@ -98,6 +98,52 @@ parse_tailscale_auth_key() {
 	export TAILSCALE_AUTH_KEY
 }
 
+# Single-pass argv parser for the macOS runner bootstrap. Sets three
+# globals: TARGET_HOSTNAME, ADMIN_USER, TAILSCALE_AUTH_KEY.
+#
+# Two positionals — `<hostname> [admin-user]` — plus the `--auth-key
+# <key>` / `--auth-key=<key>` flag in any position. Env presets
+# SEAL_MAC_HOSTNAME / SEAL_MAC_ADMIN_USER / TAILSCALE_AUTH_KEY are the
+# fallback when the corresponding arg is absent; ADMIN_USER defaults to
+# `mattw` (the owned/rental minis), which awsmac overrides to
+# `ec2-user`. Errors (via `err`) if no hostname is resolved.
+#
+# This replaces the old two-pass scheme (inline positional loop +
+# parse_tailscale_auth_key "$@"), which fed the full argv — including
+# the positional hostname — to the flag-only parser and died with
+# "unknown arg: awsmac". Parsing positionals and the flag in one pass
+# is what makes `... awsmac ec2-user` work.
+parse_mac_runner_args() {
+	TARGET_HOSTNAME="${SEAL_MAC_HOSTNAME:-}"
+	ADMIN_USER="${SEAL_MAC_ADMIN_USER:-mattw}"
+	TAILSCALE_AUTH_KEY="${TAILSCALE_AUTH_KEY:-}"
+	local pos=0
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--auth-key)
+			TAILSCALE_AUTH_KEY="$2"
+			shift 2
+			;;
+		--auth-key=*)
+			TAILSCALE_AUTH_KEY="${1#*=}"
+			shift
+			;;
+		*)
+			pos=$((pos + 1))
+			case "$pos" in
+			1) TARGET_HOSTNAME="$1" ;;
+			2) ADMIN_USER="$1" ;;
+			*) err "unexpected extra argument: $1" ;;
+			esac
+			shift
+			;;
+		esac
+	done
+	[ -n "$TARGET_HOSTNAME" ] ||
+		err "hostname required: pass as arg 1 or SEAL_MAC_HOSTNAME (e.g. awsmac / mattmini / dedicatedmacio-mini)"
+	export TARGET_HOSTNAME ADMIN_USER TAILSCALE_AUTH_KEY
+}
+
 # ---- tailscale -------------------------------------------------------
 
 # Bring tailscale up if it isn't already. Optional second arg is extra

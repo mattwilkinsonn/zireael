@@ -71,36 +71,14 @@ CI_APP_KEY_FILE="/etc/buildkite-agent/ci-app-key.pem"
 # positional args OR via the SEAL_MAC_HOSTNAME / SEAL_MAC_ADMIN_USER env
 # vars; admin user defaults to `mattw` (the owned/rental minis), which
 # awsmac overrides to `ec2-user`. `--auth-key <key>` / `--auth-key=<key>`
-# is still accepted for Tailscale and is filtered out before positional
-# parsing — both the flag and its value-argument are skipped explicitly
-# (matching parse_tailscale_auth_key's dual-form support), so a key that
-# doesn't start with `tskey-` can't fall through and clobber ADMIN_USER.
-TARGET_HOSTNAME="${SEAL_MAC_HOSTNAME:-}"
-ADMIN_USER="${SEAL_MAC_ADMIN_USER:-mattw}"
-_pos=0
-_skip_next=0
-for _arg in "$@"; do
-	if [ "$_skip_next" -eq 1 ]; then
-		_skip_next=0 # this is the value of a preceding `--auth-key`
-		continue
-	fi
-	case "$_arg" in
-	--auth-key) _skip_next=1 ;; # `--auth-key <key>` — skip the next arg too
-	--auth-key=*) ;;            # `--auth-key=<key>` — value is in this token
-	*)
-		_pos=$((_pos + 1))
-		case "$_pos" in
-		1) TARGET_HOSTNAME="$_arg" ;;
-		2) ADMIN_USER="$_arg" ;;
-		esac
-		;;
-	esac
-done
-[ -n "$TARGET_HOSTNAME" ] || err "hostname required: pass as arg 1 or SEAL_MAC_HOSTNAME (e.g. awsmac / mattmini / dedicatedmacio-mini)"
+# is also accepted (in any position) for Tailscale. A single parse pass
+# in parse_mac_runner_args handles positionals and the flag together —
+# see bootstrap-common.sh for why feeding the full argv to the flag-only
+# parser used to break `... awsmac ec2-user`.
+parse_mac_runner_args "$@"
 TS_HOSTNAME="${TARGET_HOSTNAME}.tail08a5c5.ts.net"
 
 require_non_root
-parse_tailscale_auth_key "$@"
 require_hostname "$TARGET_HOSTNAME"
 
 echo "Bootstrapping host: $(hostname) (admin user: $ADMIN_USER)"
