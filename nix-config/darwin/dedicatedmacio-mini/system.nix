@@ -977,7 +977,13 @@ in
   # ============================================================
   #
   # mattserver has a systemd timer for this; nix-darwin uses launchd.
-  # Same find-and-rm logic as nixos/mattserver/system.nix.
+  # Same find-and-rm logic as nixos/mattserver/system.nix, but uses
+  # `find -exec rm` rather than `find -print0 | xargs -0 -r`: macOS's
+  # BSD xargs has no GNU `-r` / `--no-run-if-empty`, and this daemon
+  # runs under /bin/sh with the system /bin/xargs (the Nix findutils is
+  # on the agent's curated PATH, not this daemon's), so `xargs -r` would
+  # fail every scheduled run. `-exec rm -rf {} +` is POSIX, batches the
+  # paths like xargs, and runs nothing when find matches nothing.
 
   launchd.daemons.agent-cache-cleanup = {
     serviceConfig = {
@@ -990,7 +996,7 @@ in
             -name "target" -type d \
             -not -path "*/.cargo/*" \
             -mtime +14 \
-            -print0 | xargs -0 -r rm -rf
+            -exec rm -rf {} +
         ''
       ];
       StartCalendarInterval = [
