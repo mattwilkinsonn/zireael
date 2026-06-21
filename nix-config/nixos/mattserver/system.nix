@@ -416,7 +416,7 @@
       # boundary here is deliberately the host firewall + tailnet ACL
       # (tailscale0-only inbound, tag:ci-runner/tag:dev grant — see the
       # bind comment above), not a Redis password, so protected-mode is
-      # the wrong layer and has to be off. renders `protected-mode no`.
+      # the wrong layer and has to be off.
       # SEA-843.
       "protected-mode" = false;
     };
