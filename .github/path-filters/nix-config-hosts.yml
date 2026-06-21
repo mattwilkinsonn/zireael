@@ -171,6 +171,7 @@ mattmini:
   - 'nix-config/shared/home.nix'
   - 'nix-config/shared/dotfiles/**'
   - 'nix-config/darwin/mattmini/**'
+  - 'nix-config/darwin/modules/buildkite-agent-macos.nix'
   - '.github/workflows/nix-config.yml'
   - '.github/workflows/ci-base-nix.yml'
   - '.github/path-filters/nix-config.yml'

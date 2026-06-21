@@ -25,7 +25,7 @@ divergence to work around).
 3. Plug in a USB stick containing this `nix-config` repo (or `gh repo
    clone mattwilkinsonn/zireael /tmp/dotfiles` if you have an SSH/LAN
    path in already).
-4. `bash <path-to>/nix-config/darwin/scripts/mattmini-bootstrap.sh`.
+4. `bash <path-to>/nix-config/darwin/scripts/macos-runner-bootstrap.sh mattmini`.
 
 The bootstrap script handles everything else: Xcode CLT, Nix
 (upstream nixos.org installer), Homebrew, `gh` + zireael checkout,
@@ -84,7 +84,7 @@ Get the `nix-config` repo onto the box (USB or `gh repo clone` —
 whichever's easier; the script handles either path), then:
 
 ```bash
-bash <path-to>/nix-config/darwin/scripts/mattmini-bootstrap.sh
+bash <path-to>/nix-config/darwin/scripts/macos-runner-bootstrap.sh mattmini
 ```
 
 The script is fully self-contained. It walks 11 steps in an order
@@ -223,7 +223,7 @@ After every macOS point release:
 >    repairs the dangling `/etc/static` symlinks:
 >
 >    ```bash
->    bash ~/repos/zireael/nix-config/darwin/scripts/mattmini-bootstrap.sh
+>    bash ~/repos/zireael/nix-config/darwin/scripts/macos-runner-bootstrap.sh mattmini
 >    ```
 >
 >    (The bootstrap script self-exports the base PATH at its top, so it
