@@ -185,6 +185,16 @@
   #   printf '%s' 'mattserver' | sha256sum | head -c 8
   networking.hostId = "0bf374c7";
 
+  # Cap the ZFS ARC hard at 1 GiB. ARC defaults to ~50% of RAM (here that
+  # would be ~32 GB), which competes directly with the things this box
+  # actually cares about now: the sccache Redis L1 (up to maxmemory 40 GB)
+  # and the two Buildkite agents' build jobs. The ZFS pool is a
+  # backup-receive target on a slow SATA SSHD that isn't even wired up
+  # currently — its caching matters far less than keeping RAM free for
+  # Redis + CI, so give it the smallest practical window. In bytes:
+  # 1 GiB = 1073741824. SEA-843.
+  boot.kernelParams = [ "zfs.zfs_arc_max=1073741824" ];
+
   services.zfs.autoScrub = {
     enable = true;
     interval = "monthly";
@@ -333,6 +343,69 @@
   # ============================================================
 
   services.timesyncd.enable = true;
+
+  # Redis as the shared L1 tier of the CI sccache chain
+  # (disk → redis → R2). sccache's on-disk LRU index is single-writer,
+  # so the per-agent disk L0 can't be shared between agents/boxes; R2
+  # is durable but ~80ms/object over the network. Redis is the missing
+  # concurrency-safe fast tier: when one agent compiles a crate, any
+  # other agent on the tailnet (mattserver's own + mattlinuxpro) reuses
+  # the object at ~1ms instead of fetching from R2. The seal CI
+  # pipelines point `SCCACHE_REDIS_ENDPOINT` here; `write_error_policy`
+  # stays `l0` so a Redis outage just falls back to disk+R2. SEA-843.
+  #
+  # Reachability: jobs run inside the seal-ci container (Buildkite
+  # docker plugin, default bridge network), so `localhost` from inside
+  # the container is the container, not this host. The CI containers
+  # reach this host over the tailnet (mattserver-local containers NAT
+  # out to this host's own tailscale0; mattlinuxpro's go over the
+  # tailnet), so Redis has to listen on the tailscale interface.
+  #
+  # Bind 0.0.0.0 and let the firewall + tailnet ACL enforce access
+  # rather than binding the tailscale IP explicitly. Two reasons:
+  #   1. Boot robustness — the tailscale IP (100.91.42.76) only exists
+  #      once tailscaled has connected, which happens async after boot.
+  #      Binding it explicitly would crash-loop redis until the IP
+  #      appears (and again on every tailscale restart). 0.0.0.0 is
+  #      always bindable.
+  #   2. The firewall is already the enforcement boundary for every
+  #      service on this host — SSH is tailscale-only via the same
+  #      `trustedInterfaces = [ "tailscale0" ]` + `allowedTCPPorts = []`
+  #      mechanism (networking block above), not via per-service binds.
+  #      Binding 0.0.0.0 here is consistent with that model: inbound
+  #      from anything but tailscale0 is dropped.
+  #
+  # Access is further narrowed at the tailnet ACL layer: mattserver
+  # carries a `tag:redis`, and the grant `tag:server -> tag:redis:6379`
+  # (privatefiles/tailscale/tailscale.jsonc) means ONLY the CI runner
+  # boxes (mattserver, mattlinuxpro, awsmac) can reach Redis — not the
+  # MBP, phone, or dev boxes. That WireGuard-layer scoping is why no
+  # `requirepass` is set: the credential boundary is the tailnet ACL,
+  # which keeps a secret out of the CI pipeline env entirely.
+  services.redis.servers.sccache = {
+    enable = true;
+    port = 6379;
+    # Listen on all interfaces; the firewall (trustedInterfaces =
+    # [ "tailscale0" ], allowedTCPPorts = []) is what restricts inbound
+    # to the tailnet. See the block comment above for why this is bound
+    # 0.0.0.0 rather than the explicit tailscale IP.
+    bind = "0.0.0.0";
+    # It's a pure cache: no RDB snapshots, no AOF. Losing the dataset
+    # on restart just re-warms from R2 (the durable L2), so persistence
+    # would be wasted fsync churn on the backup-target's disks.
+    save = [ ];
+    appendOnly = false;
+    settings = {
+      # Bias HIGH: the R2 working set is ~25 GB and growing; size the
+      # cap above it so the cache stays fully resident with ~zero
+      # eviction. 40 GB holds today's cache + headroom; even if a
+      # concurrent ~10 GB build coexists, that's ~50/64 GB — comfortable
+      # on this box. allkeys-lru is a backstop that should rarely fire
+      # at this cap. Revisit if the R2 bucket grows materially.
+      maxmemory = "40gb";
+      maxmemory-policy = "allkeys-lru";
+    };
+  };
 
   services.xserver.xkb.layout = "us";
 }
