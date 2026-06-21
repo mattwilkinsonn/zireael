@@ -25,6 +25,6 @@
   sealed.macosBuildkiteAgent = {
     enable = true;
     hostName = "dedicatedmacio-mini";
-    cargoBuildJobs = "4";
+    cargoBuildJobs = 4;
   };
 }

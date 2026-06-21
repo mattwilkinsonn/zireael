@@ -254,7 +254,7 @@ jobs:
     needs: [optimize_ci, host-changes]
     if: |
       needs.optimize_ci.outputs.skip == 'false' &&
-      needs.host-changes.outputs.dedicatedmacio-mini == 'true'
+      needs.host-changes.outputs['dedicatedmacio-mini'] == 'true'
     # aarch64 darwin host. GitHub's macos-latest is aarch64-darwin, so
     # this matches the target arch natively (nix eval doesn't build, but
     # the arch lines up regardless).
