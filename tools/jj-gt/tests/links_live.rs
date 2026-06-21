@@ -96,11 +96,12 @@ impl Drop for Cleanup {
 fn hoist_one(jj_cli: &JjCli, workspace: &Path, parent: &str, bookmark: &str) {
     let messages = jj::commit_messages_in_range(jj_cli, parent, bookmark).unwrap();
     let refs = links::extract_references(&messages);
+    let coauthors = links::extract_coauthors(&messages);
     let pr = gh::find_pr_for_branch(workspace, bookmark)
         .unwrap()
         .expect("expected an open PR for the bookmark");
     let body = gh::pr_body(workspace, pr.number).unwrap();
-    let new_body = links::reconcile_body(&body, &refs);
+    let new_body = links::reconcile_body(&body, &refs, &coauthors);
     if new_body != body {
         gh::set_pr_body(workspace, pr.number, &new_body).unwrap();
     }
@@ -162,17 +163,27 @@ fn submit_hoists_magic_word_references_into_pr_body() {
     };
 
     // Two commits naming two issues with different magic words: a
-    // closing `Closes` and a non-closing `Refs`.
+    // closing `Closes` and a non-closing `Refs`. Each also carries a
+    // Co-Authored-By trailer so the hoist's trailer-union path is
+    // exercised end-to-end.
     run_ok(
         workspace,
         "jj",
-        &["new", "-m", "feat: first part\n\nCloses SEA-100"],
+        &[
+            "new",
+            "-m",
+            "feat: first part\n\nCloses SEA-100\n\nCo-Authored-By: seal <noreply@sealedsecurity.com>",
+        ],
     );
     std::fs::write(workspace.join(format!("fixture-{run_id}-a.txt")), "a\n").unwrap();
     run_ok(
         workspace,
         "jj",
-        &["new", "-m", "feat: second part\n\nRefs SEA-200"],
+        &[
+            "new",
+            "-m",
+            "feat: second part\n\nRefs SEA-200\n\nCo-Authored-By: seal <noreply@sealedsecurity.com>",
+        ],
     );
     std::fs::write(workspace.join(format!("fixture-{run_id}-b.txt")), "b\n").unwrap();
     run_ok(workspace, "jj", &["bookmark", "create", &branch, "-r", "@"]);
@@ -209,6 +220,23 @@ fn submit_hoists_magic_word_references_into_pr_body() {
     assert!(
         body.contains("<!-- jj-gt:links -->"),
         "PR body missing the managed-block fence:\n{body}"
+    );
+    assert!(
+        body.contains("Co-Authored-By: seal <noreply@sealedsecurity.com>"),
+        "PR body missing the hoisted co-author trailer:\n{body}"
+    );
+    // The fix this guards: the co-author trailer must be the final
+    // line of the body (after the close fence), so GitHub records
+    // co-authorship on the squash commit.
+    assert!(
+        body.trim_end()
+            .lines()
+            .last()
+            .unwrap()
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("co-authored-by:"),
+        "co-author trailer must be the LAST line for GitHub to parse it:\n{body}"
     );
 
     // Add a third commit naming a new issue with a closing word; the

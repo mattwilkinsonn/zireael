@@ -158,6 +158,15 @@ static REF_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
     .expect("ref-token regex is valid")
 });
 
+/// Matches a `Co-authored-by:` trailer line (GitHub is
+/// case-insensitive on the key). Captures the `Name <email>` value
+/// verbatim — we hoist it as-is rather than reconstructing it, so the
+/// avatar/attribution GitHub derives from the email is preserved.
+static COAUTHOR_TRAILER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?im)^\s*co-authored-by:\s*(?P<value>.+?)\s*$")
+        .expect("co-author trailer regex is valid")
+});
+
 /// True if `word` (lowercased, internal whitespace collapsed to a
 /// single space) is a closing magic word.
 fn is_closing_word(word: &str) -> bool {
@@ -245,6 +254,38 @@ pub fn extract_references(messages: &[String]) -> Vec<HoistedRef> {
     group_and_normalize(&raws)
 }
 
+/// Extract every distinct `Co-authored-by:` trailer across the commit
+/// messages, deduped by identity (the `Name <email>` value), in
+/// first-seen order. Returns the verbatim trailer values (without the
+/// `Co-authored-by:` key); the caller renders them as trailer lines.
+///
+/// Why this matters: the Graphite squash-merge body = PR title +
+/// description, so a `Co-Authored-By: seal <…>` trailer that lives
+/// only in the source commits is dropped on squash — and GitHub
+/// derives co-authorship ONLY from a trailer in the merged commit.
+/// Hoisting the trailer into the description's trailing block puts it
+/// in the squash body where GitHub will parse it.
+pub fn extract_coauthors(messages: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for msg in messages {
+        for caps in COAUTHOR_TRAILER.captures_iter(msg) {
+            let value = caps["value"].trim().to_owned();
+            if value.is_empty() {
+                continue;
+            }
+            // Dedupe by a case-insensitive identity key so the same
+            // co-author written with different casing collapses; emit
+            // the first-seen verbatim form.
+            let key = value.to_ascii_lowercase();
+            if seen.insert(key) {
+                out.push(value);
+            }
+        }
+    }
+    out
+}
+
 /// Group raw `(reference, closing)` pairs into normalized hoisted
 /// refs. Closing intent wins per issue; first-seen order preserved.
 fn group_and_normalize(raws: &[RawRef]) -> Vec<HoistedRef> {
@@ -290,16 +331,39 @@ fn group_and_normalize(raws: &[RawRef]) -> Vec<HoistedRef> {
         .collect()
 }
 
-/// Render the managed block body (the lines between the fence
+/// Render the fenced reference lines (the content between the fence
 /// markers), or `None` when there are no references to hoist.
+///
+/// References only — co-authors are rendered separately, *after* the
+/// close fence, so they remain the contiguous trailing block GitHub
+/// needs to parse `Co-Authored-By:` trailers on squash (a fence line
+/// after them would break trailer detection). See [`reconcile_body`].
 ///
 /// `ai_body` is the current PR description; a reference already
 /// present verbatim in it (the AI echoed `Closes SEA-1` into its
 /// prose) is skipped so the block doesn't duplicate it.
-fn render_block_lines(refs: &[HoistedRef], ai_body: &str) -> Option<String> {
+fn render_ref_lines(refs: &[HoistedRef], ai_body: &str) -> Option<String> {
     let lines: Vec<String> = refs
         .iter()
         .map(HoistedRef::render)
+        .filter(|line| !body_already_has(ai_body, line))
+        .collect();
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+/// Render the trailing `Co-Authored-By:` trailer lines, or `None` when
+/// there are none to hoist. These go last in the body (after the
+/// fence) so GitHub parses them as commit-message trailers on squash.
+///
+/// A trailer already present verbatim in `ai_body` is skipped.
+fn render_coauthor_lines(coauthors: &[String], ai_body: &str) -> Option<String> {
+    let lines: Vec<String> = coauthors
+        .iter()
+        .map(|value| format!("Co-Authored-By: {value}"))
         .filter(|line| !body_already_has(ai_body, line))
         .collect();
     if lines.is_empty() {
@@ -318,16 +382,96 @@ fn body_already_has(body: &str, line: &str) -> bool {
     body.lines().any(|l| l.trim() == line)
 }
 
-/// Strip any existing managed block (and the blank line preceding it)
-/// from `body`, returning the AI-owned prose alone. Tolerant of a
-/// missing close marker (truncated block) by cutting to end-of-string
-/// from the open marker.
-fn strip_block(body: &str) -> String {
+/// True if `line` (trimmed) is a `Co-Authored-By:` trailer.
+fn is_coauthor_line(line: &str) -> bool {
+    let t = line.trim();
+    let prefix = "co-authored-by:";
+    t.len() >= prefix.len() && t[..prefix.len()].eq_ignore_ascii_case(prefix)
+}
+
+/// Strip everything jj-gt manages — the fenced reference block AND the
+/// trailing `Co-Authored-By:` trailer run that follows it — from
+/// `body`, returning the AI-owned prose alone. Idempotent: feeding a
+/// previously-reconciled body back in yields the original prose.
+///
+/// The trailing co-author run is peeled first (it's the final
+/// paragraph), then the fence. Tolerant of a missing close marker
+/// (truncated block) by cutting to end-of-string from the open marker.
+/// Strip everything jj-gt manages from `body` and return
+/// `(prose, existing_coauthors)`: the AI-owned prose with the fenced
+/// reference block and the trailing co-author run removed, plus the
+/// co-author *values* (without the `Co-Authored-By:` key) that were in
+/// that trailing run. Idempotent on the prose.
+///
+/// The returned co-author values are unioned back in by
+/// [`reconcile_body`] so a trailer a HUMAN wrote in the PR description
+/// (not present in the commit messages) survives a reconcile that has
+/// no commit-trailer co-authors of its own.
+fn strip_managed(body: &str) -> (String, Vec<String>) {
+    let (without_trailers, existing) = strip_trailing_coauthors(body);
+    (strip_fence(&without_trailers), existing)
+}
+
+/// Remove a trailing paragraph composed solely of `Co-Authored-By:`
+/// lines (and the blank line separating it from what precedes), and
+/// return `(remainder, extracted_values)`. A paragraph with any
+/// non-trailer line is left untouched — we only own a pure trailer
+/// block — and yields an empty value list. Extracted values are the
+/// text after the `Co-Authored-By:` key, in document order.
+fn strip_trailing_coauthors(body: &str) -> (String, Vec<String>) {
+    let trimmed = body.trim_end_matches(['\n', '\r', ' ', '\t']);
+    // Walk lines from the end, collecting a contiguous run of
+    // co-author lines (blank lines within/around the run are skipped).
+    // Stop at the first non-coauthor, non-blank line.
+    let lines: Vec<&str> = trimmed.lines().collect();
+    let mut coauthor_start: Option<usize> = None;
+    let mut i = lines.len();
+    while i > 0 {
+        let line = lines[i - 1];
+        if line.trim().is_empty() {
+            i -= 1;
+            continue;
+        }
+        if is_coauthor_line(line) {
+            coauthor_start = Some(i - 1);
+            i -= 1;
+            continue;
+        }
+        break;
+    }
+    match coauthor_start {
+        None => (body.to_owned(), Vec::new()),
+        Some(start) => {
+            let values: Vec<String> = lines[start..]
+                .iter()
+                .filter(|l| is_coauthor_line(l))
+                .map(|l| coauthor_value(l))
+                .collect();
+            let remainder = lines[..start]
+                .join("\n")
+                .trim_end_matches(['\n', '\r', ' ', '\t'])
+                .to_owned();
+            (remainder, values)
+        }
+    }
+}
+
+/// Extract the value (`Name <email>`) from a `Co-Authored-By:` line,
+/// trimming the key and surrounding whitespace.
+fn coauthor_value(line: &str) -> String {
+    let t = line.trim();
+    match t.find(':') {
+        Some(colon) => t[colon + 1..].trim().to_owned(),
+        None => t.to_owned(),
+    }
+}
+
+/// Remove the fenced managed block (and the blank line preceding it)
+/// from `body`, returning the prose alone.
+fn strip_fence(body: &str) -> String {
     let Some(open) = body.find(BLOCK_OPEN) else {
         return body.to_owned();
     };
-    // Cut from the open marker; trim trailing whitespace/newlines that
-    // separated the prose from the block.
     let before = body[..open].trim_end_matches(['\n', '\r', ' ', '\t']);
     let after = match body[open..].find(BLOCK_CLOSE) {
         Some(rel) => &body[open + rel + BLOCK_CLOSE.len()..],
@@ -341,21 +485,64 @@ fn strip_block(body: &str) -> String {
     }
 }
 
-/// Reconcile the managed block into `body`. Removes any existing block
-/// first (idempotent), then appends a freshly-rendered one at the end
-/// when there are references to hoist. When there are none, returns the
-/// body with any stale block stripped (and nothing appended).
-pub fn reconcile_body(body: &str, refs: &[HoistedRef]) -> String {
-    let prose = strip_block(body);
-    let Some(block_lines) = render_block_lines(refs, &prose) else {
-        return prose;
-    };
-    let prose_trimmed = prose.trim_end_matches(['\n', '\r', ' ', '\t']);
-    if prose_trimmed.is_empty() {
-        format!("{BLOCK_OPEN}\n{block_lines}\n{BLOCK_CLOSE}")
-    } else {
-        format!("{prose_trimmed}\n\n{BLOCK_OPEN}\n{block_lines}\n{BLOCK_CLOSE}")
+/// Union two co-author value lists, deduped case-insensitively by
+/// identity, preserving the order of `existing` first (human / prior
+/// trailers stay put) then any new `hoisted` values not already
+/// present.
+fn union_coauthors(existing: &[String], hoisted: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for value in existing.iter().chain(hoisted.iter()) {
+        if seen.insert(value.to_ascii_lowercase()) {
+            out.push(value.clone());
+        }
     }
+    out
+}
+
+/// Reconcile the managed content into `body`. Strips any existing
+/// managed content first (idempotent), then appends a freshly-rendered
+/// fenced reference block followed by a trailing co-author paragraph,
+/// either of which is omitted when empty.
+///
+/// Co-author trailers already present in the body (human-written, or
+/// from a prior run) are unioned with the `coauthors` hoisted from the
+/// commit messages, so manual attribution is never silently dropped.
+///
+/// Layout, when both are present:
+///
+/// ```text
+/// <prose>
+///
+/// <!-- jj-gt:links -->
+/// Closes SEA-1
+/// <!-- /jj-gt:links -->
+///
+/// Co-Authored-By: seal <…>
+/// ```
+///
+/// The co-author trailers are the final paragraph so GitHub parses
+/// them as commit-message trailers when the PR is squash-merged.
+pub fn reconcile_body(body: &str, refs: &[HoistedRef], coauthors: &[String]) -> String {
+    let (prose, existing_coauthors) = strip_managed(body);
+    let all_coauthors = union_coauthors(&existing_coauthors, coauthors);
+
+    let fence =
+        render_ref_lines(refs, &prose).map(|lines| format!("{BLOCK_OPEN}\n{lines}\n{BLOCK_CLOSE}"));
+    let trailers = render_coauthor_lines(&all_coauthors, &prose);
+
+    let mut sections: Vec<String> = Vec::new();
+    let prose_trimmed = prose.trim_end_matches(['\n', '\r', ' ', '\t']);
+    if !prose_trimmed.is_empty() {
+        sections.push(prose_trimmed.to_owned());
+    }
+    if let Some(fence) = fence {
+        sections.push(fence);
+    }
+    if let Some(trailers) = trailers {
+        sections.push(trailers);
+    }
+    sections.join("\n\n")
 }
 
 #[cfg(test)]
@@ -619,13 +806,13 @@ mod tests {
 
     #[test]
     fn reconcile_into_empty_body() {
-        let out = reconcile_body("", &[issue("SEA-1", true)]);
+        let out = reconcile_body("", &[issue("SEA-1", true)], &[]);
         assert_eq!(out, format!("{BLOCK_OPEN}\nCloses SEA-1\n{BLOCK_CLOSE}"));
     }
 
     #[test]
     fn reconcile_appends_after_prose() {
-        let out = reconcile_body("AI summary of the change.", &[issue("SEA-1", true)]);
+        let out = reconcile_body("AI summary of the change.", &[issue("SEA-1", true)], &[]);
         assert_eq!(
             out,
             format!("AI summary of the change.\n\n{BLOCK_OPEN}\nCloses SEA-1\n{BLOCK_CLOSE}")
@@ -634,17 +821,17 @@ mod tests {
 
     #[test]
     fn reconcile_is_idempotent() {
-        let once = reconcile_body("Prose.", &[issue("SEA-1", true)]);
-        let twice = reconcile_body(&once, &[issue("SEA-1", true)]);
+        let once = reconcile_body("Prose.", &[issue("SEA-1", true)], &[]);
+        let twice = reconcile_body(&once, &[issue("SEA-1", true)], &[]);
         assert_eq!(once, twice);
     }
 
     #[test]
     fn reconcile_updates_existing_block() {
-        let first = reconcile_body("Prose.", &[issue("SEA-1", true)]);
+        let first = reconcile_body("Prose.", &[issue("SEA-1", true)], &[]);
         // A review commit added SEA-2; re-running must reflect both
         // and not duplicate the block.
-        let second = reconcile_body(&first, &[issue("SEA-1", true), issue("SEA-2", false)]);
+        let second = reconcile_body(&first, &[issue("SEA-1", true), issue("SEA-2", false)], &[]);
         assert_eq!(
             second,
             format!("Prose.\n\n{BLOCK_OPEN}\nCloses SEA-1\nRefs SEA-2\n{BLOCK_CLOSE}")
@@ -657,20 +844,20 @@ mod tests {
         // The AI echoed `Closes SEA-1` into its prose; the block must
         // not duplicate it. With only that one ref, no block at all.
         let body = "This change closes the issue.\n\nCloses SEA-1";
-        let out = reconcile_body(body, &[issue("SEA-1", true)]);
+        let out = reconcile_body(body, &[issue("SEA-1", true)], &[]);
         assert_eq!(out, body, "no block should be added");
     }
 
     #[test]
     fn reconcile_no_refs_strips_stale_block() {
         let with_block = format!("Prose.\n\n{BLOCK_OPEN}\nCloses SEA-1\n{BLOCK_CLOSE}");
-        let out = reconcile_body(&with_block, &[]);
+        let out = reconcile_body(&with_block, &[], &[]);
         assert_eq!(out, "Prose.");
     }
 
     #[test]
     fn reconcile_no_refs_empty_body_stays_empty() {
-        assert_eq!(reconcile_body("", &[]), "");
+        assert_eq!(reconcile_body("", &[], &[]), "");
     }
 
     #[test]
@@ -680,10 +867,191 @@ mod tests {
             &[HoistedRef::Verbatim(
                 "https://linear.app/ws/issue/ABC-1/x".into(),
             )],
+            &[],
         );
         assert_eq!(
             out,
             format!("Prose.\n\n{BLOCK_OPEN}\nhttps://linear.app/ws/issue/ABC-1/x\n{BLOCK_CLOSE}")
         );
+    }
+
+    // ---- co-author extraction + hoisting -------------------------
+
+    #[test]
+    fn single_coauthor_extracted() {
+        let out = extract_coauthors(&msgs(&[
+            "feat: thing\n\nCo-Authored-By: seal <noreply@sealedsecurity.com>",
+        ]));
+        assert_eq!(out, vec!["seal <noreply@sealedsecurity.com>".to_owned()]);
+    }
+
+    #[test]
+    fn coauthors_union_deduped_across_commits() {
+        // Same coauthor on N commits collapses to one; a distinct
+        // second coauthor is kept.
+        let out = extract_coauthors(&msgs(&[
+            "a\n\nCo-authored-by: seal <noreply@sealedsecurity.com>",
+            "b\n\nCo-authored-by: seal <noreply@sealedsecurity.com>",
+            "c\n\nCo-authored-by: Jane Dev <jane@example.com>",
+        ]));
+        assert_eq!(
+            out,
+            vec![
+                "seal <noreply@sealedsecurity.com>".to_owned(),
+                "Jane Dev <jane@example.com>".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn coauthor_key_is_case_insensitive_on_dedup() {
+        // GitHub is case-insensitive on the key; dedupe on identity.
+        let out = extract_coauthors(&msgs(&[
+            "a\n\nco-authored-by: Seal <noreply@sealedsecurity.com>",
+            "b\n\nCo-Authored-By: seal <noreply@sealedsecurity.com>",
+        ]));
+        assert_eq!(out.len(), 1, "got {out:?}");
+    }
+
+    #[test]
+    fn no_coauthor_yields_empty() {
+        let out = extract_coauthors(&msgs(&["chore: bump\n\nNo trailer here."]));
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn reconcile_coauthor_after_references() {
+        // Refs stay fenced; co-author trailers render as the final
+        // paragraph AFTER the close fence so they're the trailing
+        // trailer block GitHub parses on squash.
+        let out = reconcile_body(
+            "Prose.",
+            &[issue("SEA-1", true)],
+            &["seal <noreply@sealedsecurity.com>".to_owned()],
+        );
+        assert_eq!(
+            out,
+            format!(
+                "Prose.\n\n{BLOCK_OPEN}\nCloses SEA-1\n{BLOCK_CLOSE}\n\n\
+                 Co-Authored-By: seal <noreply@sealedsecurity.com>"
+            )
+        );
+    }
+
+    #[test]
+    fn reconcile_coauthor_is_last_line() {
+        // The structural guarantee the feature depends on: the very
+        // last line of the body is a Co-Authored-By trailer, NOT the
+        // close fence.
+        let out = reconcile_body(
+            "Prose.",
+            &[issue("SEA-1", true)],
+            &["seal <noreply@sealedsecurity.com>".to_owned()],
+        );
+        let last = out.lines().last().unwrap();
+        assert!(
+            is_coauthor_line(last),
+            "last line must be a co-author trailer, got: {last:?}"
+        );
+    }
+
+    #[test]
+    fn reconcile_coauthor_only_no_references() {
+        // No refs → no fence; co-author trailer is the trailing
+        // paragraph directly after the prose.
+        let out = reconcile_body(
+            "Prose.",
+            &[],
+            &["seal <noreply@sealedsecurity.com>".to_owned()],
+        );
+        assert_eq!(
+            out,
+            "Prose.\n\nCo-Authored-By: seal <noreply@sealedsecurity.com>"
+        );
+    }
+
+    #[test]
+    fn reconcile_coauthor_idempotent() {
+        let coauthors = vec!["seal <noreply@sealedsecurity.com>".to_owned()];
+        let once = reconcile_body("Prose.", &[issue("SEA-1", true)], &coauthors);
+        let twice = reconcile_body(&once, &[issue("SEA-1", true)], &coauthors);
+        assert_eq!(once, twice);
+        assert_eq!(twice.matches(BLOCK_OPEN).count(), 1);
+    }
+
+    #[test]
+    fn reconcile_coauthor_already_present_is_stable() {
+        // A body that already ends in the canonical co-author trailer
+        // round-trips unchanged: strip_managed peels the trailing
+        // trailer run, then it's re-rendered identically. (Idempotency
+        // for the "trailer already there" case.)
+        let body = "Summary.\n\nCo-Authored-By: seal <noreply@sealedsecurity.com>";
+        let out = reconcile_body(body, &[], &["seal <noreply@sealedsecurity.com>".to_owned()]);
+        assert_eq!(out, body);
+    }
+
+    #[test]
+    fn strip_managed_leaves_prose_with_human_trailer_paragraph_alone() {
+        // A trailing paragraph that ISN'T purely co-author lines is
+        // human prose, not managed — strip_managed must not eat it.
+        let body = "Summary.\n\nSee the design doc for details.";
+        let out = reconcile_body(body, &[], &[]);
+        assert_eq!(out, body);
+    }
+
+    #[test]
+    fn human_coauthor_preserved_when_hoist_has_refs_but_no_trailers() {
+        // Greptile P1 regression: user manually added a co-author
+        // trailer; commits carry a ref but NO co-author trailer. The
+        // reconcile (refs present, coauthors empty) must NOT drop the
+        // human's attribution.
+        let body = "My change.\n\nCo-Authored-By: friend <friend@example.com>";
+        let out = reconcile_body(body, &[issue("SEA-42", true)], &[]);
+        assert_eq!(
+            out,
+            format!(
+                "My change.\n\n{BLOCK_OPEN}\nCloses SEA-42\n{BLOCK_CLOSE}\n\n\
+                 Co-Authored-By: friend <friend@example.com>"
+            )
+        );
+    }
+
+    #[test]
+    fn human_and_hoisted_coauthors_unioned() {
+        // A human trailer plus a distinct hoisted trailer: both appear,
+        // human first, deduped.
+        let body = "My change.\n\nCo-Authored-By: friend <friend@example.com>";
+        let out = reconcile_body(body, &[], &["seal <noreply@sealedsecurity.com>".to_owned()]);
+        assert_eq!(
+            out,
+            "My change.\n\n\
+             Co-Authored-By: friend <friend@example.com>\n\
+             Co-Authored-By: seal <noreply@sealedsecurity.com>"
+        );
+    }
+
+    #[test]
+    fn human_coauthor_matching_hoisted_not_duplicated() {
+        // Human wrote the same co-author the hoist would add (different
+        // casing): union dedupes to one, keeping the existing form.
+        let body = "My change.\n\nCo-Authored-By: Seal <noreply@sealedsecurity.com>";
+        let out = reconcile_body(body, &[], &["seal <noreply@sealedsecurity.com>".to_owned()]);
+        assert_eq!(
+            out,
+            "My change.\n\nCo-Authored-By: Seal <noreply@sealedsecurity.com>"
+        );
+    }
+
+    #[test]
+    fn human_coauthor_survives_repeated_reconcile() {
+        // Idempotency with a human trailer in the mix: re-running with
+        // the same inputs must be stable and not lose the human line.
+        let body = "My change.\n\nCo-Authored-By: friend <friend@example.com>";
+        let refs = [issue("SEA-42", true)];
+        let once = reconcile_body(body, &refs, &[]);
+        let twice = reconcile_body(&once, &refs, &[]);
+        assert_eq!(once, twice);
+        assert!(twice.contains("Co-Authored-By: friend <friend@example.com>"));
+        assert_eq!(twice.matches(BLOCK_OPEN).count(), 1);
     }
 }
