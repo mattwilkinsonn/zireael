@@ -1,47 +1,46 @@
 #!/usr/bin/env bash
-# First-boot bootstrap for awsmac (AWS EC2 mac2-m2.metal, Apple M2 —
-# STOPGAP macOS CI runner on a $100 AWS-credit budget).
+# First-boot bootstrap for a sealedsecurity macOS Buildkite runner —
+# shared across the Apple-Silicon fleet (mattmini, dedicatedmacio-mini,
+# awsmac). Takes the hostname + admin user as args (see Usage); the
+# per-host darwin config is selected by the flake attr `.#<hostname>`.
 #
-# Pre-reqs (see darwin/awsmac/INSTALL.md for the full procedure):
-#   - The mac2-m2.metal instance is launched on a dedicated host (24h
-#     min allocation) from a current macOS AMI, and you can SSH in as
-#     `ec2-user` with your EC2 keypair (the AMI wires it up). No OCLP,
-#     no Setup Assistant — the AMI is pre-provisioned.
-#   - The account is `ec2-user` (the AMI default admin) — no account
-#     creation step, unlike the owned-mini hosts. system.nix +
-#     home.nix are pinned to ec2-user.
+# Pre-reqs (see the host's darwin/<hostname>/INSTALL.md for the full,
+# host-specific procedure — EC2 launch, dedicatedmac provisioning, etc.):
+#   - macOS already installed with an admin account you can reach
+#     (the EC2 AMI ships `ec2-user`; the owned/rental minis use a
+#     `mattw` admin created during setup).
 #   - This script is reachable on disk (`gh repo clone` from /tmp once
 #     you're SSH'd in, or scp it over).
 #
 # Step order is deliberately front-loaded with the "get me to a state
 # where I can reach this over Tailscale" steps, so the rest can be
-# debugged over the tailnet rather than the EC2-keypair SSH path:
+# debugged over the tailnet rather than the initial SSH path:
 #
 #   1. Xcode CLT (needed for brew + git)
-#   2. macOS hostname set to `awsmac` (must precede tailscale up
-#      or your tailnet hostname will be `awsmac-local` or similar)
+#   2. macOS hostname (must precede tailscale up or your tailnet
+#      hostname will be `<host>-local` or similar)
 #   3. Homebrew (needed for tailscale, gh)
 #   4. Tailscale install + auth (you can now SSH in and copy-paste)
 #   5. gh install + auth + dotfiles clone
-#   6. Nix
+#   6. Nix (Determinate installer)
 #   7. Buildkite agent token → /etc/buildkite-agent/agent-token
 #   8. darwin-rebuild switch (agents start immediately)
 #   9. Sanity checks
 #
 # Security posture: zero standing 1Password service-account tokens on
-# this host. awsmac runs untrusted CI workflows via the
-# self-hosted Buildkite agent pool, so any SA token on disk is a
-# credential a compromised agent could exfiltrate. The agent token in
-# step 7 is the only secret here, and it's mode-600 root-wheel
-# (consider Keychain-with-restricted-ACL encryption later; macOS has
-# no systemd-creds counterpart).
+# these hosts. They run untrusted CI workflows via the self-hosted
+# Buildkite agent pool, so any SA token on disk is a credential a
+# compromised agent could exfiltrate. The agent token in step 7 is the
+# only secret, mode-600 root-wheel (macOS has no systemd-creds
+# counterpart; the plaintext-at-rest tradeoff is documented per-host).
 #
 # Re-runnable: every step skips if already done.
 #
-# Usage:
-#   bash awsmac-bootstrap.sh
-#   bash awsmac-bootstrap.sh --auth-key tskey-auth-...
-#   TAILSCALE_AUTH_KEY=tskey-auth-... bash awsmac-bootstrap.sh
+# Usage (hostname required; admin user defaults to mattw):
+#   bash macos-runner-bootstrap.sh <hostname> [admin-user] [--auth-key tskey-...]
+#   bash macos-runner-bootstrap.sh awsmac ec2-user --auth-key tskey-auth-...
+#   bash macos-runner-bootstrap.sh mattmini
+#   SEAL_MAC_HOSTNAME=awsmac SEAL_MAC_ADMIN_USER=ec2-user bash macos-runner-bootstrap.sh
 
 set -euo pipefail
 
@@ -65,14 +64,46 @@ ZIREAEL_REPO_SLUG="mattwilkinsonn/zireael"
 NIX_CONFIG_DIR="$HOME/repos/zireael/nix-config"
 SEALED_TOKEN_FILE="/etc/buildkite-agent/agent-token"
 CI_APP_KEY_FILE="/etc/buildkite-agent/ci-app-key.pem"
-TARGET_HOSTNAME="awsmac"
+
+# Per-host knobs. The two that differ across the mac runners are the
+# hostname (drives scutil + the tailnet name + the flake attr) and the
+# admin user the trusted-users line names. Provide them as the first two
+# positional args OR via the SEAL_MAC_HOSTNAME / SEAL_MAC_ADMIN_USER env
+# vars; admin user defaults to `mattw` (the owned/rental minis), which
+# awsmac overrides to `ec2-user`. `--auth-key <key>` / `--auth-key=<key>`
+# is still accepted for Tailscale and is filtered out before positional
+# parsing — both the flag and its value-argument are skipped explicitly
+# (matching parse_tailscale_auth_key's dual-form support), so a key that
+# doesn't start with `tskey-` can't fall through and clobber ADMIN_USER.
+TARGET_HOSTNAME="${SEAL_MAC_HOSTNAME:-}"
+ADMIN_USER="${SEAL_MAC_ADMIN_USER:-mattw}"
+_pos=0
+_skip_next=0
+for _arg in "$@"; do
+	if [ "$_skip_next" -eq 1 ]; then
+		_skip_next=0 # this is the value of a preceding `--auth-key`
+		continue
+	fi
+	case "$_arg" in
+	--auth-key) _skip_next=1 ;; # `--auth-key <key>` — skip the next arg too
+	--auth-key=*) ;;            # `--auth-key=<key>` — value is in this token
+	*)
+		_pos=$((_pos + 1))
+		case "$_pos" in
+		1) TARGET_HOSTNAME="$_arg" ;;
+		2) ADMIN_USER="$_arg" ;;
+		esac
+		;;
+	esac
+done
+[ -n "$TARGET_HOSTNAME" ] || err "hostname required: pass as arg 1 or SEAL_MAC_HOSTNAME (e.g. awsmac / mattmini / dedicatedmacio-mini)"
 TS_HOSTNAME="${TARGET_HOSTNAME}.tail08a5c5.ts.net"
 
 require_non_root
 parse_tailscale_auth_key "$@"
-require_hostname awsmac
+require_hostname "$TARGET_HOSTNAME"
 
-echo "Bootstrapping host: $(hostname)"
+echo "Bootstrapping host: $(hostname) (admin user: $ADMIN_USER)"
 echo
 
 # ---------------------------------------------------------------------
@@ -107,7 +138,7 @@ fi
 # 2. macOS hostname
 # ---------------------------------------------------------------------
 # Set all three name surfaces before Tailscale registers — otherwise
-# `tailscale up` picks up `awsmac.local` (the LocalHostName /
+# `tailscale up` picks up `${TARGET_HOSTNAME}.local` (the LocalHostName /
 # Bonjour name) or worse, and the tailnet ends up with a wrong name.
 # nix-darwin's networking.hostName/computerName/localHostName will
 # re-apply these declaratively later; doing it now is just so the
@@ -258,7 +289,7 @@ cat <<EOF
 Tailscale is up.
 
 From your laptop you can now SSH in instead of using the console:
-    ssh ec2-user@${TS_HOSTNAME}
+    ssh ${ADMIN_USER}@${TS_HOSTNAME}
 
 Continuing with the rest of the bootstrap. If anything below fails,
 you can re-run this script over SSH from your laptop — every step
@@ -313,15 +344,15 @@ fi
 # `nix.enable = false`, nix-darwin does NOT write these — so they live
 # here, mirroring flake.nix's nixConfig (garnix + nixos-raspberrypi
 # caches) + the MBP's mac-setup.sh pattern:
-#   - trusted-users: ec2-user must be trusted or flake-declared
+#   - trusted-users: the admin user must be trusted or flake-declared
 #     `extra-substituters` are silently ignored ("not a trusted user").
 #   - the substituter + trusted-key pair so the binary caches are
 #     honored outside a flake context too.
 #   - accept-flake-config: auto-trust the flake's nixConfig block.
 if ! grep -q '^trusted-users' /etc/nix/nix.custom.conf 2>/dev/null; then
 	echo "  configuring /etc/nix/nix.custom.conf (trust + caches)"
-	sudo tee -a /etc/nix/nix.custom.conf >/dev/null <<'EOF'
-trusted-users = root ec2-user
+	sudo tee -a /etc/nix/nix.custom.conf >/dev/null <<EOF
+trusted-users = root ${ADMIN_USER}
 accept-flake-config = true
 extra-substituters = https://nixos-raspberrypi.cachix.org https://cache.garnix.io
 extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g=
@@ -334,7 +365,7 @@ fi
 # 7. Buildkite agent token → /etc/buildkite-agent/agent-token
 # ---------------------------------------------------------------------
 # Must exist BEFORE darwin-rebuild because the agent launchd daemons
-# read it at launch (see darwin/awsmac/system.nix). The decrypt-
+# read it at launch (see darwin/modules/buildkite-agent-macos.nix). The decrypt-
 # agent-token daemon stages it from this root-owned source into
 # /var/run/buildkite-agent/agent-token on each boot. Without the file,
 # `darwin-rebuild` lays down the daemons but they fail to register.
@@ -418,13 +449,13 @@ echo "  owner: root:wheel mode 600 (re-staged by decrypt-ci-app-key)"
 # darwin-rebuild from the user nix profile.
 if ! command -v darwin-rebuild >/dev/null 2>&1; then
 	step "First-time nix-darwin bootstrap"
-	echo "  nix run nix-darwin -- switch --flake .#awsmac"
+	echo "  nix run nix-darwin -- switch --flake .#${TARGET_HOSTNAME}"
 	sudo HOME="$HOME" nix run --extra-experimental-features 'nix-command flakes' \
-		nix-darwin -- switch --flake "$NIX_CONFIG_DIR#awsmac" --show-trace
+		nix-darwin -- switch --flake "$NIX_CONFIG_DIR#${TARGET_HOSTNAME}" --show-trace
 else
-	step "darwin-rebuild switch --flake .#awsmac"
+	step "darwin-rebuild switch --flake .#${TARGET_HOSTNAME}"
 	sudo HOME="$HOME" darwin-rebuild switch \
-		--flake "$NIX_CONFIG_DIR#awsmac" \
+		--flake "$NIX_CONFIG_DIR#${TARGET_HOSTNAME}" \
 		--show-trace
 fi
 
@@ -481,7 +512,7 @@ fi
 
 echo "[glances]"
 if sudo launchctl list 2>/dev/null | grep -q com.sealedsecurity.glances; then
-	echo "  glances: loaded (reachable at https://awsmac.tail08a5c5.ts.net:9443/)"
+	echo "  glances: loaded (reachable at https://${TARGET_HOSTNAME}.tail08a5c5.ts.net:9443/)"
 else
 	warn "  glances launchd daemon not loaded"
 fi
@@ -495,8 +526,8 @@ echo "[secrets-hygiene]"
 # something added later might re-introduce one.
 #
 # Three places an agent-reachable SA could lurk:
-#   1. ec2-user's Keychain entry "OP_SERVICE_ACCOUNT_TOKEN" — still
-#      under ec2-user's UID-scoped ACL by default, so the _buildkite-agent
+#   1. the admin user's Keychain entry "OP_SERVICE_ACCOUNT_TOKEN" — still
+#      under that user's UID-scoped ACL by default, so the _buildkite-agent
 #      process can't read it, BUT if something ever called
 #      `security add-generic-password -T ""` (empty trusted-apps
 #      list) it'd be world-readable on the user keychain. Probe.
@@ -507,7 +538,7 @@ echo "[secrets-hygiene]"
 hits=0
 if security find-generic-password -a "$USER" -s OP_SERVICE_ACCOUNT_TOKEN \
 	-w >/dev/null 2>&1; then
-	warn "  ec2-user keychain still has OP_SERVICE_ACCOUNT_TOKEN — delete with:"
+	warn "  $USER keychain still has OP_SERVICE_ACCOUNT_TOKEN — delete with:"
 	warn "    security delete-generic-password -a \"$USER\" -s OP_SERVICE_ACCOUNT_TOKEN"
 	hits=$((hits + 1))
 fi
