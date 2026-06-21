@@ -64,6 +64,7 @@ machine I use:
 | --- | --- | --- | --- |
 | Matts-MacBook-Pro | aarch64 darwin | Primary dev box | `darwinConfigurations.Matts-MacBook-Pro` |
 | mattmini | aarch64 darwin (M2 Pro Mac mini) | Native macOS CI runner (Buildkite) | `darwinConfigurations.mattmini` |
+| awsmac | aarch64 darwin (EC2 mac2-m2.metal) | Stopgap macOS CI runner (Buildkite, AWS EC2) | `darwinConfigurations.awsmac` |
 | mattfw | x86_64 NixOS (Framework Desktop) | Secondary dev box + local-LLM target | `nixosConfigurations.mattfw` |
 | mattserver | x86_64 NixOS | ZFS backup target + actions runners + gaming | `nixosConfigurations.mattserver` |
 | mattlinuxpro | x86_64 NixOS (Mac Pro 2013) | Self-hosted Buildkite CI runner | `nixosConfigurations.mattlinuxpro` |
