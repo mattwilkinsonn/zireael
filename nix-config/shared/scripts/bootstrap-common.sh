@@ -145,6 +145,30 @@ parse_mac_runner_args() {
 	export TARGET_HOSTNAME ADMIN_USER TAILSCALE_AUTH_KEY
 }
 
+# ---- platform detection ----------------------------------------------
+
+# True only on an EC2 instance. Probes the instance-metadata service
+# (IMDSv2 — token-gated; IMDSv1 is disabled on current AMIs). On a
+# non-EC2 host the link-local 169.254.169.254 probe fails or times out
+# within ~2s and we return non-zero, so the owned/rental minis fall
+# through to the normal install path. Network I/O — not unit-tested.
+is_ec2_mac() {
+	local token
+	# -f so a non-2xx (e.g. a corp proxy / VPN / hypervisor answering at
+	# 169.254.169.254 on a non-EC2 box) is a curl failure, not a 0-exit
+	# with an error body captured as the token. Without it, is_ec2_mac
+	# false-positives and Nix installs with --use-ec2-instance-store on a
+	# host that has no instance store.
+	token=$(curl -sf --max-time 2 -X PUT \
+		"http://169.254.169.254/latest/api/token" \
+		-H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null) || return 1
+	[ -n "$token" ] || return 1
+	curl -sf --max-time 2 \
+		-H "X-aws-ec2-metadata-token: $token" \
+		"http://169.254.169.254/latest/meta-data/instance-id" \
+		>/dev/null 2>&1
+}
+
 # ---- tailscale -------------------------------------------------------
 
 # Bring tailscale up if it isn't already. Optional second arg is extra

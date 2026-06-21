@@ -463,16 +463,6 @@ in
     # mac-setup.sh). They mirror flake.nix's nixConfig so the garnix +
     # nixos-raspberrypi caches are honored.
 
-    # Same direnv check-phase skip the MBP needs on aarch64-darwin's
-    # 25.11 — the fish test runner SIGKILLs inside the build sandbox.
-    nixpkgs.overlays = [
-      (_: prev: {
-        direnv = prev.direnv.overrideAttrs (_: {
-          doCheck = false;
-        });
-      })
-    ];
-
     # ============================================================
     # System packages
     # ============================================================
