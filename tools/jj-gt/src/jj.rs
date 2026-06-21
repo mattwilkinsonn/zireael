@@ -473,6 +473,36 @@ pub fn resolve_commit_id(jj: &JjCli, revset: &str) -> Result<String> {
     Ok(trimmed.to_owned())
 }
 
+/// Read the full commit messages (subject + body) for every commit in
+/// the half-open range `<parent>..<bookmark>` — the bookmark's own
+/// delta, excluding ancestors already on its parent. Used by the
+/// link-hoisting step to scan for magic-word references.
+///
+/// Descriptions are NUL-delimited in the template so multi-line bodies
+/// survive the split; the trailing empty field (jj emits a delimiter
+/// after the last commit) is dropped.
+pub fn commit_messages_in_range(jj: &JjCli, parent: &str, bookmark: &str) -> Result<Vec<String>> {
+    let revset = format!("{parent}..{bookmark}");
+    let out = jj_run(
+        jj,
+        &[
+            "log",
+            "--no-graph",
+            "-r",
+            &revset,
+            "-T",
+            r#"description ++ "\0""#,
+            "--ignore-working-copy",
+        ],
+    )?;
+    Ok(out
+        .split('\0')
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
 /// `jj edit <change_id>`. Restores `@` to a previously-recorded
 /// change id.
 pub fn edit_change(jj: &JjCli, change_id: &str) -> Result<()> {

@@ -412,6 +412,15 @@ pub struct SubmitArgs {
     #[arg(short = 'C', long)]
     pub confirm: bool,
 
+    /// Don't hoist magic-word issue references (`Closes SEA-1`,
+    /// `Refs #42`, …) from the bookmark's commit messages into the PR
+    /// description. By default jj-gt scans each submitted bookmark's
+    /// commit range and reconciles a managed block of `Closes`/`Refs`
+    /// lines into the PR body, so the squash-merge commit carries the
+    /// references the tracker needs to link/close issues on merge.
+    #[arg(long)]
+    pub no_links: bool,
+
     /// Append this arg to `gt submit` verbatim. Repeat for multiple.
     #[arg(long = "gt-arg", action = clap::ArgAction::Append)]
     pub gt_arg: Vec<String>,

@@ -51,6 +51,18 @@ means a few opinionated defaults you might want to opt out of:
 - Pre-push hooks run per-bookmark in parallel by default. Opt out
   with `--hooks-sequential` (one bookmark at a time) or
   `--hooks-tip-only` (only run hooks for the tip).
+- **Issue-reference hoisting is on by default.** After `gt submit`,
+  jj-gt scans each bookmark's commit range for magic-word references
+  (`Closes SEA-1`, `Fixes #42`, `Refs DES-9`, …) and reconciles them
+  into a machine-managed, HTML-comment-fenced block at the end of the
+  PR description — one normalized `Closes`/`Refs` line per issue,
+  closing intent winning when any commit closed it. This matters
+  because a Graphite squash-merge sets the merge-commit body to the
+  PR title + description, and `--ai` is non-deterministic about
+  keeping references; without the hoist, issues strand un-linked on
+  merge. The block is regenerated every submit (a review-cycle commit
+  that adds a reference gets picked up automatically) and is
+  idempotent. Opt out with `--no-links`.
 - Both `jj-gt submit` and `jj-gt fetch` auto-shelter any pending
   working-copy edits via `jj new @` before doing anything. After
   the shelter, the user's edits are committed against the *old*
