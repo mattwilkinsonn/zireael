@@ -331,32 +331,41 @@ fn group_and_normalize(raws: &[RawRef]) -> Vec<HoistedRef> {
         .collect()
 }
 
-/// Render the managed block body (the lines between the fence
-/// markers), or `None` when there's nothing to hoist.
+/// Render the fenced reference lines (the content between the fence
+/// markers), or `None` when there are no references to hoist.
 ///
-/// Magic-word reference lines come first, then `Co-authored-by:`
-/// trailer lines last. Coauthors must be the contiguous trailing
-/// lines of the eventual squash body for GitHub to parse them as
-/// commit trailers, and the managed block already sits at the end of
-/// the description — so emitting them last inside the block satisfies
-/// that.
+/// References only — co-authors are rendered separately, *after* the
+/// close fence, so they remain the contiguous trailing block GitHub
+/// needs to parse `Co-Authored-By:` trailers on squash (a fence line
+/// after them would break trailer detection). See [`reconcile_body`].
 ///
-/// `ai_body` is the current PR description; a reference or trailer
-/// already present verbatim in it (the AI echoed `Closes SEA-1`, or a
-/// trailer survived from a prior run's prose) is skipped so the block
-/// doesn't duplicate it.
-fn render_block_lines(refs: &[HoistedRef], coauthors: &[String], ai_body: &str) -> Option<String> {
-    let mut lines: Vec<String> = refs
+/// `ai_body` is the current PR description; a reference already
+/// present verbatim in it (the AI echoed `Closes SEA-1` into its
+/// prose) is skipped so the block doesn't duplicate it.
+fn render_ref_lines(refs: &[HoistedRef], ai_body: &str) -> Option<String> {
+    let lines: Vec<String> = refs
         .iter()
         .map(HoistedRef::render)
         .filter(|line| !body_already_has(ai_body, line))
         .collect();
-    for value in coauthors {
-        let line = format!("Co-Authored-By: {value}");
-        if !body_already_has(ai_body, &line) {
-            lines.push(line);
-        }
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
     }
+}
+
+/// Render the trailing `Co-Authored-By:` trailer lines, or `None` when
+/// there are none to hoist. These go last in the body (after the
+/// fence) so GitHub parses them as commit-message trailers on squash.
+///
+/// A trailer already present verbatim in `ai_body` is skipped.
+fn render_coauthor_lines(coauthors: &[String], ai_body: &str) -> Option<String> {
+    let lines: Vec<String> = coauthors
+        .iter()
+        .map(|value| format!("Co-Authored-By: {value}"))
+        .filter(|line| !body_already_has(ai_body, line))
+        .collect();
     if lines.is_empty() {
         None
     } else {
@@ -373,16 +382,66 @@ fn body_already_has(body: &str, line: &str) -> bool {
     body.lines().any(|l| l.trim() == line)
 }
 
-/// Strip any existing managed block (and the blank line preceding it)
-/// from `body`, returning the AI-owned prose alone. Tolerant of a
-/// missing close marker (truncated block) by cutting to end-of-string
-/// from the open marker.
-fn strip_block(body: &str) -> String {
+/// True if `line` (trimmed) is a `Co-Authored-By:` trailer.
+fn is_coauthor_line(line: &str) -> bool {
+    let t = line.trim();
+    let prefix = "co-authored-by:";
+    t.len() >= prefix.len() && t[..prefix.len()].eq_ignore_ascii_case(prefix)
+}
+
+/// Strip everything jj-gt manages — the fenced reference block AND the
+/// trailing `Co-Authored-By:` trailer run that follows it — from
+/// `body`, returning the AI-owned prose alone. Idempotent: feeding a
+/// previously-reconciled body back in yields the original prose.
+///
+/// The trailing co-author run is peeled first (it's the final
+/// paragraph), then the fence. Tolerant of a missing close marker
+/// (truncated block) by cutting to end-of-string from the open marker.
+fn strip_managed(body: &str) -> String {
+    let without_trailers = strip_trailing_coauthors(body);
+    strip_fence(&without_trailers)
+}
+
+/// Remove a trailing paragraph composed solely of `Co-Authored-By:`
+/// lines (and the blank line separating it from what precedes). A
+/// paragraph with any non-trailer line is left untouched — we only own
+/// a pure trailer block.
+fn strip_trailing_coauthors(body: &str) -> String {
+    let trimmed = body.trim_end_matches(['\n', '\r', ' ', '\t']);
+    // Walk lines from the end, collecting a contiguous run of
+    // co-author lines (blank lines within/around the run are skipped).
+    // Stop at the first non-coauthor, non-blank line.
+    let lines: Vec<&str> = trimmed.lines().collect();
+    let mut coauthor_start: Option<usize> = None;
+    let mut i = lines.len();
+    while i > 0 {
+        let line = lines[i - 1];
+        if line.trim().is_empty() {
+            i -= 1;
+            continue;
+        }
+        if is_coauthor_line(line) {
+            coauthor_start = Some(i - 1);
+            i -= 1;
+            continue;
+        }
+        break;
+    }
+    match coauthor_start {
+        None => body.to_owned(),
+        Some(start) => lines[..start]
+            .join("\n")
+            .trim_end_matches(['\n', '\r', ' ', '\t'])
+            .to_owned(),
+    }
+}
+
+/// Remove the fenced managed block (and the blank line preceding it)
+/// from `body`, returning the prose alone.
+fn strip_fence(body: &str) -> String {
     let Some(open) = body.find(BLOCK_OPEN) else {
         return body.to_owned();
     };
-    // Cut from the open marker; trim trailing whitespace/newlines that
-    // separated the prose from the block.
     let before = body[..open].trim_end_matches(['\n', '\r', ' ', '\t']);
     let after = match body[open..].find(BLOCK_CLOSE) {
         Some(rel) => &body[open + rel + BLOCK_CLOSE.len()..],
@@ -396,22 +455,43 @@ fn strip_block(body: &str) -> String {
     }
 }
 
-/// Reconcile the managed block into `body`. Removes any existing block
-/// first (idempotent), then appends a freshly-rendered one at the end
-/// when there's something to hoist (references and/or co-authors).
-/// When there's nothing, returns the body with any stale block
-/// stripped (and nothing appended).
+/// Reconcile the managed content into `body`. Strips any existing
+/// managed content first (idempotent), then appends a freshly-rendered
+/// fenced reference block followed by a trailing co-author paragraph,
+/// either of which is omitted when empty.
+///
+/// Layout, when both are present:
+///
+/// ```text
+/// <prose>
+///
+/// <!-- jj-gt:links -->
+/// Closes SEA-1
+/// <!-- /jj-gt:links -->
+///
+/// Co-Authored-By: seal <…>
+/// ```
+///
+/// The co-author trailers are the final paragraph so GitHub parses
+/// them as commit-message trailers when the PR is squash-merged.
 pub fn reconcile_body(body: &str, refs: &[HoistedRef], coauthors: &[String]) -> String {
-    let prose = strip_block(body);
-    let Some(block_lines) = render_block_lines(refs, coauthors, &prose) else {
-        return prose;
-    };
+    let prose = strip_managed(body);
+    let fence =
+        render_ref_lines(refs, &prose).map(|lines| format!("{BLOCK_OPEN}\n{lines}\n{BLOCK_CLOSE}"));
+    let trailers = render_coauthor_lines(coauthors, &prose);
+
+    let mut sections: Vec<String> = Vec::new();
     let prose_trimmed = prose.trim_end_matches(['\n', '\r', ' ', '\t']);
-    if prose_trimmed.is_empty() {
-        format!("{BLOCK_OPEN}\n{block_lines}\n{BLOCK_CLOSE}")
-    } else {
-        format!("{prose_trimmed}\n\n{BLOCK_OPEN}\n{block_lines}\n{BLOCK_CLOSE}")
+    if !prose_trimmed.is_empty() {
+        sections.push(prose_trimmed.to_owned());
     }
+    if let Some(fence) = fence {
+        sections.push(fence);
+    }
+    if let Some(trailers) = trailers {
+        sections.push(trailers);
+    }
+    sections.join("\n\n")
 }
 
 #[cfg(test)]
@@ -790,7 +870,9 @@ mod tests {
 
     #[test]
     fn reconcile_coauthor_after_references() {
-        // Coauthor lines render last (trailing block for GitHub).
+        // Refs stay fenced; co-author trailers render as the final
+        // paragraph AFTER the close fence so they're the trailing
+        // trailer block GitHub parses on squash.
         let out = reconcile_body(
             "Prose.",
             &[issue("SEA-1", true)],
@@ -799,14 +881,33 @@ mod tests {
         assert_eq!(
             out,
             format!(
-                "Prose.\n\n{BLOCK_OPEN}\nCloses SEA-1\n\
-                 Co-Authored-By: seal <noreply@sealedsecurity.com>\n{BLOCK_CLOSE}"
+                "Prose.\n\n{BLOCK_OPEN}\nCloses SEA-1\n{BLOCK_CLOSE}\n\n\
+                 Co-Authored-By: seal <noreply@sealedsecurity.com>"
             )
         );
     }
 
     #[test]
+    fn reconcile_coauthor_is_last_line() {
+        // The structural guarantee the feature depends on: the very
+        // last line of the body is a Co-Authored-By trailer, NOT the
+        // close fence.
+        let out = reconcile_body(
+            "Prose.",
+            &[issue("SEA-1", true)],
+            &["seal <noreply@sealedsecurity.com>".to_owned()],
+        );
+        let last = out.lines().last().unwrap();
+        assert!(
+            is_coauthor_line(last),
+            "last line must be a co-author trailer, got: {last:?}"
+        );
+    }
+
+    #[test]
     fn reconcile_coauthor_only_no_references() {
+        // No refs → no fence; co-author trailer is the trailing
+        // paragraph directly after the prose.
         let out = reconcile_body(
             "Prose.",
             &[],
@@ -814,10 +915,7 @@ mod tests {
         );
         assert_eq!(
             out,
-            format!(
-                "Prose.\n\n{BLOCK_OPEN}\n\
-                 Co-Authored-By: seal <noreply@sealedsecurity.com>\n{BLOCK_CLOSE}"
-            )
+            "Prose.\n\nCo-Authored-By: seal <noreply@sealedsecurity.com>"
         );
     }
 
@@ -831,13 +929,22 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_skips_coauthor_already_in_prose() {
-        // A coauthor trailer already echoed into the prose isn't
-        // duplicated; with nothing else to hoist, no block is added.
-        // The prose uses the same canonical casing the hoist renders
-        // (`body_already_has` is exact-match, so casing must align).
+    fn reconcile_coauthor_already_present_is_stable() {
+        // A body that already ends in the canonical co-author trailer
+        // round-trips unchanged: strip_managed peels the trailing
+        // trailer run, then it's re-rendered identically. (Idempotency
+        // for the "trailer already there" case.)
         let body = "Summary.\n\nCo-Authored-By: seal <noreply@sealedsecurity.com>";
         let out = reconcile_body(body, &[], &["seal <noreply@sealedsecurity.com>".to_owned()]);
+        assert_eq!(out, body);
+    }
+
+    #[test]
+    fn strip_managed_leaves_prose_with_human_trailer_paragraph_alone() {
+        // A trailing paragraph that ISN'T purely co-author lines is
+        // human prose, not managed — strip_managed must not eat it.
+        let body = "Summary.\n\nSee the design doc for details.";
+        let out = reconcile_body(body, &[], &[]);
         assert_eq!(out, body);
     }
 }

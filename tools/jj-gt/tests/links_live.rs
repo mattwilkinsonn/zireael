@@ -225,6 +225,19 @@ fn submit_hoists_magic_word_references_into_pr_body() {
         body.contains("Co-Authored-By: seal <noreply@sealedsecurity.com>"),
         "PR body missing the hoisted co-author trailer:\n{body}"
     );
+    // The fix this guards: the co-author trailer must be the final
+    // line of the body (after the close fence), so GitHub records
+    // co-authorship on the squash commit.
+    assert!(
+        body.trim_end()
+            .lines()
+            .last()
+            .unwrap()
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("co-authored-by:"),
+        "co-author trailer must be the LAST line for GitHub to parse it:\n{body}"
+    );
 
     // Add a third commit naming a new issue with a closing word; the
     // bookmark advances. Re-run the hoist and assert the block now
