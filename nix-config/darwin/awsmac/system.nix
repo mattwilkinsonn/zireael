@@ -24,6 +24,6 @@
     enable = true;
     hostName = "awsmac";
     adminUser = "ec2-user";
-    cargoBuildJobs = "4";
+    cargoBuildJobs = 4;
   };
 }

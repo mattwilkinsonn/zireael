@@ -265,7 +265,7 @@ let
     # parallel codegen stays on the P-cores. Set per-host via
     # cfg.cargoBuildJobs (M2 Pro mattmini = 6; base M4 mini + mac2-m2
     # EC2 = 4). VERIFY ON BOX: `sysctl -n hw.perflevel0.physicalcpu`.
-    CARGO_BUILD_JOBS = cfg.cargoBuildJobs;
+    CARGO_BUILD_JOBS = toString cfg.cargoBuildJobs;
 
     # sccache wiring. Agent-level RUSTC_WRAPPER means cargo uses
     # sccache automatically without per-workflow opt-in. With a single
@@ -370,13 +370,13 @@ in
     };
 
     cargoBuildJobs = lib.mkOption {
-      type = lib.types.str;
-      default = "4";
+      type = lib.types.ints.positive;
+      default = 4;
       description = ''
         CARGO_BUILD_JOBS for the agent — set to the host's
         performance-core count so heavy codegen stays on the P-cores.
-        Default "4" (base M4 mini / mac2-m2 EC2); the M2 Pro mattmini
-        overrides to "6". Verify on the box with
+        Default 4 (base M4 mini / mac2-m2 EC2); the M2 Pro mattmini
+        overrides to 6. Verify on the box with
         `sysctl -n hw.perflevel0.physicalcpu`.
       '';
     };
@@ -825,7 +825,7 @@ in
     '';
 
     # Loader daemon — runs at boot, calls `pfctl -ef` to enable pf
-    # and load our ruleset. `-E` increments pf's enable refcount;
+    # and load our ruleset. `-e` enables pf (stateless, no refcount);
     # `-f` loads the ruleset (replacing whatever's active, which
     # post-bootstrap is either nothing or Apple's empty default).
     #
