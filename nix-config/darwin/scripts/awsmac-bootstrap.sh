@@ -239,7 +239,7 @@ else
 	if [ -z "${TAILSCALE_AUTH_KEY:-}" ]; then
 		echo "  Generate a pre-auth key at:"
 		echo "    https://login.tailscale.com/admin/settings/keys"
-		echo "  Single-use, tagged 'tag:ci-runner'. Paste below (input hidden):"
+		echo "  Single-use, tagged 'tag:server'. Paste below (input hidden):"
 		read -r -s TAILSCALE_AUTH_KEY
 		echo
 	fi
