@@ -435,14 +435,13 @@ else
 fi
 
 echo "[buildkite-agents]"
-for svc in com.sealedsecurity.buildkite-agent-sealed-macos \
-	com.sealedsecurity.buildkite-agent-sealed-macos-2; do
-	if sudo launchctl list 2>/dev/null | grep -q "$svc"; then
-		echo "  $svc: loaded"
-	else
-		warn "  $svc: not loaded"
-	fi
-done
+# Single agent on this box (system.nix declares only sealed-macos).
+svc="com.sealedsecurity.buildkite-agent-sealed-macos"
+if sudo launchctl list 2>/dev/null | grep -q "$svc"; then
+	echo "  $svc: loaded"
+else
+	warn "  $svc: not loaded"
+fi
 
 echo "[glances]"
 if sudo launchctl list 2>/dev/null | grep -q com.sealedsecurity.glances; then
