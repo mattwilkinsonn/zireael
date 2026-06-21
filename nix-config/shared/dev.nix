@@ -37,14 +37,11 @@
       cargo-binstall # install prebuilt crate binaries when nixpkgs lacks them
       cargo-update # cargo install-update
       sccache # compiler cache (referenced by RUSTC_WRAPPER below)
-      # zig — used as the cross C/C++ compiler + linker for Rust crates
-      # whose build scripts compile C/asm (ring, etc.) when targeting a
-      # different OS. `zig cc -target aarch64-macos` bundles the macOS
-      # libc headers, so `just clippy-macos-target` (cross-target clippy
-      # that lints `#[cfg(target_os = "macos")]` code from Linux —
-      # SEA-840) can run ring's build script on a Linux host with no
-      # Apple SDK. Same toolchain the seal-ci image installs; kept here
-      # so the local `just ci` macOS-clippy step works on dev boxes too.
+      # zig — toolchain + drop-in cross C/C++ compiler (`zig cc`). Used
+      # to cross-compile Rust crates' C/asm build scripts (ring, etc.)
+      # for other targets without that platform's SDK — e.g. the
+      # macOS-target clippy run on Linux (SEA-840). Kept cross-platform
+      # so macOS dev boxes can cross-compile too if needed.
       zig
       starship-jj # jj VCS status for the starship prompt (via nixpkgs-unstable overlay)
 
