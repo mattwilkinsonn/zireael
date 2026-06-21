@@ -407,6 +407,18 @@
       # at this cap. Revisit if the R2 bucket grows materially.
       maxmemory = "40gb";
       maxmemory-policy = "allkeys-lru";
+      # Disable Redis protected-mode. With protected-mode on (the
+      # default) Redis refuses every non-loopback connection unless a
+      # password is set — so even though it binds 0.0.0.0, the CI
+      # containers dialing the tailscale IP (100.91.42.76) get
+      # "DENIED ... only accepted from the loopback interface" and
+      # sccache reads it as "remote service unreachable". The access
+      # boundary here is deliberately the host firewall + tailnet ACL
+      # (tailscale0-only inbound, tag:ci-runner/tag:dev grant — see the
+      # bind comment above), not a Redis password, so protected-mode is
+      # the wrong layer and has to be off.
+      # SEA-843.
+      "protected-mode" = false;
     };
   };
 
