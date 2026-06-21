@@ -408,47 +408,27 @@ in
   # Nix
   # ============================================================
 
-  # The upstream nixos.org installer drops org.nixos.nix-daemon as a
-  # launchd daemon. Setting `nix.enable = true` lets nix-darwin
-  # manage that same plist declaratively — it'll regenerate it on
-  # every darwin-rebuild and the installer-provisioned version gets
-  # replaced.
-  #
-  # This diverges from the MBP (`nix.enable = false`) because the MBP
-  # runs Determinate Nix which has its own daemon-management model
-  # where letting nix-darwin take over would conflict. The mini uses
-  # the standard nixos.org daemon, so nix-darwin manages the plist.
-  nix.enable = true;
+  # Determinate Nix manages the daemon — same model as the MBP
+  # (`nix.enable = false`). The EC2 macOS AMI is the reason: the
+  # upstream nixos.org installer's launchd daemon crash-loops on the
+  # AMI because dyld's library-validation refuses to load /nix/store
+  # dylibs into a hardened launchd-spawned process when /nix isn't a
+  # firmlink-blessed mount (the AMI ships /nix as a plain APFS volume
+  # with no /etc/synthetic.conf, so a manual `nix-daemon` works but the
+  # launchd one fails with "file system sandbox blocked open()" /
+  # OS_REASON_DYLD). Determinate's installer sets the volume + firmlink
+  # + daemon up as one coherent, reboot-surviving unit that doesn't trip
+  # that validation. nix-darwin must NOT manage the daemon plist on top
+  # of Determinate's, so disable it here.
+  nix.enable = false;
 
-  # Trusted users — needed for the cachix substituters declared in
-  # flake.nix's `nixConfig.extra-substituters` (cache.garnix.io,
-  # nixos-raspberrypi.cachix.org) to be honored. The system root and
-  # any admin-group member can also build privileged derivations
-  # (e.g. nix-darwin activation). Without `ec2-user` in this list, the
-  # nix-daemon ignores the flake's substituter declarations and
-  # treats every `nix build` as if those caches don't exist,
-  # forcing source builds.
-  nix.settings.trusted-users = [
-    "root"
-    "@admin"
-    "ec2-user"
-  ];
-
-  # Flake-level binary caches. Declared here in addition to
-  # flake.nix's nixConfig so they survive being invoked outside a
-  # flake context (e.g. `nix-build`, plain `nix-shell`). Matches the
-  # contents of nixConfig.extra-substituters / extra-trusted-public-keys
-  # so substituter trust is uniform across invocation paths.
-  nix.settings.substituters = [
-    "https://cache.nixos.org"
-    "https://nixos-raspberrypi.cachix.org"
-    "https://cache.garnix.io"
-  ];
-  nix.settings.trusted-public-keys = [
-    "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
-    "nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI="
-    "cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g="
-  ];
+  # No nix.settings.* here: with `nix.enable = false`, nix-darwin does
+  # not write /etc/nix/nix.conf, so those settings would be silently
+  # ignored. Determinate owns nix.conf; the trusted-users + substituters
+  # + trusted-public-keys go into /etc/nix/nix.custom.conf, written by
+  # the bootstrap script's Nix step (same pattern as the MBP's
+  # mac-setup.sh). They mirror flake.nix's nixConfig so the garnix +
+  # nixos-raspberrypi caches are honored.
 
   # Same direnv check-phase skip the MBP needs on aarch64-darwin's
   # 25.11 — the fish test runner SIGKILLs inside the build sandbox.

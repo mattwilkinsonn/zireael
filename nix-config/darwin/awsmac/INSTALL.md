@@ -87,7 +87,7 @@ for a headless box reached over Tailscale.)
 - [ ] `nix-config` repo pushed (run `config status` to confirm).
 - [ ] Tailscale pre-auth key ready at
       <https://login.tailscale.com/admin/settings/keys>. Single-use,
-      tagged with `tag:ci-runner`. Paste at the bootstrap prompt.
+      tagged with `tag:server`. Paste at the bootstrap prompt.
 - [ ] Buildkite agent token ready (org Agents page → Reveal Agent
       Token) at
       <https://buildkite.com/organizations/sealedsecurity/agents>.
@@ -128,8 +128,13 @@ can drop the SG's inbound-SSH rule):
    `tailscale` — same as Linux.
 5. **gh + dotfiles** — installs `gh`, prompts for `gh auth login`,
    clones your dotfiles into `~` (colocated git+jj at `~/.git`).
-6. **Nix** — upstream nixos.org multi-user installer; nix-darwin then
-   manages the daemon plist declaratively (`nix.enable = true`).
+6. **Nix** — Determinate Systems installer (same as the MBP). The
+   upstream nixos.org installer's launchd daemon crash-loops on the EC2
+   macOS AMI (dyld library-validation rejects /nix/store dylibs in the
+   hardened launchd context — the AMI's /nix isn't a firmlink-blessed
+   mount); Determinate sets the volume + firmlink + daemon up correctly.
+   nix-darwin doesn't manage the daemon (`nix.enable = false`); the step
+   also writes `/etc/nix/nix.custom.conf` for trust + binary caches.
 7. **Buildkite agent token + CI App key** — writes the org agent token
    to `/etc/buildkite-agent/agent-token` (mode 600 root:wheel) and
    stages the sealedsecurity-ci App key to
