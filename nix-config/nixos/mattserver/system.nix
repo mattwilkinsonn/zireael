@@ -185,6 +185,16 @@
   #   printf '%s' 'mattserver' | sha256sum | head -c 8
   networking.hostId = "0bf374c7";
 
+  # Cap the ZFS ARC hard at 1 GiB. ARC defaults to ~50% of RAM (here that
+  # would be ~32 GB), which competes directly with the things this box
+  # actually cares about now: the sccache Redis L1 (up to maxmemory 40 GB)
+  # and the two Buildkite agents' build jobs. The ZFS pool is a
+  # backup-receive target on a slow SATA SSHD that isn't even wired up
+  # currently — its caching matters far less than keeping RAM free for
+  # Redis + CI, so give it the smallest practical window. In bytes:
+  # 1 GiB = 1073741824. SEA-843.
+  boot.kernelParams = [ "zfs.zfs_arc_max=1073741824" ];
+
   services.zfs.autoScrub = {
     enable = true;
     interval = "monthly";
