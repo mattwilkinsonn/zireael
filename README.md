@@ -57,21 +57,16 @@ Each tagged release attaches `tar.gz` binaries for `darwin-arm64`,
 ## Nix configuration
 
 [`nix-config/`](./nix-config) is a multi-host
-[Nix flake](https://nix.dev/concepts/flakes.html) covering every
-machine I use:
+[Nix flake](https://nix.dev/concepts/flakes.html) covering my personal
+machines. The sealedsecurity fleet (CI runners + the inference box)
+lives in the company `sealed` repo under `infra/nix/` and consumes
+this flake's `shared/` modules as an input, so `home.nix`, overlays,
+and `nixos/common.nix` stay single-sourced here.
 
 | Host | Platform | Role | Flake target |
 | --- | --- | --- | --- |
 | Matts-MacBook-Pro | aarch64 darwin | Primary dev box | `darwinConfigurations.Matts-MacBook-Pro` |
-| mattmini | aarch64 darwin (M2 Pro Mac mini) | Native macOS CI runner (Buildkite) | `darwinConfigurations.mattmini` |
-| awsmac | aarch64 darwin (EC2 mac2-m2.metal) | Stopgap macOS CI runner (Buildkite, AWS EC2) | `darwinConfigurations.awsmac` |
-| dedicatedmacio-mini | aarch64 darwin (rented M4 Mac mini) | Stopgap macOS CI runner (Buildkite, dedicatedmac.io) | `darwinConfigurations.dedicatedmacio-mini` |
-| mattfw | x86_64 NixOS (Framework Desktop) | Secondary dev box + local-LLM target | `nixosConfigurations.mattfw` |
-| mattserver | x86_64 NixOS | ZFS backup target + actions runners + gaming | `nixosConfigurations.mattserver` |
-| mattlinuxpro | x86_64 NixOS (Mac Pro 2013) | Self-hosted Buildkite CI runner | `nixosConfigurations.mattlinuxpro` |
 | mattpc-wsl | x86_64 NixOS (WSL2) | Windows-host dev environment | `nixosConfigurations.mattpc-wsl` |
-| rpi4 | aarch64 NixOS | Headless DNS (Technitium) | `nixosConfigurations.rpi4` |
-| rpi5 | aarch64 NixOS | Tailscale exit node + Kimai (`hours.sealedsecurity.com`) | `nixosConfigurations.rpi5` |
 
 Manages the OS configuration ([`nixos/`](./nix-config/nixos),
 [`darwin/`](./nix-config/darwin)) and the user-level home-manager

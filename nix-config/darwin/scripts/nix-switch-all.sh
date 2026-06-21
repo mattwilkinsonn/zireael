@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# Run nix-switch (or darwin-rebuild switch for Mac) across every host
-# this Mac can reach. Sequential, not parallel — easier to read output
-# and abort on first failure.
+# Run nix-switch (or darwin-rebuild switch for Mac) across the personal
+# hosts this Mac manages (MBP + WSL). The sealedsecurity fleet (CI
+# runners + mattfw) lives in the sealed repo now — use
+# `sealed/infra/nix/scripts/nix-switch-all.sh` for those.
+# Sequential, not parallel — easier to read output and abort on first
+# failure.
 #
 # Doesn't rely on the per-host `nix-switch` zsh alias (SSH non-interactive
 # shells don't expand zsh aliases); hardcodes the rebuild command per host.
 #
 # Usage:
 #   nix-switch-all.sh                       # all hosts
-#   nix-switch-all.sh --only mattfw         # one specific host
-#   nix-switch-all.sh --except rpi5         # skip one host
-#   nix-switch-all.sh --except rpi5 --except rpi4
+#   nix-switch-all.sh --only mattpc         # one specific host
+#   nix-switch-all.sh --except mattpc       # skip one host
 #
 # Mac is targeted by SSH-host name "mac" (special-cased to run locally).
 
@@ -19,10 +21,6 @@ set -euo pipefail
 # SSH-host name → flake target name.
 declare -a HOSTS=(
 	"mac:Matts-MacBook-Pro"
-	"rpi4:rpi4"
-	"rpi5:rpi5"
-	"mattfw:mattfw"
-	"mattserver:mattserver"
 	"mattpc:mattpc-wsl"
 )
 

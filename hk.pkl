@@ -144,35 +144,11 @@ local toml_steps = new Mapping<String, Step> {
 // of which files changed (a change to shared/home.nix can break Pi
 // configs even if no Pi file was touched).
 local flake_eval_steps = new Mapping<String, Step> {
-    ["flake-eval-rpi4"] {
-        check = "cd nix-config && nix eval --raw '.#nixosConfigurations.rpi4.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
-    }
-    ["flake-eval-rpi5"] {
-        check = "cd nix-config && nix eval --raw '.#nixosConfigurations.rpi5.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
-    }
-    ["flake-eval-mattfw"] {
-        check = "cd nix-config && nix eval --raw '.#nixosConfigurations.mattfw.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
-    }
-    ["flake-eval-mattserver"] {
-        check = "cd nix-config && nix eval --raw '.#nixosConfigurations.mattserver.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
-    }
-    ["flake-eval-mattlinuxpro"] {
-        check = "cd nix-config && nix eval --raw '.#nixosConfigurations.mattlinuxpro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
-    }
     ["flake-eval-mattpc-wsl"] {
         check = "cd nix-config && nix eval --raw '.#nixosConfigurations.mattpc-wsl.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
     }
     ["flake-eval-darwin"] {
         check = "cd nix-config && nix eval --raw '.#darwinConfigurations.Matts-MacBook-Pro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
-    }
-    ["flake-eval-mattmini"] {
-        check = "cd nix-config && nix eval --raw '.#darwinConfigurations.mattmini.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
-    }
-    ["flake-eval-awsmac"] {
-        check = "cd nix-config && nix eval --raw '.#darwinConfigurations.awsmac.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
-    }
-    ["flake-eval-dedicatedmacio-mini"] {
-        check = "cd nix-config && nix eval --raw '.#darwinConfigurations.dedicatedmacio-mini.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null"
     }
 }
 
