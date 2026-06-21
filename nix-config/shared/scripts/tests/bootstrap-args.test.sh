@@ -15,7 +15,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMMON="$SCRIPT_DIR/../bootstrap-common.sh"
+COMMON="${COMMON:-$SCRIPT_DIR/../bootstrap-common.sh}"
 
 fail=0
 pass=0
@@ -38,6 +38,22 @@ run_parse() {
 	fi
 }
 
+# Capture the parser's stderr (the `err` message) for the failure cases
+# where the *message* is the contract, not just the non-zero exit. With
+# `set -u` active, an unguarded `--auth-key` with no value aborts with a
+# terse "unbound variable"; the guard turns it into a clear message, so
+# asserting on the text is what makes the guard load-bearing in the test.
+run_parse_stderr() {
+	{
+		(
+			set -u
+			# shellcheck disable=SC1090
+			source "$COMMON"
+			parse_mac_runner_args "$@"
+		) >/dev/null
+	} 2>&1
+}
+
 check() {
 	local desc="$1" got="$2" want="$3"
 	if [ "$got" = "$want" ]; then
@@ -47,6 +63,20 @@ check() {
 		fail=$((fail + 1))
 		printf '  FAIL %s\n     got:  %s\n     want: %s\n' "$desc" "$got" "$want"
 	fi
+}
+
+check_contains() {
+	local desc="$1" got="$2" want="$3"
+	case "$got" in
+	*"$want"*)
+		pass=$((pass + 1))
+		printf '  ok   %s\n' "$desc"
+		;;
+	*)
+		fail=$((fail + 1))
+		printf '  FAIL %s\n     got:      %s\n     want sub: %s\n' "$desc" "$got" "$want"
+		;;
+	esac
 }
 
 echo "parse_mac_runner_args:"
@@ -90,6 +120,19 @@ check "missing hostname errors" \
 check "env-var hostname + admin, no argv" \
 	"$(SEAL_MAC_HOSTNAME=awsmac SEAL_MAC_ADMIN_USER=ec2-user run_parse)" \
 	"0|awsmac|ec2-user|"
+
+# A pre-set TAILSCALE_AUTH_KEY env value survives when no --auth-key
+# flag is passed (parser inits it with ${TAILSCALE_AUTH_KEY:-}).
+check "env-var TAILSCALE_AUTH_KEY survives without --auth-key flag" \
+	"$(TAILSCALE_AUTH_KEY=tskey-env run_parse awsmac)" \
+	"0|awsmac|mattw|tskey-env"
+
+# --auth-key as the final arg with no value → clean error message, not a
+# terse set -u "unbound variable" abort. Asserting the message text (not
+# just the exit code) is what makes the value-guard load-bearing here.
+check_contains "--auth-key with no value gives a clean error" \
+	"$(run_parse_stderr awsmac ec2-user --auth-key)" \
+	"--auth-key requires a value"
 
 echo
 echo "passed: $pass  failed: $fail"

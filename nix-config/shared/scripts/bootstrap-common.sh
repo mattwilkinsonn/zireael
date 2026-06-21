@@ -121,6 +121,7 @@ parse_mac_runner_args() {
 	while [ $# -gt 0 ]; do
 		case "$1" in
 		--auth-key)
+			[ $# -ge 2 ] || err "--auth-key requires a value"
 			TAILSCALE_AUTH_KEY="$2"
 			shift 2
 			;;
