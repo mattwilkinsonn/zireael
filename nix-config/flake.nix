@@ -270,6 +270,56 @@
           ];
         };
 
+      # dedicatedmacio-mini — RENTED Apple Silicon Mac mini (M4, from
+      # dedicatedmac.io), STOPGAP macOS arm64 Buildkite agent while the
+      # Buildkite-trial macOS minutes are exhausted and the owned
+      # mattmini isn't racked yet. Same `macos-arm64-selfhosted` queue
+      # as mattmini and awsmac (jobs route to whichever agent is free),
+      # distinct agent name + host tag. See
+      # darwin/dedicatedmacio-mini/system.nix (SEA-840).
+      #
+      # Identical wiring to mattmini / awsmac: STABLE nixpkgs + stable
+      # nix-darwin + stable home-manager, pkgs constructed in the `let`
+      # block and passed via specialArgs + extraSpecialArgs (the same
+      # stable-HM eval-cycle short-circuit documented on the mattmini
+      # entry above).
+      darwinConfigurations."dedicatedmacio-mini" =
+        let
+          system = "aarch64-darwin";
+          # Inline overlay: jj from unstable (same as mattmini). See the
+          # mattmini entry for why shared/overlays.nix can't be imported
+          # here directly.
+          jjFromUnstable = _final: _prev: {
+            inherit (inputs.nixpkgs-unstable.legacyPackages.${system}) jujutsu jjui;
+          };
+          pkgs = import inputs.nixpkgs-darwin {
+            inherit system;
+            config = {
+              allowUnfree = true;
+            };
+            overlays = [ jjFromUnstable ];
+          };
+        in
+        inputs.nix-darwin-stable.lib.darwinSystem {
+          inherit system;
+          specialArgs = {
+            inherit inputs system pkgs;
+          };
+          modules = [
+            { nixpkgs.pkgs = pkgs; }
+            ./darwin/dedicatedmacio-mini/system.nix
+            home-manager.darwinModules.home-manager
+            {
+              home-manager.useGlobalPkgs = true;
+              home-manager.useUserPackages = true;
+              home-manager.extraSpecialArgs = {
+                inherit inputs pkgs;
+              };
+              home-manager.users.mattw = import ./darwin/dedicatedmacio-mini/home.nix;
+            }
+          ];
+        };
+
       # Raspberry Pi 5 (headless): Tailscale exit node + Kimai for
       # hours.sealedsecurity.com. Technitium DNS lives on rpi4.
       # Add ./nixos/rpi5/desktop.nix to modules to re-enable KDE for debug.

@@ -191,3 +191,18 @@ awsmac:
   - '.github/workflows/ci-base-nix.yml'
   - '.github/path-filters/nix-config.yml'
   - '.github/path-filters/nix-config-hosts.yml'
+
+# dedicatedmacio-mini (aarch64 darwin) — rented M4 Mac mini, stopgap
+# macOS CI runner. Same stable-darwin stack + shared agent module as
+# mattmini / awsmac; distinct host dir + flake entry.
+dedicatedmacio-mini:
+  - 'nix-config/flake.nix'
+  - 'nix-config/flake.lock'
+  - 'nix-config/shared/home.nix'
+  - 'nix-config/shared/dotfiles/**'
+  - 'nix-config/darwin/dedicatedmacio-mini/**'
+  - 'nix-config/darwin/modules/buildkite-agent-macos.nix'
+  - '.github/workflows/nix-config.yml'
+  - '.github/workflows/ci-base-nix.yml'
+  - '.github/path-filters/nix-config.yml'
+  - '.github/path-filters/nix-config-hosts.yml'
