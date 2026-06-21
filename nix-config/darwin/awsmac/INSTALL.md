@@ -100,7 +100,7 @@ for a headless box reached over Tailscale.)
 Get the `nix-config` repo onto the box (`gh repo clone` or scp), then:
 
 ```bash
-bash <path-to>/nix-config/darwin/scripts/awsmac-bootstrap.sh
+bash <path-to>/nix-config/darwin/scripts/macos-runner-bootstrap.sh awsmac ec2-user
 ```
 
 The script is self-contained. It walks the steps in an order that gets
