@@ -28,10 +28,23 @@ divergence to work around).
 4. `bash <path-to>/nix-config/darwin/scripts/macos-runner-bootstrap.sh mattmini`.
 
 The bootstrap script handles everything else: Xcode CLT, Nix
-(upstream nixos.org installer), Homebrew, `gh` + zireael checkout,
+(Determinate Systems installer), Homebrew, `gh` + zireael checkout,
 Buildkite agent token, `darwin-rebuild`, Tailscale auth. You'll get
 three interactive prompts: `gh auth login` flow, Buildkite agent
 token, Tailscale pre-auth key. That's it.
+
+> **Migrating an already-bootstrapped mattmini?** Earlier mattmini
+> builds installed Nix via the upstream nixos.org installer with
+> `nix.enable = true` in nix-darwin, and declared `trusted-users` +
+> the binary-cache substituters in the nix-darwin config. The shared
+> module now sets `nix.enable = false` (Determinate manages the
+> daemon) and those settings move to `/etc/nix/nix.custom.conf`, which
+> the bootstrap writes. **Re-run `macos-runner-bootstrap.sh mattmini`
+> BEFORE the first `darwin-rebuild switch` on the new config** — it
+> installs Determinate over the old daemon and lays down
+> `nix.custom.conf`. Switching first on an upstream-Nix host would
+> leave the daemon plist unmanaged and drop trusted-users +
+> substituters until the bootstrap runs.
 
 ## Pre-install checklist
 
@@ -116,10 +129,15 @@ debuggable remotely (no more USB-shuffling to copy errors back):
    `tailscaled` + `tailscale` binaries — same as Linux.
 5. **gh + dotfiles** — installs `gh`, prompts for `gh auth login`,
    clones your dotfiles into `~` (colocated git+jj at `~/.git`).
-6. **Nix** — upstream nixos.org multi-user installer (not Determinate's
-   fork). The standard daemon lets nix-darwin manage the daemon plist
-   declaratively (`nix.enable = true`); same installer machinery
-   handles the synthetic-fs dance + daemon plist.
+6. **Nix** — Determinate Systems installer (same as the MBP and
+   awsmac). The upstream nixos.org installer's launchd daemon can
+   crash-loop on some macOS configs (dyld library-validation rejects
+   /nix/store dylibs in the hardened launchd context when /nix isn't a
+   firmlink-blessed mount); Determinate sets the volume + firmlink +
+   daemon up correctly. nix-darwin doesn't manage the daemon
+   (`nix.enable = false`); the step also writes
+   `/etc/nix/nix.custom.conf` for trusted-users + binary-cache
+   substituters.
 7. **Buildkite agent token** — prompts for the org agent token and
    writes it to `/etc/buildkite-agent/agent-token` (mode 600
    root:wheel). Must be in place before step 8 since the agent

@@ -18,6 +18,6 @@
   sealed.macosBuildkiteAgent = {
     enable = true;
     hostName = "mattmini";
-    cargoBuildJobs = "6";
+    cargoBuildJobs = 6;
   };
 }
