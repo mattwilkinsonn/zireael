@@ -75,7 +75,7 @@
 
   # Never let the box sleep. It's a backup target + CI runner host, so a
   # suspended host means missed snapshots and CI jobs falling back to
-  # GitHub-hosted runners.
+  # Buildkite-hosted runners.
   #
   # Masks at the systemd target level so `systemctl suspend`, idle timers,
   # and any session-level "sleep now" call all become no-ops.
