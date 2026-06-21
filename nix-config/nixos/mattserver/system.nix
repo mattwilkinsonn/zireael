@@ -373,12 +373,18 @@
   #      from anything but tailscale0 is dropped.
   #
   # Access is further narrowed at the tailnet ACL layer: mattserver
-  # carries a `tag:redis`, and the grant `tag:server -> tag:redis:6379`
-  # (privatefiles/tailscale/tailscale.jsonc) means ONLY the CI runner
-  # boxes (mattserver, mattlinuxpro, awsmac) can reach Redis — not the
-  # MBP, phone, or dev boxes. That WireGuard-layer scoping is why no
-  # `requirepass` is set: the credential boundary is the tailnet ACL,
-  # which keeps a secret out of the CI pipeline env entirely.
+  # carries a `tag:redis`, and the grant
+  # `[tag:ci-runner, tag:dev, mattwilki17@gmail.com] -> tag:redis:6379`
+  # (privatefiles/tailscale/tailscale.jsonc) means only the CI runners
+  # (tag:ci-runner — Linux + macOS), the dev boxes (tag:dev), and Matt's
+  # own machines reach Redis — not the rest of the tailnet, and not
+  # non-runner servers (rpi4 DNS, rpi5 exit node, mattmacpro). That
+  # WireGuard-layer scoping is why no `requirepass` is set: the
+  # credential boundary is the tailnet ACL, which keeps a secret out of
+  # the CI pipeline env entirely. (sccache keys embed the target triple,
+  # so only same-arch boxes actually share objects — Linux-x64 boxes
+  # share for real; macOS-arm64 grantees always-miss against this Linux
+  # cache, harmlessly.)
   services.redis.servers.sccache = {
     enable = true;
     port = 6379;

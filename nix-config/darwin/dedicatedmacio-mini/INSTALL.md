@@ -63,7 +63,7 @@ Tailscale pre-auth key.
 - [ ] `nix-config` repo pushed (run `config status` on the Mac to confirm).
 - [ ] Tailscale pre-auth key ready at
       <https://login.tailscale.com/admin/settings/keys>. Single-use,
-      tagged with `tag:server`. Paste at the bootstrap prompt.
+      tagged with `tag:server,tag:ci-runner`. Paste at the bootstrap prompt.
 - [ ] Buildkite agent token ready (org Agents page → Reveal Agent
       Token) at
       <https://buildkite.com/organizations/sealedsecurity/agents>.
