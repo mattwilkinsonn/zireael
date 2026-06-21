@@ -103,7 +103,8 @@ parse_tailscale_auth_key() {
 # Bring tailscale up if it isn't already. Optional second arg is extra
 # flags (e.g. `--ssh` for hosts that should run tailscale-ssh too). The
 # auth key comes from $TAILSCALE_AUTH_KEY (set via env or
-# parse_tailscale_auth_key); prompts interactively if empty.
+# parse_tailscale_auth_key); if empty, falls back to interactive
+# `tailscale up`, which prints a browser login URL to approve the node.
 tailscale_up_if_needed() {
 	local extra_flags="${1:-}"
 	if tailscale status &>/dev/null; then
