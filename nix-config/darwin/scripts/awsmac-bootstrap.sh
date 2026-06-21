@@ -148,6 +148,20 @@ else
 fi
 eval "$(/opt/homebrew/bin/brew shellenv)"
 
+# The EC2 Mac AMI ships a pre-installed `aws/aws` tap (awscli). Homebrew
+# 4.6+ refuses to auto-update third-party taps until they're explicitly
+# trusted, so every `brew install` below prints a noisy "Skipping
+# aws/aws because it is not trusted" warning. We don't use that tap (the
+# agent's awscli comes from nixpkgs), but trusting it silences the
+# warning so real brew errors aren't buried. Guarded on the tap being
+# present (only on the AMI) + idempotent (`brew trust` is a no-op once
+# trusted). `|| true` so a Homebrew that predates the `trust` subcommand
+# doesn't abort the bootstrap.
+if brew tap 2>/dev/null | grep -q '^aws/aws$'; then
+	echo "  trusting pre-installed AMI tap aws/aws (silences untrusted-tap warning)"
+	brew trust aws/aws 2>/dev/null || true
+fi
+
 # ---------------------------------------------------------------------
 # 4. Tailscale (formula) — install + auth
 # ---------------------------------------------------------------------
