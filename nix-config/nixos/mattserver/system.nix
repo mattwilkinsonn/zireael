@@ -372,19 +372,20 @@
   #      Binding 0.0.0.0 here is consistent with that model: inbound
   #      from anything but tailscale0 is dropped.
   #
-  # Access is further narrowed at the tailnet ACL layer: mattserver
+  # Access is narrowed at the tailnet ACL layer: mattserver
   # carries a `tag:redis`, and the grant
   # `[tag:ci-runner, tag:dev, mattwilki17@gmail.com] -> tag:redis:6379`
   # (privatefiles/tailscale/tailscale.jsonc) means only the CI runners
   # (tag:ci-runner — Linux + macOS), the dev boxes (tag:dev), and Matt's
   # own machines reach Redis — not the rest of the tailnet, and not
-  # non-runner servers (rpi4 DNS, rpi5 exit node, mattmacpro). That
-  # WireGuard-layer scoping is why no `requirepass` is set: the
-  # credential boundary is the tailnet ACL, which keeps a secret out of
-  # the CI pipeline env entirely. (sccache keys embed the target triple,
-  # so only same-arch boxes actually share objects — Linux-x64 boxes
-  # share for real; macOS-arm64 grantees always-miss against this Linux
-  # cache, harmlessly.)
+  # non-runner servers (rpi4 DNS, rpi5 exit node, mattmacpro). The ACL
+  # is the PRIMARY boundary; a `requirepass` (requirePassFile below) is
+  # layered on top as defense-in-depth, so a compromised tag:ci-runner /
+  # tag:dev peer still can't read or poison the cache without the
+  # password. (sccache keys embed the target triple, so only same-arch
+  # boxes actually share objects — Linux-x64 boxes share for real;
+  # macOS-arm64 grantees always-miss against this Linux cache,
+  # harmlessly.)
   services.redis.servers.sccache = {
     enable = true;
     port = 6379;
@@ -393,6 +394,13 @@
     # to the tailnet. See the block comment above for why this is bound
     # 0.0.0.0 rather than the explicit tailscale IP.
     bind = "0.0.0.0";
+    # Defense-in-depth password (the tailnet ACL is the primary
+    # boundary). Read from a file outside the nix store — staged at boot
+    # by decrypt-redis-password.service below from a host-bound
+    # systemd-creds blob, same pattern as the agent token. The seal CI
+    # pipelines pass the matching value via the SCCACHE_REDIS_PASSWORD
+    # Buildkite secret. SEA-843.
+    requirePassFile = "/run/redis-password/requirepass";
     # It's a pure cache: no RDB snapshots, no AOF. Losing the dataset
     # on restart just re-warms from R2 (the durable L2), so persistence
     # would be wasted fsync churn on the backup-target's disks.
@@ -407,19 +415,69 @@
       # at this cap. Revisit if the R2 bucket grows materially.
       maxmemory = "40gb";
       maxmemory-policy = "allkeys-lru";
-      # Disable Redis protected-mode. With protected-mode on (the
-      # default) Redis refuses every non-loopback connection unless a
-      # password is set — so even though it binds 0.0.0.0, the CI
-      # containers dialing the tailscale IP (100.91.42.76) get
-      # "DENIED ... only accepted from the loopback interface" and
-      # sccache reads it as "remote service unreachable". The access
-      # boundary here is deliberately the host firewall + tailnet ACL
-      # (tailscale0-only inbound, tag:ci-runner/tag:dev grant — see the
-      # bind comment above), not a Redis password, so protected-mode is
-      # the wrong layer and has to be off.
-      # SEA-843.
+      # Disable Redis protected-mode. Protected-mode (the default)
+      # refuses every non-loopback connection UNLESS a password is set.
+      # We now set requirePassFile, so protected-mode would technically
+      # allow remote auth'd connections — but leave it explicitly off:
+      # the access model is firewall + tailnet ACL + requirepass, and
+      # protected-mode's loopback-only heuristic is orthogonal to that
+      # and only adds confusion (it was the cause of the earlier
+      # "remote service unreachable" failures before requirepass
+      # existed). SEA-843.
       "protected-mode" = false;
     };
+  };
+
+  # Stage the Redis password (defense-in-depth for the sccache L1, see
+  # the services.redis block above). Decrypts a host-bound systemd-creds
+  # blob to /run/redis-password/requirepass before redis starts; the
+  # redis module's prep-conf ExecStartPre (runs as root) cats that file
+  # into `requirepass`. Same machine-ID-bound encryption as the
+  # buildkite agent token — create the blob once on the box with
+  # nixos/scripts/mattserver-encrypt-redis-password.sh (writes
+  # /etc/buildkite-agent/redis-password.cred). Plaintext never touches
+  # persistent storage after that. SEA-843.
+  systemd.services.decrypt-redis-password = {
+    description = "Decrypt the sccache Redis password into /run";
+    wantedBy = [ "multi-user.target" ];
+    # Ordered before the redis instance so the password file exists when
+    # redis-sccache's prep-conf reads requirePassFile.
+    before = [ "redis-sccache.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      # Own RuntimeDirectory (not redis's) so this unit can create the
+      # file before redis-sccache starts and owns its own /run dir.
+      # 0755 dir + 0644 file: the redis prep-conf runs as root (`+`
+      # prefix in the module) and only needs read; the value's
+      # confidentiality is the .cred blob, not the runtime file perms,
+      # but keep the file 0640 root:root to be tidy.
+      RuntimeDirectory = "redis-password";
+      RuntimeDirectoryMode = "0750";
+      RuntimeDirectoryPreserve = true;
+      # `+` runs ExecStart as root for systemd-creds decrypt against the
+      # host machine-ID key.
+      ExecStart = [
+        ''
+          +${pkgs.writeShellScript "decrypt-redis-password" ''
+            set -euo pipefail
+            ${pkgs.systemd}/bin/systemd-creds decrypt \
+              --name=redis-sccache-password \
+              /etc/buildkite-agent/redis-password.cred \
+              /run/redis-password/requirepass
+            chmod 0640 /run/redis-password/requirepass
+          ''}
+        ''
+      ];
+    };
+  };
+
+  # Make the redis instance wait for the password to be staged. The
+  # buildkite-agents module owns redis-sccache.service; declaring the
+  # ordering here merges into it.
+  systemd.services.redis-sccache = {
+    after = [ "decrypt-redis-password.service" ];
+    requires = [ "decrypt-redis-password.service" ];
   };
 
   services.xserver.xkb.layout = "us";
