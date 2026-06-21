@@ -361,7 +361,7 @@
   # out to this host's own tailscale0; mattlinuxpro's go over the
   # tailnet), so Redis has to listen on the tailscale interface.
   #
-  # Bind 0.0.0.0 and let the firewall enforce tailnet-only access
+  # Bind 0.0.0.0 and let the firewall + tailnet ACL enforce access
   # rather than binding the tailscale IP explicitly. Two reasons:
   #   1. Boot robustness — the tailscale IP (100.91.42.76) only exists
   #      once tailscaled has connected, which happens async after boot.
@@ -373,8 +373,15 @@
   #      `trustedInterfaces = [ "tailscale0" ]` + `allowedTCPPorts = []`
   #      mechanism (networking block above), not via per-service binds.
   #      Binding 0.0.0.0 here is consistent with that model: inbound
-  #      from anything but tailscale0 is dropped, so Redis is reachable
-  #      only from the tailnet, never the LAN.
+  #      from anything but tailscale0 is dropped.
+  #
+  # Access is further narrowed at the tailnet ACL layer: mattserver
+  # carries a `tag:redis`, and the grant `tag:server -> tag:redis:6379`
+  # (privatefiles/tailscale/tailscale.jsonc) means ONLY the CI runner
+  # boxes (mattserver, mattlinuxpro, awsmac) can reach Redis — not the
+  # MBP, phone, or dev boxes. That WireGuard-layer scoping is why no
+  # `requirepass` is set: the credential boundary is the tailnet ACL,
+  # which keeps a secret out of the CI pipeline env entirely.
   services.redis.servers.sccache = {
     enable = true;
     port = 6379;
