@@ -448,7 +448,7 @@
       RemainAfterExit = true;
       # Own RuntimeDirectory (not redis's) so this unit can create the
       # file before redis-sccache starts and owns its own /run dir.
-      # 0755 dir + 0644 file: the redis prep-conf runs as root (`+`
+      # 0750 dir + 0640 file: the redis prep-conf runs as root (`+`
       # prefix in the module) and only needs read; the value's
       # confidentiality is the .cred blob, not the runtime file perms,
       # but keep the file 0640 root:root to be tidy.
