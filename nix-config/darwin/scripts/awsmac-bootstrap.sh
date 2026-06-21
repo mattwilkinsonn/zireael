@@ -280,31 +280,54 @@ if [ ! -d "$NIX_CONFIG_DIR" ]; then
 fi
 
 # ---------------------------------------------------------------------
-# 6. Nix (upstream installer from nixos.org)
+# 6. Nix (Determinate Systems installer)
 # ---------------------------------------------------------------------
-# We use the official upstream installer from nixos.org rather than
-# Determinate Systems' installer (which the MBP uses). This CI host
-# runs the standard nixos.org multi-user daemon so nix-darwin manages
-# the daemon plist declaratively (nix.enable = true in system.nix);
-# Determinate's daemon-management model would conflict with that.
-#
-# `--daemon` selects the multi-user install (per-user is deprecated
-# on macOS). The installer creates the nixbld* build users, the
-# /nix synthetic volume, and the launchd plist for nix-daemon.
-step "Nix"
+# We use the Determinate Systems installer (same as the MBP), NOT the
+# upstream nixos.org one. On the EC2 macOS AMI the upstream installer's
+# launchd nix-daemon crash-loops: dyld's library-validation refuses to
+# load /nix/store dylibs into a hardened launchd-spawned process when
+# /nix isn't a firmlink-blessed mount (the AMI ships /nix as a plain
+# APFS volume with no /etc/synthetic.conf — a manual `nix-daemon` works
+# but the launchd one fails with "file system sandbox blocked open()" /
+# OS_REASON_DYLD). Determinate's installer sets the volume + firmlink +
+# daemon up as one coherent unit that doesn't trip that validation.
+# Determinate manages its own daemon, so system.nix sets
+# `nix.enable = false`.
+step "Nix (Determinate)"
 if command -v nix >/dev/null 2>&1; then
 	echo "  already installed ($(nix --version | head -1))"
 else
-	echo "  installing — you'll be prompted for sudo and asked to confirm"
-	curl --proto '=https' --tlsv1.2 -sSf -L https://nixos.org/nix/install |
-		sh -s -- --daemon
-	# Installer adds /nix/var/nix/profiles/default/bin to PATH via
-	# /etc/zshrc, but the current shell hasn't sourced it.
+	echo "  installing Determinate Nix — you'll be prompted to confirm"
+	curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix |
+		sh -s -- install --no-confirm
+	# Source the daemon profile so `nix` is on PATH in this shell.
 	# shellcheck disable=SC1091
-	[ -f /etc/zshrc ] && . /etc/zshrc 2>/dev/null || true
-	export PATH="/nix/var/nix/profiles/default/bin:$PATH"
+	. /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
 	command -v nix >/dev/null 2>&1 || err "nix still not on PATH after install"
 	echo "  done ($(nix --version | head -1))"
+fi
+
+# Nix custom config (trust + caches). Determinate Nix owns
+# /etc/nix/nix.conf (installer-managed) and reads
+# /etc/nix/nix.custom.conf for user overrides. Since system.nix runs
+# `nix.enable = false`, nix-darwin does NOT write these — so they live
+# here, mirroring flake.nix's nixConfig (garnix + nixos-raspberrypi
+# caches) + the MBP's mac-setup.sh pattern:
+#   - trusted-users: ec2-user must be trusted or flake-declared
+#     `extra-substituters` are silently ignored ("not a trusted user").
+#   - the substituter + trusted-key pair so the binary caches are
+#     honored outside a flake context too.
+#   - accept-flake-config: auto-trust the flake's nixConfig block.
+if ! grep -q '^trusted-users' /etc/nix/nix.custom.conf 2>/dev/null; then
+	echo "  configuring /etc/nix/nix.custom.conf (trust + caches)"
+	sudo tee -a /etc/nix/nix.custom.conf >/dev/null <<'EOF'
+trusted-users = root ec2-user
+accept-flake-config = true
+extra-substituters = https://nixos-raspberrypi.cachix.org https://cache.garnix.io
+extra-trusted-public-keys = nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI= cache.garnix.io:CTFPyKSLcx5RMJKfLo5EEPUObbA78b0YQ2DTCJXqr9g=
+EOF
+	# Reload the daemon so it picks up the new custom.conf.
+	sudo launchctl kickstart -k system/systems.determinate.nix-daemon 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------------
