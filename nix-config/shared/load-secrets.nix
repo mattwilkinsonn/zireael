@@ -10,7 +10,7 @@ _:
 # Two-account model (May 2026): personal items (Anthropic, OpenRouter,
 # CF, Neon, etc.) live in the personal account's Dev vault and are
 # read using OP_SERVICE_ACCOUNT_TOKEN. Sealed items (Sealed Claude
-# OAuth, Linear) live in the sealedsecurity team's `Employee Dev`
+# OAuth, Linear) live in the sealedsecurity team's `Local Dev`
 # vault and are read using OP_TEAM_SERVICE_ACCOUNT_TOKEN. Each `op
 # inject` invocation is scoped to one account by swapping the env var
 # in/out — op CLI has no native multi-account-svc-token mode.
@@ -72,7 +72,7 @@ _:
             # helpers must exist when load-secrets first runs.
             claude-sealed() {
               local val
-              if val=$(OP_SERVICE_ACCOUNT_TOKEN=''${OP_TEAM_SERVICE_ACCOUNT_TOKEN:-} op read "op://Shared Development/Claude Code OAuth Token matt sealed/credential" 2>/dev/null) && [[ -n $val ]]; then
+              if val=$(OP_SERVICE_ACCOUNT_TOKEN=''${OP_TEAM_SERVICE_ACCOUNT_TOKEN:-} op read "op://Local Dev/Claude Code OAuth Token matt sealed/credential" 2>/dev/null) && [[ -n $val ]]; then
                 export CLAUDE_CODE_OAUTH_TOKEN=$val
                 print "CLAUDE_CODE_OAUTH_TOKEN → Sealed"
               else
@@ -127,16 +127,16 @@ _:
               _op_inject_with_token OP_SERVICE_ACCOUNT_TOKEN Personal "$personal_template"
 
               # Team account (sealedsecurity.1password.com): items in
-              # op://Employee Dev/... Read with OP_TEAM_SERVICE_ACCOUNT_TOKEN
+              # op://Local Dev/... Read with OP_TEAM_SERVICE_ACCOUNT_TOKEN
               # (matt-dev-svc). CLAUDE_CODE_OAUTH_TOKEN is intentionally
               # NOT loaded here — it's set below from a per-user marker
               # file so the default account is user-controllable without
               # an edit-and-nix-switch cycle.
               local team_template
-              team_template='export LINEAR_API_KEY="{{ op://Employee Dev/Linear API Key/credential }}"
-    export CODERABBIT_API_KEY="{{ op://Employee Dev/CodeRabbit API Key/credential }}"
-    export OPENAI_API_KEY="{{ op://Shared Development/OpenAI API Key mattdev/credential }}"
-    export BUILDKITE_API_TOKEN="{{ op://Employee Dev/Buildkite API Token/credential }}"'
+              team_template='export LINEAR_API_KEY="{{ op://Local Dev/Linear API Key/credential }}"
+    export CODERABBIT_API_KEY="{{ op://Local Dev/CodeRabbit API Key/credential }}"
+    export OPENAI_API_KEY="{{ op://Local Dev/OpenAI API Key mattdev/credential }}"
+    export BUILDKITE_API_TOKEN="{{ op://Local Dev/Buildkite API Token/credential }}"'
               _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN Team "$team_template"
 
               # Choose which Claude OAuth token to load by default.

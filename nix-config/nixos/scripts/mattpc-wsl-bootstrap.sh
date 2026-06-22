@@ -242,9 +242,9 @@ if [ "$PHASE" = "2" ]; then
 	op_export_and_verify "$TOKEN_FILE"
 
 	# Team account (matt-dev-svc at sealedsecurity.1password.com) —
-	# reads op://Employee Dev. Used by the user shell only.
+	# reads op://Local Dev. Used by the user shell only.
 	TEAM_TOKEN_FILE="$HOME/.config/op/team-service-account-token"
-	op_token_file_write "$TEAM_TOKEN_FILE" Team "read access to Employee Dev vault on sealedsecurity.1password.com"
+	op_token_file_write "$TEAM_TOKEN_FILE" Team "read access to Local Dev vault on sealedsecurity.1password.com"
 
 	# -------------------------------------------------------------
 	# 2.3 Re-rebuild so home-manager activations see the op token

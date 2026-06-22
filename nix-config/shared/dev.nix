@@ -429,7 +429,7 @@
   # ~/.graphite_user_config path to the XDG-spec location;
   # checking the new path is the correct existence probe.) The
   # activation is idempotent: skip if the config file exists,
-  # otherwise read the token from 1Password (Employee Dev vault —
+  # otherwise read the token from 1Password (Local Dev vault —
   # Graphite operates on the sealedsecurity/seal repo, so
   # Team-scoped) and run `gt auth`.  See SEA-557 for the
   # migration design.
@@ -463,9 +463,9 @@
       # shared/load-secrets.nix's pattern (op CLI has no native
       # multi-account-svc-token mode; we swap in/out per read).
       token=$(OP_SERVICE_ACCOUNT_TOKEN="$team_token" \
-              ${pkgs._1password-cli}/bin/op read "op://Employee Dev/Graphite API Token/credential" 2>/dev/null || true)
+              ${pkgs._1password-cli}/bin/op read "op://Local Dev/Graphite API Token/credential" 2>/dev/null || true)
       if [ -z "$token" ]; then
-        echo "WARN: failed to read Graphite token (op://Employee Dev/Graphite API Token/credential)."
+        echo "WARN: failed to read Graphite token (op://Local Dev/Graphite API Token/credential)."
         echo "      Either the item is missing, or the team SA can't access it."
         echo "      Run 'gt auth --token <token>' manually once the token is in 1Password."
       else

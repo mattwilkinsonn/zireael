@@ -33,16 +33,15 @@ work around this by swapping the env var per `op inject` call.
 | Vault | Tier | Contents | Scope of compromise |
 | --- | --- | --- | --- |
 | **Employee** | Identity | Sealed master login, work email + 2FA codes, work bank/payroll if any, recovery codes for Sealed-managed accounts | Full Sealed identity — keep nothing automated reading from here |
-| **Employee Dev** | Working | Sealed Claude Code OAuth token, Linear API key, Graphite API token, Sealed AWS credentials, internal Sealed API tokens, Sealed CI tokens, work VPN | Sealed working scope |
+| **Local Dev** | Working | Sealed Claude Code OAuth token, Linear API key, CodeRabbit API key, OpenAI API key, Buildkite API token, Graphite API token, Sealed AWS credentials, internal Sealed API tokens, Sealed CI tokens, work VPN | Sealed working scope |
 | **Shared** | Identity | (future) Joint team identity — onboard creds for new hires, etc. | Whole team |
-| **Shared Development** | Working | (future) API keys provisioned for the team rather than personal | Whole team |
 
 ### Identity vs Working tier
 
 Identity credentials (master logins, 2FA codes, AWS root) live in the
 identity vaults (Personal, Employee). Working credentials *derived*
 from those identities (PATs, SSH keys, API tokens) live in the working
-vaults (Dev, Employee Dev). If a working credential leaks, you revoke
+vaults (Dev, Local Dev). If a working credential leaks, you revoke
 and regenerate. If an identity credential leaks, you have a much
 bigger recovery problem. Service accounts read working vaults only —
 that boundary is load-bearing.
@@ -73,8 +72,8 @@ Split per-host later if blast-radius separation becomes useful.
 
 | Service account | Vault scope | Used by | Token storage |
 | --- | --- | --- | --- |
-| **matt-dev-svc** | Employee Dev (read) | Every interactive shell on every dev host | macOS Keychain `OP_TEAM_SERVICE_ACCOUNT_TOKEN` / `~/.config/op/team-service-account-token` (Linux + Windows) |
-| **sealed-gha-svc** | Employee Dev (read) | Sealed repo GitHub Actions workflows | GitHub Actions secret per Sealed repo |
+| **matt-dev-svc** | Local Dev (read) | Every interactive shell on every dev host | macOS Keychain `OP_TEAM_SERVICE_ACCOUNT_TOKEN` / `~/.config/op/team-service-account-token` (Linux + Windows) |
+| **sealed-gha-svc** | Local Dev (read) | Sealed repo GitHub Actions workflows | GitHub Actions secret per Sealed repo |
 
 None of these have access to identity vaults (Personal, Employee).
 A compromised SA can re-issue tokens but can't reach the master
@@ -96,9 +95,9 @@ secret, use [`1Password/load-secrets-action`](https://github.com/1Password/load-
 ```
 
 Personal repos reference `op://Dev/...` with `personal-gha-svc`;
-Sealed repos reference `op://Employee Dev/...` with `sealed-gha-svc`.
+Sealed repos reference `op://Local Dev/...` with `sealed-gha-svc`.
 The service account token determines which account+vault is reachable
-— a personal workflow accidentally referencing an `op://Employee Dev/`
+— a personal workflow accidentally referencing an `op://Local Dev/`
 path simply won't resolve, and vice versa. Defense in depth.
 
 ## Loaders
@@ -128,16 +127,18 @@ the duration of the call.
 | `op://Dev/Neon API Key/credential` | `NEON_API_KEY` |
 | `op://Dev/Personal Pulumi Access Token/token` | `PULUMI_ACCESS_TOKEN` |
 
-**Team account** (`OP_TEAM_SERVICE_ACCOUNT_TOKEN`, scope `op://Employee Dev/...`):
+**Team account** (`OP_TEAM_SERVICE_ACCOUNT_TOKEN`, scope `op://Local Dev/...`):
 
 | op:// reference | Env var |
 | --- | --- |
-| `op://Employee Dev/Linear API Key/credential` | `LINEAR_API_KEY` |
-| `op://Employee Dev/CodeRabbit API Key/credential` | `CODERABBIT_API_KEY` |
+| `op://Local Dev/Linear API Key/credential` | `LINEAR_API_KEY` |
+| `op://Local Dev/CodeRabbit API Key/credential` | `CODERABBIT_API_KEY` |
+| `op://Local Dev/OpenAI API Key mattdev/credential` | `OPENAI_API_KEY` |
+| `op://Local Dev/Buildkite API Token/credential` | `BUILDKITE_API_TOKEN` |
 
 `CLAUDE_CODE_OAUTH_TOKEN` is loaded by `load-secrets` from either
 `op://Dev/Personal Claude Code OAuth Token/credential` or
-`op://Employee Dev/Sealed Claude Code OAuth Token/credential`
+`op://Local Dev/Claude Code OAuth Token matt sealed/credential`
 depending on the per-user marker file — see the *Claude Code token
 swap* section below.
 
@@ -185,7 +186,7 @@ when you just need to flip a single terminal.
 
 Lives in `shared/dev.nix`'s home-manager activations. Runs once on
 the first `nix-switch` after `graphite-cli` is installed: reads
-`op://Employee Dev/Graphite API Token/credential` (team SA scope)
+`op://Local Dev/Graphite API Token/credential` (team SA scope)
 and runs `gt auth --token <…>`, which writes
 `~/.config/graphite/user_config` (gt 1.5+; the legacy path was
 `~/.graphite_user_config`). Subsequent nix-switches no-op because

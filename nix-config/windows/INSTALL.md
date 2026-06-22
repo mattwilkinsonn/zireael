@@ -391,7 +391,7 @@ Phase 2 does:
    - `~/.config/op/service-account-token` — personal account (pc-svc),
      reads `op://Dev/...` + `op://Server/...`.
    - `~/.config/op/team-service-account-token` — sealedsecurity team
-     (matt-dev-svc), reads `op://Employee Dev/...`.
+     (matt-dev-svc), reads `op://Local Dev/...`.
 
    You'll be prompted to paste both `ops_…` tokens.
 3. Re-runs `nixos-rebuild switch` with the token in env so home-manager
