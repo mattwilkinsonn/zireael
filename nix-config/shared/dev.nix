@@ -86,6 +86,15 @@
       llvm # LLVM toolchain
       git-filter-repo # rewrite git history
       nixd # Nix language server
+      # devenv — the reproducible dev-shell tool (nix underneath) that
+      # seal's devenv.nix (SEA-881) and sealed's (SEA-884) build on.
+      # The `use devenv` directive in those repos' .envrc shells out to
+      # this binary; direnv (already on PATH) drives the entry. The
+      # shell itself pins its own toolchains (proto for rust/bun/node +
+      # the moon/zig/protoc tools, devenv for system libs), so this is
+      # only the launcher — version-staleness here doesn't affect what
+      # the repo shells provision.
+      devenv
 
       # AI / LLM tooling
       codexPackage # OpenAI Codex CLI
