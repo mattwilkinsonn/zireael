@@ -177,6 +177,12 @@
     enable = true;
     enableZshIntegration = true;
     nix-direnv.enable = true;
+    # Suppress the noisy `direnv: export +VAR +VAR ~VAR …` diff line on
+    # every directory entry. With a devenv/nix-direnv shell the export
+    # set is huge (compiler wrappers, NIX_* vars, PROTO_*), so the diff
+    # is pure noise — the `direnv: loading …` lines already confirm the
+    # load. Keeps stderr readable without hiding the load status.
+    config.global.hide_env_diff = true;
   };
 
   # eza
