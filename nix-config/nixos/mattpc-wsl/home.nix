@@ -17,7 +17,7 @@
   #   ~/.config/op/service-account-token       → personal account (pc-svc).
   #     Scope: op://Dev/... + op://Server/...
   #   ~/.config/op/team-service-account-token  → sealedsecurity team (matt-dev-svc).
-  #     Scope: op://Employee Dev/... (interactive shell only).
+  #     Scope: op://Local Dev/... (interactive shell only).
   #
   # Stored once per host via mattpc-wsl-bootstrap.sh (or replace manually:
   #   install -m 600 -D /dev/stdin ~/.config/op/service-account-token      <<< 'ops_...'

@@ -10,7 +10,7 @@
 # uses Keychain via darwin/home.nix mkBefore. Two accounts:
 #
 #   $env:OP_SERVICE_ACCOUNT_TOKEN       — personal (read op://Dev + op://Server).
-#   $env:OP_TEAM_SERVICE_ACCOUNT_TOKEN  — sealedsecurity team (read op://Employee Dev).
+#   $env:OP_TEAM_SERVICE_ACCOUNT_TOKEN  — sealedsecurity team (read op://Local Dev).
 #
 # Without the relevant token set, the corresponding `op inject` pass in
 # load-secrets below silently no-ops and load-secrets prints a one-line
@@ -56,12 +56,12 @@ $env:NEON_API_KEY = "{{ op://Dev/Neon API Key/credential }}"
         Write-Warning 'OP_SERVICE_ACCOUNT_TOKEN unset - Personal secrets not loaded.'
     }
 
-    # Team account (sealedsecurity.1password.com) — items in op://Employee Dev/...
+    # Team account (sealedsecurity.1password.com) — items in op://Local Dev/...
     # Swap $env:OP_SERVICE_ACCOUNT_TOKEN for the call, then restore so the
     # rest of the session sees the personal token.
     $teamTemplate = @'
-$env:CLAUDE_CODE_OAUTH_TOKEN = "{{ op://Employee Dev/Sealed Claude Code OAuth Token/credential }}"
-$env:LINEAR_API_KEY = "{{ op://Employee Dev/Linear API Key/credential }}"
+$env:CLAUDE_CODE_OAUTH_TOKEN = "{{ op://Local Dev/Claude Code OAuth Token matt sealed/credential }}"
+$env:LINEAR_API_KEY = "{{ op://Local Dev/Linear API Key/credential }}"
 '@
     if ($env:OP_TEAM_SERVICE_ACCOUNT_TOKEN) {
         $savedTok = $env:OP_SERVICE_ACCOUNT_TOKEN
@@ -100,7 +100,7 @@ function claude-sealed {
     $savedTok = $env:OP_SERVICE_ACCOUNT_TOKEN
     $env:OP_SERVICE_ACCOUNT_TOKEN = $env:OP_TEAM_SERVICE_ACCOUNT_TOKEN
     try {
-        $val = & op read 'op://Employee Dev/Sealed Claude Code OAuth Token/credential' 2>$null
+        $val = & op read 'op://Local Dev/Claude Code OAuth Token matt sealed/credential' 2>$null
     } finally {
         $env:OP_SERVICE_ACCOUNT_TOKEN = $savedTok
     }

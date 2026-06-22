@@ -36,7 +36,7 @@ clone_zireael_via_gh "mattwilkinsonn/zireael"
 # by load-secrets.
 #
 # Two accounts, two tokens. Personal SA reads op://Dev + op://Server;
-# team SA reads op://Employee Dev (sealedsecurity.1password.com).
+# team SA reads op://Local Dev (sealedsecurity.1password.com).
 if ! security find-generic-password -a "$USER" -s "OP_SERVICE_ACCOUNT_TOKEN" -w &>/dev/null; then
 	echo ""
 	echo "Paste your Personal 1Password service account token (ops_...) for this Mac."
@@ -58,7 +58,7 @@ if ! security find-generic-password -a "$USER" -s "OP_TEAM_SERVICE_ACCOUNT_TOKEN
 	echo ""
 	echo "Paste your Team 1Password service account token (ops_...) — sealedsecurity.1password.com."
 	echo "Create one at sealedsecurity.1password.com → Integrations → Service Accounts."
-	echo "Scope: read access to Employee Dev vault."
+	echo "Scope: read access to Local Dev vault."
 	read -rsp "Team token: " OP_TEAM_TOKEN
 	echo
 	if [ -n "$OP_TEAM_TOKEN" ]; then

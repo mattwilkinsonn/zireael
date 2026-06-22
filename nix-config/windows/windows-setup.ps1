@@ -200,7 +200,7 @@ else {
 # so strip inheritance and re-grant only the running user.
 #
 # Two accounts, two tokens. Personal SA reads op://Dev + op://Server;
-# team SA reads op://Employee Dev (sealedsecurity.1password.com).
+# team SA reads op://Local Dev (sealedsecurity.1password.com).
 Section 'Adding 1Password service-account tokens'
 
 function Set-OpToken {
@@ -248,7 +248,7 @@ Set-OpToken `
 Set-OpToken `
     -Path (Join-Path $env:USERPROFILE '.config\op\team-service-account-token') `
     -Label 'Team' `
-    -Scope 'read access to Employee Dev vault on sealedsecurity.1password.com' `
+    -Scope 'read access to Local Dev vault on sealedsecurity.1password.com' `
     -Url 'https://sealedsecurity.1password.com/developer-tools/serviceaccounts'
 
 # --- Manual-install reminders ------------------------------------------------
