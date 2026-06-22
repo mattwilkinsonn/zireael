@@ -58,8 +58,7 @@
             home-manager.useUserPackages = true;
             home-manager.backupFileExtension = "hm-backup";
             home-manager.extraSpecialArgs = {
-              codexPackage = inputs.codex-cli.packages.aarch64-darwin.codex;
-              coderabbitPackage = inputs.llm-agents.packages.aarch64-darwin.coderabbit-cli;
+              inherit inputs;
             };
             home-manager.users.mattwilkinson = import ./darwin/home.nix;
           }
@@ -92,8 +91,6 @@
           {
             home-manager.extraSpecialArgs = {
               inherit inputs;
-              codexPackage = inputs.codex-cli.packages.x86_64-linux.codex;
-              coderabbitPackage = inputs.llm-agents.packages.x86_64-linux.coderabbit-cli;
             };
             home-manager.users.mattw = {
               imports = [
