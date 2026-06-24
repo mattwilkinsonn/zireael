@@ -139,11 +139,9 @@
       "claude"
       "docker-desktop"
       "google-chrome"
-      "rectangle"
       "spotify"
       "visual-studio-code"
       "discord"
-      "speedcrunch"
       "transmission"
       "steam"
       "zoom"
@@ -174,11 +172,10 @@
       "arc"
       "akiflow"
       "codex-app"
-      "zed"
-      "cmux"
       "typora"
       "raycast"
       "notion"
+      "stablyai/orca/orca"
     ];
     # Mac App Store apps. IDs from `mas search <name>` / the App Store
     # share-link `/id<NUMBER>`. Requires a one-time manual App Store
