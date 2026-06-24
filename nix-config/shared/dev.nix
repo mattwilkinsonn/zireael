@@ -1,8 +1,7 @@
 {
   lib,
   pkgs,
-  codexPackage,
-  coderabbitPackage,
+  inputs,
   ...
 }:
 
@@ -17,6 +16,18 @@
 # Linux-specific build deps (pkg-config, openssl.dev, dbus, mold,
 # clang, gnumake + PKG_CONFIG_PATH) live in `shared/linux-build-deps.nix`
 # — Mac uses brew + Xcode CLI Tools for the equivalent.
+let
+  # Agent CLIs come from external flakes (numtide/llm-agents.nix +
+  # sadjow/codex-cli-nix). Resolve the per-system package set once here
+  # so adding a new agent CLI is a single line in `home.packages` below —
+  # `agents.gemini-cli`, `agents.opencode`, etc. — instead of threading a
+  # new `fooPackage` arg through flake.nix's per-host extraSpecialArgs and
+  # this module's function signature. Browse available names with:
+  #   nix eval github:numtide/llm-agents.nix#packages.${pkgs.system} \
+  #     --apply builtins.attrNames
+  agents = inputs.llm-agents.packages.${pkgs.system};
+  codex = inputs.codex-cli.packages.${pkgs.system}.codex;
+in
 {
   home.packages =
     with pkgs;
@@ -25,6 +36,28 @@
       uv # Python package manager
       bun # JS runtime & package manager
       fnm # fast node manager
+      # nodejs: a stable, shell-agnostic Node on PATH at
+      # /etc/profiles/per-user/$USER/bin (and /run/current-system/sw/bin),
+      # reachable by non-interactive SSH sessions that never source the
+      # zsh rc where `fnm env` injects its per-session node. Remote-SSH
+      # IDEs / ADEs (VSCode, Cursor, Orca) probe for `node` during their
+      # server bootstrap before any interactive shell init runs, so the
+      # fnm-managed node alone isn't enough for them. fnm still wins inside
+      # interactive terminals (its `fnm env` prepends the multishell dir),
+      # so this is purely the fallback the IDE servers resolve against.
+      nodejs_24
+      # python3: node-gyp (pulled in by any npm dep with a native addon —
+      # better-sqlite3, etc.) shells out to `python3` + `make` + a C/C++
+      # compiler at install time. `make`/`cc` already come from
+      # linux-build-deps.nix's gnumake + clang, but the uv-managed Python
+      # is only on PATH via the interactive zsh rc, so non-interactive
+      # Remote-SSH/ADE installs hit "Could not find any Python". This puts
+      # a plain python3 at /etc/profiles/per-user/$USER/bin for them. The
+      # uv-managed python/python3 shims still win in interactive shells
+      # (initContent prepends ~/.local/share/uv/python/bin), so this is
+      # only the node-gyp fallback — it doesn't change `python3` for
+      # day-to-day interactive use.
+      python3
       rustup # toolchain manager (sets up rustc + cargo on demand)
 
       # Rust ecosystem helpers
@@ -96,9 +129,12 @@
       # the repo shells provision.
       devenv
 
-      # AI / LLM tooling
-      codexPackage # OpenAI Codex CLI
-      coderabbitPackage # CodeRabbit CLI from numtide/llm-agents.nix
+      # AI / LLM tooling. Agent CLIs from external flakes are referenced
+      # via the `agents` / `codex` bindings in the `let` above — add a new
+      # one by dropping a single `agents.<name>` line here.
+      codex # OpenAI Codex CLI (sadjow/codex-cli-nix)
+      agents.coderabbit-cli # CodeRabbit CLI (numtide/llm-agents.nix)
+      agents.gemini-cli # Google Gemini CLI (numtide/llm-agents.nix)
 
       # Misc dev-machine utilities
       rclone # Drive/Dropbox/etc remote sync (used by Berkeley Mono font activation)
