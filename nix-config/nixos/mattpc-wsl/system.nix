@@ -12,11 +12,8 @@
 #   - No tailscale daemon — Windows runs tailscaled, mirrored
 #     networking in windows/.wslconfig makes the tailnet reachable
 #     from inside WSL with no extra setup.
-#   - Cockpit disabled — pointless without external port mapping;
-#     for whole-system monitoring, ssh into Windows and run btm.
-#
-# nixos/common.nix is shared with the other NixOS hosts; the lib.mkForce
-# below selectively turns off pieces that don't apply in WSL.
+# nixos/common.nix is shared with the other personal NixOS hosts; the
+# lib.mkForce below selectively turns off pieces that don't apply in WSL.
 
 {
   wsl = {
@@ -36,12 +33,6 @@
   # ports between Windows and WSL, so 22 would collide. Override the
   # default port set in nixos/common.nix.
   services.openssh.ports = lib.mkForce [ 2222 ];
-
-  # Cockpit is enabled in nixos/common.nix for the Pi management UI;
-  # disable it inside WSL since there's no realistic external access
-  # path (no fixed tailnet IP for WSL — tailscale runs on the Windows
-  # host) and `btm` over SSH is the actual monitoring path on this box.
-  services.cockpit.enable = lib.mkForce false;
 
   # NixOS-WSL leaves the firewall off by default and that's the right
   # call for WSL: the Windows firewall is the gating layer (Hyper-V

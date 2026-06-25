@@ -1,9 +1,4 @@
-{
-  config,
-  lib,
-  pkgs,
-  ...
-}:
+{ pkgs, ... }:
 
 {
   nix.settings = {
@@ -220,40 +215,6 @@
     settings = {
       PasswordAuthentication = false;
       PermitRootLogin = "no";
-    };
-  };
-
-  # Cockpit — web-based system management dashboard. Reachable via
-  # Tailscale Serve at https://<host>.tail2be430.ts.net:9443/ from any
-  # tailnet host (the per-host system.nix wires the `tailscale serve`
-  # mapping). Federate via the UI's "add new host" workflow to manage
-  # multiple Pis from a single pane.
-  #
-  # `WebService.Origins` is hostname-templated so each Pi accepts the
-  # WebSocket session from its own tailnet URL. Without this Cockpit
-  # rejects the proxied login with "unexpected error while connecting
-  # to the machine" — its default Origin allowlist only matches the
-  # local hostname, not `<host>.tail2be430.ts.net:9443`.
-  # `AllowUnencrypted = true` is safe here: the unencrypted hop is
-  # loopback (`tailscale serve` → `localhost:9090`); the public-facing
-  # `:9443` stays full-TLS via tailscale's LetsEncrypt cert.
-  # `ProtocolHeader = X-Forwarded-Proto` tells Cockpit to trust the
-  # header tailscale serve sets so its self-knowledge of the request
-  # protocol stays correct through the proxy hop.
-  services.cockpit = {
-    enable = true;
-    openFirewall = true;
-    settings.WebService = {
-      # mkForce because the upstream cockpit module already sets
-      # Origins = "https://localhost:9090" at default priority — without
-      # the override, both definitions collide. mkForce overwrites
-      # (it's a scalar string, not a list — there's no merge), so the
-      # upstream localhost entry is preserved here explicitly. Both
-      # https:// and wss:// variants per origin so the initial page
-      # load AND the WebSocket upgrade pass the allowlist check.
-      Origins = lib.mkForce "https://localhost:9090 wss://localhost:9090 https://${config.networking.hostName}.tail2be430.ts.net:9443 wss://${config.networking.hostName}.tail2be430.ts.net:9443";
-      ProtocolHeader = "X-Forwarded-Proto";
-      AllowUnencrypted = true;
     };
   };
 
