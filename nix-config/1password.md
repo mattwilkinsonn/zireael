@@ -26,7 +26,6 @@ work around this by swapping the env var per `op inject` call.
 | --- | --- | --- | --- |
 | **Personal** | Identity | GitHub.com login + 2FA codes, email passwords, banking, Netflix, life subscriptions, AWS root account, Cloudflare account login, 1Password master password | Full life — keep nothing automated reading from here |
 | **Dev** | Working | GitHub PAT (single-account, scoped per use), Cloudflare API token, OpenRouter API key, Anthropic API key, Personal Claude Code OAuth token, Neon API key, NPM token, GHCR push token, NixOS initial hashed password, host-rotation passwords | Personal projects + dev tooling |
-| **Server** | Working | Technitium admin password, Cockpit credentials, OpenClaw gateway token, server-side OpenRouter API key (separate from Dev's), container registry tokens used by server services | Server hosts only |
 
 ### Sealed Security team (`sealedsecurity.1password.com`)
 
@@ -50,18 +49,16 @@ that boundary is load-bearing.
 
 ### Personal-account SAs (per-host)
 
-Each host has its own SA so blast-radius of a leaked token is
-single-host. All read `op://Dev` + `op://Server`. Token storage
-matches the host's available mechanism (Keychain on Mac,
-systemd-creds on rpi4, 600-perm file on dev hosts).
+Each dev host has its own SA so blast-radius of a leaked token is
+single-host. These read `op://Dev` and, where a local workflow still
+needs it, `op://Server`. Token storage matches the host's available
+mechanism (Keychain on Mac, 600-perm file on dev hosts). Sealed server
+service accounts live with the sealed infra modules that consume them.
 
 | Service account | Used by | Token storage |
 | --- | --- | --- |
 | **macbook-svc** | Mac interactive shell | macOS Keychain entry `OP_SERVICE_ACCOUNT_TOKEN` |
-| **framework-svc** | mattfw interactive shell + root-side `openclaw-env-refresh.service` (reads `op://Server/...`) + Akiflow creds drop | `~/mattw/.config/op/service-account-token` (mode 0600) |
-| **mattserver-svc** | mattserver interactive shell | `~/.config/op/service-account-token` |
 | **pc-svc** | mattpc-wsl interactive shell + Windows host (mattpc) | `~/.config/op/service-account-token` (mode 0600) + Windows `%USERPROFILE%\.config\op\service-account-token` (icacls-locked) |
-| **pi-svc** | rpi4 `technitium-env-refresh.service` | systemd-creds at `/etc/op-pi-svc-token.cred` |
 | **personal-gha-svc** | Personal-project GitHub Actions workflows | GitHub Actions secret `OP_SERVICE_ACCOUNT_TOKEN` per personal repo |
 
 ### Team-account SA (shared)
@@ -223,7 +220,6 @@ its desktop-app integration:
 | --- | --- |
 | Mac (`Matts-MacBook-Pro`) | Bundled with the 1Password.app cask; on PATH via `brew shellenv` |
 | mattpc-wsl (`mattpc-wsl`) | NixOS `environment.systemPackages` in `nixos/common.nix` |
-| rpi (`rpi5`, `rpi4`) | NixOS `environment.systemPackages` in `nixos/common.nix` |
 | WSL standalone (`mattw`) | Manual `apt`/`brew` install — no system layer to declare it in |
 
 ## Onboarding a new machine
