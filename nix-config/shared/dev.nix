@@ -135,6 +135,7 @@ in
       codex # OpenAI Codex CLI (sadjow/codex-cli-nix)
       agents.coderabbit-cli # CodeRabbit CLI (numtide/llm-agents.nix)
       agents.gemini-cli # Google Gemini CLI (numtide/llm-agents.nix)
+      agents.omp # Oh My Pi CLI (numtide/llm-agents.nix)
 
       # Misc dev-machine utilities
       rclone # Drive/Dropbox/etc remote sync (used by Berkeley Mono font activation)
@@ -594,10 +595,8 @@ in
   # initContent).
   #
   # First run on Mac: produce credentials via `af auth` (browser token
-  # extraction), then `op document create` into the Server vault. On
-  # headless mattfw, openclaw-env-refresh fetches the credentials file
-  # from 1P and drops it into ~/.config/af/credentials.json — no local
-  # browser extraction needed.
+  # extraction), then `op document create` into the Server vault. The
+  # sealed mattfw module owns the headless refresh path from 1Password.
   home.activation.installAkiflowCli = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     AF_REPO="https://github.com/mattwilkinsonn/akiflow-cli.git"
     AF_SRC="$HOME/.local/src/akiflow-cli"
