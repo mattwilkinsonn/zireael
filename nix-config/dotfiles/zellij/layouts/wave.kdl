@@ -1,22 +1,40 @@
-// Wave layout — a supervisor pane on top with a row of worker panes
-// below, for running several `omp` peer sessions side by side (the
-// cross-repo / multi-agent "wave"). Launch with:
+// Wave layout — multi-agent supervision.
 //
-//     zellij --layout wave
+//   Left column : supervisor on top (with a stacked scratch shell behind it),
+//                 jjui on the repo below.
+//   Right column: 8 stacked `omp` worker agents.
 //
-// Each pane opens a shell in the launch directory. For isolated work,
-// `cd` a worker into a `jj-ws`-created workspace (or a different repo)
-// and start `omp`. Peers coordinate via the `irc` tool + a shared
-// markdown tracker — see skill://multi-agent-wave. Adjust the worker
-// count to taste; this is a 1-supervisor + 3-worker template.
+// Launch fresh:        zellij --layout wave
+// In a session:        Ctrl-t w   (or run `zwave`)
+//
+// The agents run `omp` directly; they inherit the env (incl. 1Password
+// secrets + PATH) from the shell that launched zellij, so start zellij from a
+// normal login shell. For isolated per-agent workspaces, replace a worker's
+// `{ command "omp"; }` with a plain shell and run `cd "$(jj-ws add slotN)" && omp`.
 layout {
     tab name="wave" focus=true {
-        pane split_direction="horizontal" {
-            pane size="22%" name="supervisor"
-            pane split_direction="vertical" {
-                pane name="worker 1"
-                pane name="worker 2"
-                pane name="worker 3"
+        pane split_direction="vertical" {
+            // LEFT column
+            pane split_direction="horizontal" size="38%" {
+                // supervisor + a scratch shell, stacked (expand the shell when needed)
+                pane stacked=true {
+                    pane name="supervisor" focus=true
+                    pane name="shell"
+                }
+                pane name="jjui" {
+                    command "jjui"
+                }
+            }
+            // RIGHT column: 8 omp worker agents, stacked
+            pane stacked=true {
+                pane name="agent 1" { command "omp"; }
+                pane name="agent 2" { command "omp"; }
+                pane name="agent 3" { command "omp"; }
+                pane name="agent 4" { command "omp"; }
+                pane name="agent 5" { command "omp"; }
+                pane name="agent 6" { command "omp"; }
+                pane name="agent 7" { command "omp"; }
+                pane name="agent 8" { command "omp"; }
             }
         }
     }

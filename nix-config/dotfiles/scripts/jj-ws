@@ -17,6 +17,19 @@ usage() {
   exit 2
 }
 
+# A workspace name must be a plain identifier. Reject empty, `.`/`..`, slashes,
+# and any `..` so the `rm -rf "$wsdir/$name"` below can't be tricked into
+# escaping <repo>.ws/ (e.g. `jj-ws rm ../sibling`, `jj-ws rm .`).
+require_name() {
+  name="${1:?$(usage)}"
+  case "$name" in
+    . | .. | */* | *..*)
+      echo "jj-ws: invalid workspace name: '$name'" >&2
+      exit 2
+      ;;
+  esac
+}
+
 cmd="${1:-ls}"
 [ "$#" -gt 0 ] && shift || true
 
@@ -33,14 +46,22 @@ wsdir="${mainroot%/}.ws"
 
 case "$cmd" in
   add)
-    name="${1:?$(usage)}"
+    require_name "${1:-}"
     mkdir -p "$wsdir"
     jj workspace add --name "$name" "$wsdir/$name" >&2
     printf '%s\n' "$wsdir/$name"
     ;;
   rm | forget)
-    name="${1:?$(usage)}"
+    require_name "${1:-}"
     target="${wsdir:?}/${name:?}"
+    # Only operate on jj-ws-managed workspaces — they always live at
+    # <repo>.ws/<name>. A missing target dir means a typo or the repo's MAIN
+    # workspace (e.g. `default`, whose checkout is <repo>, not under .ws);
+    # `jj workspace forget` would happily unregister it, so refuse here.
+    if [ ! -d "$target" ]; then
+      echo "jj-ws: no jj-ws workspace at $target (refusing '$name')" >&2
+      exit 1
+    fi
     # refuse to delete the workspace you're standing in (resolve symlinks so
     # macOS /var vs /private/var doesn't defeat the check)
     here="$(pwd -P)"
@@ -51,7 +72,15 @@ case "$cmd" in
         exit 1
         ;;
     esac
-    jj workspace forget "$name" 2>/dev/null || true
+    # Forget the workspace metadata FIRST; only delete the directory if that
+    # succeeded. A suppressed forget failure (locked repo, inconsistent state,
+    # already-forgotten name) would otherwise leave jj with a registered
+    # workspace whose checkout is gone — a dead `jj workspace list` entry that
+    # blocks re-adding the name.
+    if ! jj workspace forget "$name"; then
+      echo "jj-ws: 'jj workspace forget $name' failed — leaving $target in place" >&2
+      exit 1
+    fi
     rm -rf "$target"
     echo "jj-ws: removed workspace '$name' ($target)" >&2
     ;;

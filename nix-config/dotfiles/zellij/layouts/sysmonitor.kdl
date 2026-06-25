@@ -1,0 +1,17 @@
+// Sysmonitor layout — system monitor beside a scratch shell.
+//
+//   Left : btm (bottom — TUI system monitor).
+//   Right: a plain shell.
+//
+// Launch fresh:   zellij --layout sysmonitor
+// In a session:   Ctrl-t m   (or run `zmon`)
+layout {
+    tab name="sysmonitor" focus=true {
+        pane split_direction="vertical" {
+            pane name="btm" {
+                command "btm"
+            }
+            pane name="shell" focus=true
+        }
+    }
+}

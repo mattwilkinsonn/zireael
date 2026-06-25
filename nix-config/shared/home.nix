@@ -246,9 +246,18 @@
   # the full keymap — swap-layout binds are intentionally omitted so a
   # stray Alt [ / Alt ] / tmux-space can't reshuffle the workspace.
   home.file.".config/zellij/config.kdl".source = ../dotfiles/zellij/config.kdl;
-  # Wave layout for the multi-agent workflow (supervisor + worker panes).
-  # Launch with `zellij --layout wave`. See skill://multi-agent-wave.
-  home.file.".config/zellij/layouts/wave.kdl".source = ../dotfiles/zellij/layouts/wave.kdl;
+  # Layouts for the multi-agent workflow + helpers (wave / push / sysmonitor).
+  # Whole-dir source so new layouts are picked up automatically. Launch with
+  # `zellij --layout <name>`, or in a session via Ctrl-t w|p|m (see config.kdl)
+  # or the `zwave`/`zpush`/`zmon` aliases. See skill://multi-agent-wave.
+  home.file.".config/zellij/layouts".source = ../dotfiles/zellij/layouts;
+  # Zellij layout-switch aliases — run inside a session to open the layout as a
+  # new tab (fresh launch is `zellij --layout <name>`; keys are Ctrl-t w|p|m).
+  programs.zsh.shellAliases = {
+    zwave = "zellij action new-tab --layout wave";
+    zpush = "zellij action new-tab --layout push";
+    zmon = "zellij action new-tab --layout sysmonitor";
+  };
 
   # ─── Files folded in from the old dotfiles repo ──────────────────────
   #

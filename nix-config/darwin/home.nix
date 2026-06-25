@@ -9,6 +9,7 @@
     ../shared/dev.nix
     ../shared/load-secrets.nix
     ../shared/privatefiles-symlinks.nix
+    ../shared/agent-config.nix
   ];
 
   home.username = lib.mkForce "mattwilkinson";
