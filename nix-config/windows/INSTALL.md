@@ -278,6 +278,18 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\windows-bootstrap.ps1
 ```
 
+For an existing Windows install, rotate the Windows-side OpenSSH key
+after changing `nixos/common.nix`:
+
+```powershell
+# From an elevated PowerShell
+pwsh -File .\nix-config\windows\update-admin-ssh-key.ps1
+```
+
+This rewrites `C:\ProgramData\ssh\administrators_authorized_keys` to the
+current zireael admin key and reapplies the strict ACLs required by
+Windows OpenSSH.
+
 When prompted, paste the Mac SSH public key from 1Password. Then sign
 into Tailscale via the system tray. Confirm `tailscale ip -4` returns
 a tailnet address.
@@ -399,23 +411,24 @@ Phase 2 does:
    load-secrets warmup, etc.) actually fire.
 4. Rotates `mattw` and `root` passwords from `op://Dev/mattpc-wsl
    Password`.
-5. Fetches the inter-server SSH key from `op://Server/inter-server` into
-   `~/.ssh/id_ed25519_inter_server` (used for host-to-host automation
-   between mattpc-wsl, mattfw, mattserver, and the Pis).
+5. Uses the declarative `mattw` SSH authorized key from
+   `nixos/common.nix`.
 6. Sanity-checks sshd-on-2222, podman socket, resolv.conf.
 
 ### W.6 Verify SSH from the Mac
 
 ```bash
 # From the Mac
-ssh mattw@mattpc.tail08a5c5.ts.net           # Windows side, port 22 — for `btm`-type system monitoring
-ssh -p 2222 mattw@mattpc.tail08a5c5.ts.net   # WSL side, port 2222 — for Linux dev work
+ssh mattw@mattpc.tail2be430.ts.net           # Windows side, port 22 — for `btm`-type system monitoring
+ssh -p 2222 mattw@mattpc.tail2be430.ts.net   # WSL side, port 2222 — for Linux dev work
 ```
 
 Both should land you in the right shell with no password prompt:
 
-- The Mac's SSH key is in `administrators_authorized_keys` on Windows
-  (set up by `windows-bootstrap.ps1`).
+- The current zireael admin SSH key is in
+  `administrators_authorized_keys` on Windows (set up by
+  `windows-bootstrap.ps1`, or rotated later with
+  `windows/update-admin-ssh-key.ps1`).
 - The same key is wired into `users.users.mattw.openssh.authorizedKeys.keys`
   in `nixos/common.nix:52-77` and is dropped at
   `/etc/ssh/authorized_keys.d/mattw` on every NixOS host that imports
@@ -475,12 +488,12 @@ fc-list | grep -i berkeley  # confirm fonts landed
 
 ```bash
 # Windows-side monitoring (from any tailnet host)
-ssh mattw@mattpc.tail08a5c5.ts.net
+ssh mattw@mattpc.tail2be430.ts.net
 btm                       # whole-Windows view: CPU, RAM, GPU, disks
 exit
 
 # WSL-side monitoring
-ssh -p 2222 mattw@mattpc.tail08a5c5.ts.net
+ssh -p 2222 mattw@mattpc.tail2be430.ts.net
 btm                       # WSL view (CPU + RAM allocated to WSL only)
 ```
 

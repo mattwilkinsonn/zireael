@@ -307,7 +307,7 @@ Section 'Post-install checklist'
      wsl --shutdown
      wsl -d NixOS
      # inside WSL as `mattw` (phase 2 — migrates dotfiles,
-     # stores op token, rotates password, fetches inter-server key):
+     # stores op token, rotates password):
      bash ~/repos/zireael/nix-config/nixos/scripts/mattpc-wsl-bootstrap.sh
    See nix-config/windows/INSTALL.md sections W.4 and W.5 for the
    full two-phase walkthrough.
