@@ -207,6 +207,9 @@
   # the full keymap — swap-layout binds are intentionally omitted so a
   # stray Alt [ / Alt ] / tmux-space can't reshuffle the workspace.
   home.file.".config/zellij/config.kdl".source = ../dotfiles/zellij/config.kdl;
+  # Wave layout for the multi-agent workflow (supervisor + worker panes).
+  # Launch with `zellij --layout wave`. See skill://multi-agent-wave.
+  home.file.".config/zellij/layouts/wave.kdl".source = ../dotfiles/zellij/layouts/wave.kdl;
 
   # ─── Files folded in from the old dotfiles repo ──────────────────────
   #

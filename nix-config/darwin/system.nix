@@ -137,6 +137,7 @@
       "1password"
       "1password-cli"
       "claude"
+      "emdash" # ADE: parallel agent worktrees + in-app PR/Linear/diff/CI; launches omp via the pi-provider shim (see dev.nix)
       "docker-desktop"
       "google-chrome"
       "spotify"

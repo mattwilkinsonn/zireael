@@ -1,0 +1,23 @@
+// Wave layout — a supervisor pane on top with a row of worker panes
+// below, for running several `omp` peer sessions side by side (the
+// cross-repo / multi-agent "wave"). Launch with:
+//
+//     zellij --layout wave
+//
+// Each pane opens a shell in the launch directory. For isolated work,
+// `cd` a worker into a `jj-ws`-created workspace (or a different repo)
+// and start `omp`. Peers coordinate via the `irc` tool + a shared
+// markdown tracker — see skill://multi-agent-wave. Adjust the worker
+// count to taste; this is a 1-supervisor + 3-worker template.
+layout {
+    tab name="wave" focus=true {
+        pane split_direction="horizontal" {
+            pane size="22%" name="supervisor"
+            pane split_direction="vertical" {
+                pane name="worker 1"
+                pane name="worker 2"
+                pane name="worker 3"
+            }
+        }
+    }
+}

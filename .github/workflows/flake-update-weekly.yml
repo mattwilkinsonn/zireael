@@ -1,0 +1,38 @@
+name: flake-update-weekly
+
+# Weekly full refresh of every flake input (nixpkgs, nixpkgs-unstable,
+# home-manager, nix-darwin, nixos-wsl, and the rest). The daily job
+# handles the fast-moving llm-agents + codex-cli inputs; this catches
+# everything else. Opens a PR against main; Matt reviews + merges.
+#
+# Distinct branch from the daily job so the two PRs never collide.
+
+"on":
+  schedule:
+    - cron: "0 7 * * 1" # 07:00 UTC Mondays
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write # Determinate Nix OIDC
+
+jobs:
+  update:
+    name: update flake.lock (all inputs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: DeterminateSystems/update-flake-lock@main
+        with:
+          path-to-flake-dir: nix-config
+          branch: flake-update-weekly
+          commit-msg: "chore(nix): update flake.lock"
+          pr-title: "chore(nix): weekly flake.lock update"
+          pr-labels: |
+            nix
+            automated
+          nix-options: --accept-flake-config
+          token: ${{ secrets.GH_TOKEN_FOR_UPDATES || github.token }}

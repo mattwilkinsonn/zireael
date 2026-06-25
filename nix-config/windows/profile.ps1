@@ -38,8 +38,10 @@ function load-secrets {
     if (-not (Get-Command op -ErrorAction SilentlyContinue)) { return }
 
     # Personal account — items in op://Dev/...
+    # ANTHROPIC_API_KEY uses a non-magic name on purpose (see load-secrets.nix):
+    # tools auto-detect ANTHROPIC_API_KEY and bill the API instead of the sub.
     $personalTemplate = @'
-$env:ANTHROPIC_API_KEY = "{{ op://Dev/Anthropic API Key/credential }}"
+$env:TESTING_ANTHROPIC_API_KEY = "{{ op://Dev/Anthropic API Key/credential }}"
 $env:OPENROUTER_API_KEY = "{{ op://Dev/OpenRouter API Key/credential }}"
 $env:GITHUB_PERSONAL_ACCESS_TOKEN = "{{ op://Dev/GitHub Personal Access Token/token }}"
 $env:CLOUDFLARE_API_TOKEN = "{{ op://Dev/Personal Cloudflare API Token/token }}"

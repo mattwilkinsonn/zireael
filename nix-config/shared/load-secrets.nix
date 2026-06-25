@@ -118,7 +118,11 @@ _:
               # Personal account: items in op://Dev/... Read with
               # OP_SERVICE_ACCOUNT_TOKEN (matt-dev-svc / per-host SAs).
               local personal_template
-              personal_template='export ANTHROPIC_API_KEY="{{ op://Dev/Anthropic API Key/credential }}"
+              # ANTHROPIC_API_KEY is exported under a non-magic name on purpose:
+              # OMP and the Anthropic SDKs auto-detect ANTHROPIC_API_KEY and would
+              # bill the pay-per-token API instead of the claude.ai subscription
+              # OAuth. Rename back only if a tool genuinely needs a raw sk-ant key.
+              personal_template='export TESTING_ANTHROPIC_API_KEY="{{ op://Dev/Anthropic API Key/credential }}"
     export OPENROUTER_API_KEY="{{ op://Dev/OpenRouter API Key/credential }}"
     export GITHUB_PERSONAL_ACCESS_TOKEN="{{ op://Dev/GitHub Personal Access Token/token }}"
     export CLOUDFLARE_API_TOKEN="{{ op://Dev/Personal Cloudflare API Token/token }}"
