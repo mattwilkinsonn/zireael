@@ -188,8 +188,9 @@ in
     # SEA-829.) The seal bk bundle forwards this var into the sandbox.
     export BUILDKITE_ORGANIZATION_SLUG=sealedsecurity
 
-    # fnm
-    eval "$(fnm env --use-on-cd --shell zsh)"
+    # fnm — cached via _evalcache (.zshenv); `fnm env` is otherwise a
+    # per-shell subprocess. Regenerates on fnm path/mtime change.
+    _evalcache fnm fnm fnm env --use-on-cd --shell zsh
   '';
 
   # rustup default toolchain: set stable as default on first install.

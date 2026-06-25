@@ -5,6 +5,45 @@
 
   programs.home-manager.enable = true;
 
+  # Force a dark terminal background for OMP's theme detection. Under Zellij
+  # on macOS OMP can't read the real background (OSC 11 passthrough is broken
+  # there) and falls back to the macOS *system* appearance — often Light — so
+  # it picks a light theme on a dark terminal. COLORFGBG is OMP's Tier-2
+  # source, checked before that fallback (bg=0 <8 => dark). Set via zsh
+  # envExtra (~/.zshenv, sourced unconditionally by every zsh) rather than
+  # home.sessionVariables, whose hm-session-vars.sh is login-gated and guarded
+  # by __HM_SESS_VARS_SOURCED — fresh shells / Zellij panes inherit a stale
+  # guard and never pick the var up.
+  programs.zsh.envExtra = ''
+    export COLORFGBG="15;0"
+
+    # _evalcache <key> <bin> <command...>: run a tool's shell-init once, cache
+    # the output, and source the cache on later shells — regenerating only when
+    # the tool's resolved path or mtime changes. Turns each `eval "$(tool init)"`
+    # from a per-shell subprocess into a plain file source. No-ops if <bin> is
+    # absent (preserves the old `command -v … &&` guards).
+    zmodload -F zsh/stat b:zstat 2>/dev/null
+    _evalcache() {
+      # No `emulate -L zsh`: its -L localizes option changes, so a setopt run by
+      # a sourced init (e.g. starship's `setopt promptsubst`) is reverted when
+      # this function returns — which breaks the prompt (shows raw $(starship …)).
+      local key=$1 bin=$2; shift 2
+      local binpath; binpath=$(command -v "$bin" 2>/dev/null) || return 0
+      local cache="''${XDG_CACHE_HOME:-$HOME/.cache}/zsh/evalcache/''${key}.zsh"
+      local -a st; zstat -A st +mtime -- "$binpath" 2>/dev/null
+      local stamp="#''${binpath}@''${st[1]:-0}"
+      local head=""
+      [[ -r $cache ]] && IFS= read -r head < "$cache"
+      if [[ $head != $stamp ]]; then
+        mkdir -p -- "''${cache:h}"
+        if ! { print -r -- "$stamp"; "$@" } >| "$cache" 2>/dev/null; then
+          command rm -f -- "$cache"; eval "$("$@" 2>/dev/null)"; return
+        fi
+      fi
+      source "$cache"
+    }
+  '';
+
   # Packages — universal set, present on every host (including headless
   # Pis + mattserver). Dev-tier tooling (toolchains, IaC, language
   # linters, heavy build deps) lives in shared/dev.nix and is imported
@@ -127,20 +166,20 @@
   # Starship prompt
   programs.starship = {
     enable = true;
-    enableZshIntegration = true;
+    enableZshIntegration = false; # cached in dotfiles/zsh/zshrc via _evalcache
     settings = builtins.fromTOML (builtins.readFile ../dotfiles/starship/starship.toml);
   };
 
   # fzf
   programs.fzf = {
     enable = true;
-    enableZshIntegration = true;
+    enableZshIntegration = false; # cached in dotfiles/zsh/zshrc via _evalcache
   };
 
   # zoxide
   programs.zoxide = {
     enable = true;
-    enableZshIntegration = true;
+    enableZshIntegration = false; # cached in dotfiles/zsh/zshrc via _evalcache
   };
 
   # Git
@@ -175,7 +214,7 @@
   # direnv
   programs.direnv = {
     enable = true;
-    enableZshIntegration = true;
+    enableZshIntegration = false; # cached in dotfiles/zsh/zshrc via _evalcache
     nix-direnv.enable = true;
     # Suppress the noisy `direnv: export +VAR +VAR ~VAR …` diff line on
     # every directory entry. With a devenv/nix-direnv shell the export
