@@ -171,7 +171,7 @@
     openssh.authorizedKeys.keys = [
       # Personal SSH key — biometric-gated via the 1Password SSH agent on
       # Mac. Used for matt's daily SSH access from his Mac.
-      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAJ6mvnQYv4B9V7KWo4xt6k5+2fx0Z1e9J384hSkg9Ec"
+      "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOfinoupMf/v8sM7ez4K7wc/lN1a6NgXxHpv9wls5Ra9"
     ];
   };
   users.users.root.initialHashedPassword = "$6$s5sbuiyTY/LhtPY3$i1/wNklH7HJrP6DYjsUZ.OdULaxFJ6MHfpupdY09yp.Nbkslng93AVXiHxfyoU7xIBhbjH6CdT/IcMsD8INhm0";
@@ -224,7 +224,7 @@
   };
 
   # Cockpit — web-based system management dashboard. Reachable via
-  # Tailscale Serve at https://<host>.tail08a5c5.ts.net:9443/ from any
+  # Tailscale Serve at https://<host>.tail2be430.ts.net:9443/ from any
   # tailnet host (the per-host system.nix wires the `tailscale serve`
   # mapping). Federate via the UI's "add new host" workflow to manage
   # multiple Pis from a single pane.
@@ -233,7 +233,7 @@
   # WebSocket session from its own tailnet URL. Without this Cockpit
   # rejects the proxied login with "unexpected error while connecting
   # to the machine" — its default Origin allowlist only matches the
-  # local hostname, not `<host>.tail08a5c5.ts.net:9443`.
+  # local hostname, not `<host>.tail2be430.ts.net:9443`.
   # `AllowUnencrypted = true` is safe here: the unencrypted hop is
   # loopback (`tailscale serve` → `localhost:9090`); the public-facing
   # `:9443` stays full-TLS via tailscale's LetsEncrypt cert.
@@ -251,7 +251,7 @@
       # upstream localhost entry is preserved here explicitly. Both
       # https:// and wss:// variants per origin so the initial page
       # load AND the WebSocket upgrade pass the allowlist check.
-      Origins = lib.mkForce "https://localhost:9090 wss://localhost:9090 https://${config.networking.hostName}.tail08a5c5.ts.net:9443 wss://${config.networking.hostName}.tail08a5c5.ts.net:9443";
+      Origins = lib.mkForce "https://localhost:9090 wss://localhost:9090 https://${config.networking.hostName}.tail2be430.ts.net:9443 wss://${config.networking.hostName}.tail2be430.ts.net:9443";
       ProtocolHeader = "X-Forwarded-Proto";
       AllowUnencrypted = true;
     };

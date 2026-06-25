@@ -310,7 +310,7 @@ if [ "$PHASE" = "2" ]; then
 Next steps (Windows-side):
   1. SSH into the WSL distro from any tailnet host:
        ssh -p 2222 mattw@mattpc                     # Windows mirrored net
-       ssh -p 2222 mattw@mattpc.tail08a5c5.ts.net   # via tailnet
+       ssh -p 2222 mattw@mattpc.tail2be430.ts.net   # via tailnet
      (The Tailnet SSH public key from op://Personal is wired
      declaratively in nixos/common.nix — no manual authorized_keys
      step needed.)
