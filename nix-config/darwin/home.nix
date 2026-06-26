@@ -1,8 +1,14 @@
 {
+  config,
   lib,
   ...
 }:
 
+let
+  # Same live-edit symlink helper as shared/home.nix (see there for rationale).
+  dotfiles = "${config.home.homeDirectory}/repos/zireael/nix-config/dotfiles";
+  linkDot = path: config.lib.file.mkOutOfStoreSymlink "${dotfiles}/${path}";
+in
 {
   imports = [
     ../shared/home.nix
@@ -239,13 +245,13 @@
 
   # skhd hotkey daemon — the skhdrc dispatches cmd+alt-* shortcuts to
   # yabai commands. Not executable (parsed by skhd, not run directly).
-  home.file.".config/skhd/skhdrc".source = ../dotfiles/skhd/skhdrc;
+  home.file.".config/skhd/skhdrc".source = linkDot "skhd/skhdrc";
 
   # 1Password SSH agent config — controls which vaults' keys the
   # agent offers to ssh clients. Personal vault only on this box.
-  home.file.".config/1Password/ssh/agent.toml".source = ../dotfiles/onepassword/ssh/agent.toml;
+  home.file.".config/1Password/ssh/agent.toml".source = linkDot "onepassword/ssh/agent.toml";
 
   # Zed editor config — macOS GUI app installed via Homebrew cask in
   # system.nix. Keep runtime state under ~/.config/zed/prompts unmanaged.
-  xdg.configFile."zed/settings.json".source = ../dotfiles/zed/settings.json;
+  xdg.configFile."zed/settings.json".source = linkDot "zed/settings.json";
 }

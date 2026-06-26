@@ -1,5 +1,19 @@
-{ pkgs, lib, ... }:
+{
+  config,
+  pkgs,
+  lib,
+  ...
+}:
 
+let
+  # Static, hand-edited dotfiles symlinked to the live repo copy via
+  # mkOutOfStoreSymlink, so edits land without a nix-switch (same mechanism as
+  # agent-config.nix / privatefiles-symlinks.nix). Generated content
+  # (programs.zsh/bash/starship, readFile bodies) stays nix-built, and
+  # executable scripts stay store copies for the +x bit.
+  dotfiles = "${config.home.homeDirectory}/repos/zireael/nix-config/dotfiles";
+  linkDot = path: config.lib.file.mkOutOfStoreSymlink "${dotfiles}/${path}";
+in
 {
   home.stateVersion = "25.11";
 
@@ -74,8 +88,6 @@
     };
 
     autocd = true;
-
-    profileExtra = builtins.readFile ../dotfiles/zsh/profile.zsh;
 
     sessionVariables = { };
 
@@ -244,24 +256,24 @@
   };
 
   # Ghostty — multiple `font-family` lines build a fallback chain.
-  home.file.".config/ghostty/config".source = ../dotfiles/ghostty/config;
+  home.file.".config/ghostty/config".source = linkDot "ghostty/config";
 
   # Foot (Wayland-native terminal). Comma-separated family list builds a
   # fallback chain. Only loaded on Linux but harmless to declare cross-platform
   # via home.file.
-  home.file.".config/foot/foot.ini".source = ../dotfiles/foot/foot.ini;
-  home.file.".config/ghostty/themes/NightOwlDark".source = ../dotfiles/ghostty/themes/NightOwlDark;
-  home.file.".config/ghostty/themes/NightOwlLight".source = ../dotfiles/ghostty/themes/NightOwlLight;
+  home.file.".config/foot/foot.ini".source = linkDot "foot/foot.ini";
+  home.file.".config/ghostty/themes/NightOwlDark".source = linkDot "ghostty/themes/NightOwlDark";
+  home.file.".config/ghostty/themes/NightOwlLight".source = linkDot "ghostty/themes/NightOwlLight";
 
   # Zellij multiplexer. `keybinds clear-defaults=true` means the file is
   # the full keymap — swap-layout binds are intentionally omitted so a
   # stray Alt [ / Alt ] / tmux-space can't reshuffle the workspace.
-  home.file.".config/zellij/config.kdl".source = ../dotfiles/zellij/config.kdl;
+  home.file.".config/zellij/config.kdl".source = linkDot "zellij/config.kdl";
   # Layouts for the multi-agent workflow + helpers (wave / push / sysmonitor).
   # Whole-dir source so new layouts are picked up automatically. Launch with
   # `zellij --layout <name>`, or in a session via Ctrl-t w|p|m (see config.kdl)
   # or the `zwave`/`zpush`/`zmon` aliases. See skill://multi-agent-wave.
-  home.file.".config/zellij/layouts".source = ../dotfiles/zellij/layouts;
+  home.file.".config/zellij/layouts".source = linkDot "zellij/layouts";
   # Back up a stale REAL ~/.config/zellij/layouts dir (left by a prior generation
   # that managed per-file layouts) so Home Manager can replace it with the
   # whole-dir symlink above instead of aborting checkLinkTargets ("in the way").
@@ -304,23 +316,14 @@
 
   # Markdownlint config — picked up by markdownlint-cli2 from any cwd
   # that walks up to $HOME.
-  home.file.".markdownlint.jsonc".source = ../dotfiles/markdownlint/markdownlint.jsonc;
+  home.file.".markdownlint.jsonc".source = linkDot "markdownlint/markdownlint.jsonc";
 
   # jj (Jujutsu) user config. Includes templater + per-repo scope
   # overrides (sealedsecurity email) + the `jj fix` rustfmt config and
   # the `jj push` alias to jj-hp.
-  xdg.configFile."jj/config.toml".source = ../dotfiles/jj/config.toml;
+  xdg.configFile."jj/config.toml".source = linkDot "jj/config.toml";
 
   # jjui (jj TUI) user config — keybindings for jj-hp integration.
-  xdg.configFile."jjui/config.toml".source = ../dotfiles/jjui/config.toml;
+  xdg.configFile."jjui/config.toml".source = linkDot "jjui/config.toml";
 
-  # Claude Code config — `settings.json` + the status-line script it
-  # references. `.claude/CLAUDE.md` lives in privatefiles (symlinked
-  # at ~/.claude/CLAUDE.md); only the config + scripts are managed
-  # via nix.
-  home.file.".claude/settings.json".source = ../dotfiles/claude/settings.json;
-  home.file.".claude/scripts/status-line.sh" = {
-    source = ../dotfiles/claude/scripts/status-line.sh;
-    executable = true;
-  };
 }
