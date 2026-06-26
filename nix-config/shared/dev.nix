@@ -135,6 +135,11 @@ in
       # jj workspaces under <repo>.ws/). Pairs with the `wave` zellij layout.
       (writeShellScriptBin "jj-ws" (builtins.readFile ../dotfiles/scripts/jj-ws))
 
+      # hk — jj/git hook runner (jdx/hk), pinned via the `hk` flake input to
+      # match the `hk.pkl` schema at the repo root. Built from source by nix so
+      # the binary and schema can't drift (cargo-installed hk silently did).
+      inputs.hk.packages.${pkgs.system}.default
+
       # Misc dev-machine utilities
       rclone # Drive/Dropbox/etc remote sync (used by Berkeley Mono font activation)
       zstd # compression — occasional CLI use

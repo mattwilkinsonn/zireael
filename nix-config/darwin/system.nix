@@ -68,13 +68,6 @@
     btop
     jq
     yq-go
-
-    # ── desktop notifications ──────────────────────────────────────
-    # Native macOS notifications for omp. Under Zellij, omp's OSC 9/777
-    # notifications are swallowed by the multiplexer and never reach Ghostty,
-    # so the `notify` extension shells out to terminal-notifier
-    # (see ~/.omp/agent/extensions/notify.ts).
-    terminal-notifier
   ];
 
   # Fonts (system-wide — nix-darwin links these into /Library/Fonts so every
@@ -117,6 +110,11 @@
       cleanup = "none";
     };
     brews = [
+      # terminal-notifier — desktop banners for the `notify` extension.
+      # Homebrew builds it native arm64 (xcodebuild -arch); the nixpkgs
+      # build ships the upstream x86 .app, which fails to post under
+      # Rosetta on Apple Silicon, so it lives here, not in systemPackages.
+      "terminal-notifier"
       "rtk"
       "xcodes"
       "vjeantet/tap/alerter"

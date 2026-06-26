@@ -2,35 +2,25 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { basename } from "node:path";
 
 // Native macOS desktop notifications for omp. Under Zellij, omp's OSC 9/777
-// notifications are consumed by the multiplexer and never reach Ghostty (zellij
-// only forwards a BEL), so we bypass the terminal-escape path entirely and fire
-// terminal-notifier (falling back to osascript when it's not installed yet).
-// Fires on turn completion and when omp is blocked waiting on you.
+// notifications are consumed by the multiplexer and never reach Ghostty, so we
+// post natively via terminal-notifier — installed native arm64 through Homebrew
+// (the nixpkgs build is the upstream x86 .app and fails to post under Rosetta
+// on Apple Silicon). Fires on turn completion and when omp is blocked on you.
 
-const GHOSTTY_BUNDLE = "com.mitchellh.ghostty"; // toast wears Ghostty's icon; click focuses it
+const GHOSTTY_BUNDLE = "com.mitchellh.ghostty";
 
 function notify(ctx: ExtensionContext, message: string): void {
-	if (process.platform !== "darwin") return; // terminal-notifier/osascript are macOS-only
+	if (process.platform !== "darwin") return; // terminal-notifier is macOS-only
+	const tn = Bun.which("terminal-notifier");
+	if (!tn) return; // not installed yet (pre nix-switch) — skip silently
 	const title = basename(ctx.cwd) || "Oh My Pi";
-	const opts = { stdout: "ignore", stderr: "ignore", stdin: "ignore" } as const;
 	try {
-		const tn = Bun.which("terminal-notifier");
-		if (tn) {
-			Bun.spawn(
-				[tn, "-title", title, "-message", message, "-sender", GHOSTTY_BUNDLE, "-group", `omp-${title}`],
-				opts,
-			).unref();
-			return;
-		}
-		// Fallback: osascript is always present. No -sender/click-to-focus; strip
-		// quotes/backslashes so the inlined AppleScript string can't break.
-		const safe = (s: string): string => s.replace(/["\\]/g, "");
 		Bun.spawn(
-			["osascript", "-e", `display notification "${safe(message)}" with title "${safe(title)}"`],
-			opts,
+			[tn, "-title", title, "-message", message, "-sender", GHOSTTY_BUNDLE],
+			{ stdout: "ignore", stderr: "ignore", stdin: "ignore" },
 		).unref();
 	} catch {
-		// notifier missing or spawn failed — silently skip.
+		// spawn failed — silently skip.
 	}
 }
 
