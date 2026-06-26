@@ -173,6 +173,11 @@ _:
             # bare "we tried" marker. A context that inherits no secrets (a
             # GUI-launched Emdash agent, a stripped env) then still loads them
             # instead of starting omp with tokenless MCP servers.
+            # Billing safeguard: clear the magic ANTHROPIC_API_KEY on every shell
+            # (outside the skip below) so a nested shell that inherited it from a
+            # pre-rename session can't make OMP/the SDKs prefer the pay-per-token
+            # API over the subscription OAuth. Mirrors windows/profile.ps1.
+            unset ANTHROPIC_API_KEY
             if [ -t 1 ] && { [ -z "''${LINEAR_API_KEY:-}" ] || [ -z "''${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; }; then
               load-secrets
             fi

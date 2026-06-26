@@ -22,7 +22,7 @@
     # the tool's resolved path or mtime changes. Turns each `eval "$(tool init)"`
     # from a per-shell subprocess into a plain file source. No-ops if <bin> is
     # absent (preserves the old `command -v … &&` guards).
-    zmodload -F zsh/stat b:zstat 2>/dev/null
+    [ -n "''${ZSH_VERSION:-}" ] && zmodload -F zsh/stat b:zstat 2>/dev/null
     _evalcache() {
       # No `emulate -L zsh`: its -L localizes option changes, so a setopt run by
       # a sourced init (e.g. starship's `setopt promptsubst`) is reverted when
@@ -31,7 +31,7 @@
       local binpath; binpath=$(command -v "$bin" 2>/dev/null) || return 0
       local cache="''${XDG_CACHE_HOME:-$HOME/.cache}/zsh/evalcache/''${key}.zsh"
       local -a st; zstat -A st +mtime -- "$binpath" 2>/dev/null
-      local stamp="#''${binpath}@''${st[1]:-0}"
+      local stamp="#''${binpath:A}@''${st[1]:-0}"
       local head=""
       [[ -r $cache ]] && IFS= read -r head < "$cache"
       if [[ $head != $stamp ]]; then
