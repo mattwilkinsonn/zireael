@@ -86,6 +86,12 @@ $env:LINEAR_API_KEY = "{{ op://Local Dev/Linear API Key/credential }}"
 # Auto-invoke at startup only when stdout is a real tty -- skips
 # non-interactive subshells (ssh-and-run-command, env-resolver scripts,
 # etc.) so they don't pay the ~500ms HTTPS round-trip on every spawn.
+# Billing safeguard: clear the magic ANTHROPIC_API_KEY on every shell before
+# (and regardless of) load-secrets, mirroring load-secrets.nix - a nested shell
+# that inherited it from a pre-rename session would otherwise make tools prefer
+# the pay-per-token API over the subscription OAuth.
+Remove-Item Env:\ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
+
 if (-not [Console]::IsOutputRedirected) {
     load-secrets
 }
