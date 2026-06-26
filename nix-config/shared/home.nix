@@ -36,8 +36,11 @@
       [[ -r $cache ]] && IFS= read -r head < "$cache"
       if [[ $head != $stamp ]]; then
         mkdir -p -- "''${cache:h}"
-        if ! { print -r -- "$stamp"; "$@" } >| "$cache" 2>/dev/null; then
-          command rm -f -- "$cache"; eval "$("$@" 2>/dev/null)"; return
+        local tmp="''${cache}.$$.tmp"
+        if { print -r -- "$stamp"; "$@" } >| "$tmp" 2>/dev/null; then
+          command mv -f -- "$tmp" "$cache"
+        else
+          command rm -f -- "$tmp"; eval "$("$@" 2>/dev/null)"; return
         fi
       fi
       source "$cache"
