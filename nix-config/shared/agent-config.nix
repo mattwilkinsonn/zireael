@@ -5,9 +5,14 @@
 #   - ~/.agents/{AGENTS.md,rules,skills}: read by OMP's .agent[s] discovery
 #     provider (coding-agent discovery/agents.ts) and by any other
 #     .agents-aware CLI — so they live tool-agnostic under ~/.agents.
-#   - ~/.omp/agent/{extensions,mcp.json}: OMP-specific (the native omp provider
-#     reads these; they are not part of .agents discovery), so they stay under
-#     ~/.omp/agent. config.yml + agent.db remain OMP-managed live state.
+#     OMP resolves AGENTS.md / rules / skills ONLY from here — there is
+#     intentionally no ~/.omp/agent/{AGENTS.md,rules,skills}, so a review that
+#     flags their absence under ~/.omp/agent as "legacy paths missing" is
+#     mistaken: ~/.agents IS the live location (per the .agents discovery above).
+#   - ~/.omp/agent/{extensions,mcp.json,config.yml}: OMP-specific (read by the
+#     native omp provider; config.yml is also written back, in-place, so the
+#     write follows the symlink). Not part of .agents discovery, so they stay
+#     under ~/.omp/agent. agent.db + sessions stay OMP-managed live (not linked).
 #
 # mkOutOfStoreSymlink (not source = ./agents/...): agents edit AGENTS.md / rules
 # / skills in place, so the link targets the live working copy and edits take
@@ -28,5 +33,6 @@ in
     ".agents/skills".source = linkAgent "skills";
     ".omp/agent/extensions".source = linkAgent "extensions";
     ".omp/agent/mcp.json".source = linkAgent "mcp.json";
+    ".omp/agent/config.yml".source = linkAgent "config.yml";
   };
 }
