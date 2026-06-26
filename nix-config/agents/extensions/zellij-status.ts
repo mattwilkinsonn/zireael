@@ -22,10 +22,12 @@ const GLYPH: Record<State, string> = {
 
 const inZellij = Boolean(process.env.ZELLIJ);
 
-function show(ctx: ExtensionContext, state: State, ring: boolean): void {
-	const dir = basename(ctx.cwd) || ctx.cwd;
+function show(pi: ExtensionAPI, ctx: ExtensionContext, state: State, ring: boolean): void {
+	// Prefer the session name (auto-titled / user-set) over the cwd — several
+	// agents can share a directory, so the dir is a poor per-pane label.
+	const label = pi.getSessionName() || basename(ctx.cwd) || ctx.cwd;
 	try {
-		ctx.ui.setTitle(`${GLYPH[state]} ${state} \u00b7 ${dir}`);
+		ctx.ui.setTitle(`${GLYPH[state]} ${state} \u00b7 ${label}`);
 	} catch {
 		// setTitle no-ops when headless / in RPC mode without PI_RPC_EMIT_TITLE.
 	}
@@ -37,12 +39,12 @@ function show(ctx: ExtensionContext, state: State, ring: boolean): void {
 
 export default function zellijStatus(pi: ExtensionAPI): void {
 	pi.setLabel("zellij-status");
-	pi.on("turn_start", (_event, ctx) => show(ctx, "working", false));
-	pi.on("input", (_event, ctx) => show(ctx, "working", false));
-	pi.on("tool_approval_resolved", (_event, ctx) => show(ctx, "working", false));
-	pi.on("session_stop", (_event, ctx) => show(ctx, "ready", true));
-	pi.on("tool_approval_requested", (_event, ctx) => show(ctx, "waiting", true));
+	pi.on("turn_start", (_event, ctx) => show(pi, ctx, "working", false));
+	pi.on("input", (_event, ctx) => show(pi, ctx, "working", false));
+	pi.on("tool_approval_resolved", (_event, ctx) => show(pi, ctx, "working", false));
+	pi.on("session_stop", (_event, ctx) => show(pi, ctx, "ready", true));
+	pi.on("tool_approval_requested", (_event, ctx) => show(pi, ctx, "waiting", true));
 	pi.on("tool_call", (event, ctx) => {
-		if (event.toolName === "ask") show(ctx, "waiting", true);
+		if (event.toolName === "ask") show(pi, ctx, "waiting", true);
 	});
 }

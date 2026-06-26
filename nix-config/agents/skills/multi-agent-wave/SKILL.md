@@ -56,8 +56,9 @@ These hold for every agent in a wave, both models:
 
 - **Asking-first checkpoints.** Before removing/replacing code, changing a public API, or choosing between plausible approaches, present 2-3 options with a recommendation and wait. Halt immediately on pushback.
 - **BDD-then-TDD gating.** Outer behavior test first, then unit tests for the new logic, run them and confirm they fail, then implement to green. Bugfixes get a regression test that fails before and passes after.
-- **Commit/push policy.** A slot MAY commit (Conventional Commits subject, terse body); it NEVER pushes — the human pushes.
+- **Commit/push policy.** A slot MAY commit (Conventional Commits subject, terse body) **and create/move its own bookmarks** — only *pushing* is the human's. Creating a bookmark is local, not a push: when a slot's change is ready, it makes the bookmark itself and hands the human the `jj git push` command. **Bookmark naming:** `sea-NNN-<short-desc>--<codename>` — issue ref first, no `user/` prefix, codename suffixed as the lane tag (e.g. `sea-930-woodpecker-fleet-conversion--hudson`).
+- **Commit promptly.** Wave agents share one `.jj/`, so another slot's or the supervisor's op can rebase your `@` between steps. Describe after each logical step — committed work rebases cleanly; uncommitted work is what `update-stale` discards (detail in `skill://vcs-jj`).
 
 ## Codenames / personas
 
-Optional, human-facing only. Pick a codename theme with distinct first letters for eye-scanning if it helps you track slots; keep it out of commits, PR bodies, and code. It is labeling for the supervisor, not a behavioral or memory difference between agents.
+Optional, human-facing only. Pick a codename theme with distinct first letters for eye-scanning if it helps you track slots. It is labeling for the supervisor, not a behavioral or memory difference between agents. Keep it out of commit messages, PR titles/descriptions, and code — with **one** deliberate exception: the `--<codename>` suffix on the branch/bookmark name, which is the lane tag the supervisor reads to tell whose work a PR is (see Commit/push policy above).

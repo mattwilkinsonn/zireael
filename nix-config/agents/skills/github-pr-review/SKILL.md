@@ -53,6 +53,14 @@ Automated bots auto-resolve their own threads when the flagged code stops applyi
 
 When surfacing, paste each finding into the turn summary verbatim — path, line, author, body excerpt — and mark it Addressed (cite the fixup commit), Deferred (cite the tracking issue), or Disagreed (state the reasoning). Matt picks what to reply to and what to resolve.
 
+## Where review-fix commits go
+
+When you do address feedback (with Matt's go-ahead), land the fix as a **new commit** and move the PR's bookmark up over it — so the fix rides the **same PR the comments are on**, updating it and its threads in place.
+
+- **Always a new commit. Never amend or squash a pushed PR's commits.** The auto-reviewers (Greptile, CodeRabbit, Codex) often don't re-trigger on a rewritten (amended/squashed) commit — a fresh commit on top reliably re-triggers them. Extra commits don't pollute history: every repo squash-merges into `main`.
+- **Don't spin the fix onto a new bookmark** — that opens a *separate* PR disconnected from the review, and the original threads never see it.
+- jj/Graphite: `jj new` on the PR's tip, edit, then `jj bookmark set <pr-bookmark> -r @` to carry the bookmark over the fix.
+
 ## Fallback: the `gh` CLI
 
 Reserve the CLI for when the MCP can't express something (rare). Prefer higher-level `gh` commands; never run mutations (`gh api -X POST/PATCH/DELETE`, `gh pr review/comment`) without explicit confirmation.
