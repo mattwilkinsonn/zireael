@@ -203,6 +203,20 @@ in
     run ${pkgs.uv}/bin/uv python install --preview-features python-install-default --default --force
   '';
 
+  # Remove stale Claude Code symlinks left behind when its nix-managed config
+  # was dropped (settings.json + status-line.sh). home-manager prunes dropped
+  # files only while they're still the managed store-symlink, so clear any that
+  # remain — guarded to a nix-store symlink so a real file Claude wrote is kept.
+  home.activation.cleanupStaleClaudeLinks = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    for f in "$HOME/.claude/settings.json" "$HOME/.claude/scripts/status-line.sh"; do
+      if [ -L "$f" ]; then
+        case "$(readlink "$f")" in
+          /nix/store/*) run rm -f "$f" ;;
+        esac
+      fi
+    done
+  '';
+
   # Ensure fnm has the latest Node LTS installed and aliased as the
   # `default` version. Idempotent: `install --lts` is fast no-op when
   # already present, `default` just rewrites the alias. After this
