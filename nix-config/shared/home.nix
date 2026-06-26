@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ pkgs, lib, ... }:
 
 {
   home.stateVersion = "25.11";
@@ -16,35 +16,6 @@
   # guard and never pick the var up.
   programs.zsh.envExtra = ''
     export COLORFGBG="15;0"
-
-    # _evalcache <key> <bin> <command...>: run a tool's shell-init once, cache
-    # the output, and source the cache on later shells — regenerating only when
-    # the tool's resolved path or mtime changes. Turns each `eval "$(tool init)"`
-    # from a per-shell subprocess into a plain file source. No-ops if <bin> is
-    # absent (preserves the old `command -v … &&` guards).
-    [ -n "''${ZSH_VERSION:-}" ] && zmodload -F zsh/stat b:zstat 2>/dev/null
-    _evalcache() {
-      # No `emulate -L zsh`: its -L localizes option changes, so a setopt run by
-      # a sourced init (e.g. starship's `setopt promptsubst`) is reverted when
-      # this function returns — which breaks the prompt (shows raw $(starship …)).
-      local key=$1 bin=$2; shift 2
-      local binpath; binpath=$(command -v "$bin" 2>/dev/null) || return 0
-      local cache="''${XDG_CACHE_HOME:-$HOME/.cache}/zsh/evalcache/''${key}.zsh"
-      local -a st; zstat -A st +mtime -- "$binpath" 2>/dev/null
-      local stamp="#''${binpath:A}@''${st[1]:-0}"
-      local head=""
-      [[ -r $cache ]] && IFS= read -r head < "$cache"
-      if [[ $head != $stamp ]]; then
-        mkdir -p -- "''${cache:h}"
-        local tmp="''${cache}.$$.tmp"
-        if { print -r -- "$stamp"; "$@" } >| "$tmp" 2>/dev/null; then
-          command mv -f -- "$tmp" "$cache"
-        else
-          command rm -f -- "$tmp"; eval "$("$@" 2>/dev/null)"; return
-        fi
-      fi
-      source "$cache"
-    }
   '';
 
   # Packages — universal set, present on every host (including headless
@@ -108,7 +79,44 @@
 
     sessionVariables = { };
 
-    initContent = builtins.readFile ../dotfiles/zsh/zshrc;
+    initContent = lib.mkMerge [
+      # _evalcache is defined here (interactive init), not in envExtra/.zshenv, so
+      # a bash process that sources ~/.zshenv (e.g. the Linux Obsidian systemd
+      # wrappers under `set -euo pipefail`) never parses its zsh-only syntax. The
+      # low mkOrder puts it before the mkBefore brew blocks (darwin/home.nix,
+      # shared/linux.nix) that call it.
+      (lib.mkOrder 250 ''
+        # _evalcache <key> <bin> <command...>: run a tool's shell-init once, cache
+        # the output, and source the cache on later shells — regenerating only when
+        # the tool's resolved path or mtime changes. Turns each `eval "$(tool init)"`
+        # from a per-shell subprocess into a plain file source. No-ops if <bin> is
+        # absent (preserves the old `command -v … &&` guards).
+        zmodload -F zsh/stat b:zstat 2>/dev/null
+        _evalcache() {
+          # No `emulate -L zsh`: its -L localizes option changes, so a setopt run by
+          # a sourced init (e.g. starship's `setopt promptsubst`) is reverted when
+          # this function returns — which breaks the prompt (shows raw $(starship …)).
+          local key=$1 bin=$2; shift 2
+          local binpath; binpath=$(command -v "$bin" 2>/dev/null) || return 0
+          local cache="''${XDG_CACHE_HOME:-$HOME/.cache}/zsh/evalcache/''${key}.zsh"
+          local -a st; zstat -A st +mtime -- "$binpath" 2>/dev/null
+          local stamp="#''${binpath:A}@''${st[1]:-0}"
+          local head=""
+          [[ -r $cache ]] && IFS= read -r head < "$cache"
+          if [[ $head != $stamp ]]; then
+            mkdir -p -- "''${cache:h}"
+            local tmp="''${cache}.$$.tmp"
+            if { print -r -- "$stamp"; "$@" } >| "$tmp" 2>/dev/null; then
+              command mv -f -- "$tmp" "$cache"
+            else
+              command rm -f -- "$tmp"; eval "$("$@" 2>/dev/null)"; return
+            fi
+          fi
+          source "$cache"
+        }
+      '')
+      (builtins.readFile ../dotfiles/zsh/zshrc)
+    ];
 
     plugins = [
       {

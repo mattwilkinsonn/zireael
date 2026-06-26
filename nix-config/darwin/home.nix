@@ -50,10 +50,10 @@
     ];
 
     initContent = lib.mkBefore ''
-      # macOS PATH via Homebrew — cached (see _evalcache in .zshenv, which runs
-      # before .zshrc so the helper is defined here). Absolute brew path because
-      # brew isn't on PATH until shellenv runs; `brew shellenv` is otherwise a
-      # per-shell subprocess.
+      # macOS PATH via Homebrew — cached (_evalcache is defined earlier in .zshrc
+      # via shared/home.nix initContent, so it is available here). Absolute brew
+      # path because brew isn't on PATH until shellenv runs; `brew shellenv` is
+      # otherwise a per-shell subprocess.
       _evalcache brew /opt/homebrew/bin/brew /opt/homebrew/bin/brew shellenv
 
       # 1Password SSH agent socket. macOS defaults SSH_AUTH_SOCK to

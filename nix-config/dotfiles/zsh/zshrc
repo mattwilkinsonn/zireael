@@ -4,7 +4,7 @@ export PATH="$HOME/.local/bin:$PATH"
 setopt AUTO_PUSHD
 setopt PUSHD_IGNORE_DUPS
 
-# CLI completions, cached via _evalcache (defined in .zshenv). The generators
+# CLI completions, cached via _evalcache (defined earlier in .zshrc). The generators
 # are slow Node/clap subprocesses run on every shell; the registration script
 # they emit is static per tool version, while live TAB-completion still
 # re-invokes the tool (e.g. gt's yargs / jj's clap dynamic completer). So
@@ -16,7 +16,7 @@ _evalcache jj-hp jj-hp jj-hp completions zsh
 _evalcache jj-gt jj-gt jj-gt completions zsh
 _evalcache gt    gt    gt completion zsh
 
-# Tool shell-inits, cached via _evalcache (see .zshenv). These replace the
+# Tool shell-inits, cached via _evalcache (defined earlier in .zshrc). These replace the
 # home-manager enableZshIntegration evals (disabled in shared/home.nix); each
 # is a per-shell subprocess otherwise. Guards mirror the home-manager originals.
 _evalcache zoxide zoxide zoxide init zsh
