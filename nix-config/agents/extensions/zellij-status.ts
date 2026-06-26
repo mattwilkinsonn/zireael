@@ -31,10 +31,11 @@ function show(pi: ExtensionAPI, ctx: ExtensionContext, state: State, ring: boole
 	} catch {
 		// setTitle no-ops when headless / in RPC mode without PI_RPC_EMIT_TITLE.
 	}
-	// Only ring on genuine attention transitions, and only under Zellij (a bare
-	// BEL elsewhere is just an audible/visual bell with no [!] payoff — the
-	// notify extension + omp's own OSC handle desktop alerts there).
-	if (ring && inZellij) process.stdout.write("\x07");
+	// Only ring on genuine attention transitions, under Zellij, and only when
+	// stdout is a real TTY — in RPC/headless mode stdout is the protocol stream,
+	// so a stray BEL would corrupt it (the notify extension + omp's own OSC
+	// handle desktop alerts elsewhere).
+	if (ring && inZellij && process.stdout.isTTY) process.stdout.write("\x07");
 }
 
 export default function zellijStatus(pi: ExtensionAPI): void {

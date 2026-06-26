@@ -13,7 +13,7 @@ Everything an OMP session does is on disk. Use this when you need to read a *pri
 
 Under `~/.omp/agent/`:
 
-- **Transcripts (full, authoritative):** `sessions/<cwd-slug>/<ISO-ts>_<session-id>.jsonl` — one JSONL file per session; each line is one message or event. `<cwd-slug>` is the working dir with every `/` turned into `-` (e.g. `~/repos/sealedsecurity` → `-repos-sealedsecurity`). **Subagent** transcripts sit in a sibling directory named after the parent file (minus `.jsonl`): `<ISO-ts>_<session-id>/<AgentId>.jsonl`.
+- **Transcripts (full, authoritative):** `sessions/<cwd-slug>/<ISO-ts>_<session-id>.jsonl` — one JSONL file per session; each line is one message or event. `<cwd-slug>` is the working dir with your `$HOME` prefix stripped, then every remaining `/` turned into `-` (e.g. `~/repos/sealedsecurity` → `-repos-sealedsecurity`, **not** `-Users-you-repos-sealedsecurity`). **Subagent** transcripts sit in a sibling directory named after the parent file (minus `.jsonl`): `<ISO-ts>_<session-id>/<AgentId>.jsonl`.
 - **Prompt history (SQLite):** `history.db`, table `history(id, prompt, created_at, cwd, session_id)` — every user prompt ever typed, with the session it belonged to. Fastest way to find *which* session did *what* and to recover a `session_id`.
 - **Blobs:** `blobs/<sha256>` and `blobs/<sha256>.png` — binary payloads (screenshots, compaction frames). Transcripts reference them as `blob:sha256:<hash>` inside an image block's `data`; OMP resolves the ref to base64 only when it builds the provider request.
 - **Live state, not transcripts:** `agent.db` (auth, `usage_history`), `config.yml` (settings — e.g. `browser.enabled`, `modelRoles`). Don't go looking for conversation content here.
@@ -25,15 +25,15 @@ Under `~/.omp/logs/`:
 
 ## Find the session
 
-Recent prompts and their session ids:
+Recent prompts and their session ids — these are **`read`-tool** calls (the `read` tool speaks SQLite via `?q=`), not shell commands:
 
-```bash
+```text
 read "~/.omp/agent/history.db?q=SELECT id, substr(prompt,1,80) AS prompt, datetime(created_at,'unixepoch') AS ts, session_id FROM history ORDER BY id DESC LIMIT 25"
 ```
 
 Map a `session_id` to its transcript file:
 
-```bash
+```text
 find ~/.omp/agent/sessions -name '*<session-id>*'
 ```
 
@@ -89,7 +89,7 @@ def walk(o):
         for v in o.values(): walk(v)
     elif isinstance(o, list):
         for v in o: walk(v)
-walk(j["body"]["messages"])
+walk((j.get("body") or {}).get("messages") or j.get("messages") or j)
 print(f"{cnt} images, {tot/1e6:.1f} MB base64")
 ```
 

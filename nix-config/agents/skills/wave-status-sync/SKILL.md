@@ -61,9 +61,11 @@ Note each issue's status and its linked PR attachments.
 
 Cross-reference the three sources. Per issue:
 
-- **Merged on `main` but not Done** → set Done by hand (`save_issue` →
-  Done). If the merge→Done automation is broken, this is manual on every
-  sync; do it, and say so in the report.
+- **Merged on `main` but not in the completed state** → set it by hand
+  (`save_issue` to the project's completion status — the `Done`-type state
+  from `list_issue_statuses`; verify the name, it isn't always literally
+  `Done`). If the merge→completed automation is broken, this is manual on
+  every sync; do it, and say so in the report.
 - **Local-ready commit, no PR** → In Progress. **Pushed / PR open** → In
   Review. **No work, blocked or merely slotted** → Queued/Todo (downgrade a
   stale In Review only when the ground shows zero work — no bookmark, not on
