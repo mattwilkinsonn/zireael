@@ -145,7 +145,8 @@ _:
               team_template='export LINEAR_API_KEY="{{ op://Local Dev/Linear API Key/credential }}"
     export CODERABBIT_API_KEY="{{ op://Local Dev/CodeRabbit API Key/credential }}"
     export OPENAI_API_KEY="{{ op://Local Dev/OpenAI API Key mattdev/credential }}"
-    export BUILDKITE_API_TOKEN="{{ op://Local Dev/Buildkite API Token/credential }}"'
+    export BUILDKITE_API_TOKEN="{{ op://Local Dev/Buildkite API Token/credential }}"
+    export TAILSCALE_API_KEY="{{ op://Local Dev/Tailscale API Key/credential }}"'
               _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN Team "$team_template"
 
               # Choose which Claude OAuth token to load by default.
