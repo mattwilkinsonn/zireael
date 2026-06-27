@@ -135,6 +135,8 @@ the duration of the call.
 | `op://Local Dev/Cloudflare API Token/credential` | `CLOUDFLARE_API_TOKEN` |
 | `op://Local Dev/PostHog API Key/credential` | `POSTHOG_API_KEY` |
 | `op://Local Dev/sccache dev cache/{redis_endpoint,redis_password,r2_bucket,r2_endpoint,r2_access_key_id,r2_secret_access_key}` | `SCCACHE_REDIS_ENDPOINT`, `SCCACHE_REDIS_PASSWORD`, `SCCACHE_BUCKET`, `SCCACHE_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
+| `op://Local Dev/LiteLLM Gateway/endpoint` | `LITELLM_BASE_URL` |
+| `op://Local Dev/LiteLLM Gateway/credential` | `LITELLM_API_KEY` |
 
 `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_OAUTH_TOKEN` are set
 together from one Claude OAuth token: either

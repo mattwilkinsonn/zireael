@@ -186,6 +186,14 @@
                 export SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY=l0
               fi
 
+              # LiteLLM gateway (mattfw) endpoint + key for OMP's `litellm`
+              # provider. Separate op inject so a missing item can't block the
+              # team batch above; both stay empty until the gateway is live.
+              local litellm_template
+              litellm_template='export LITELLM_BASE_URL="{{ op://Local Dev/LiteLLM Gateway/endpoint }}"
+    export LITELLM_API_KEY="{{ op://Local Dev/LiteLLM Gateway/credential }}"'
+              _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN LiteLLM "$litellm_template"
+
               # Choose which Claude OAuth token to load by default.
               # Marker at ~/.config/claude-code/default-account holds
               # `personal`, `sealed`, or `xavier`; missing/unknown

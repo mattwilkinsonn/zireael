@@ -1,0 +1,21 @@
+# OMP model configuration — symlinked to ~/.omp/agent/models.yml by
+# shared/agent-config.nix. Authored here so it is declarative and version
+# controlled; config.yml and agent.db stay OMP-managed live state.
+#
+# The built-in `litellm` provider auto-discovers the mattfw gateway when
+# LITELLM_BASE_URL + LITELLM_API_KEY are set (shared/load-secrets.nix sources
+# both from 1Password). Gateway models surface as `litellm/<name>` over the
+# chat-completions wire; LiteLLM owns the per-model upstream specifics
+# (Claude OAuth, the Codex/ChatGPT backend, OpenRouter), so OMP needs no
+# per-upstream credentials for them.
+#
+# Codex via the gateway is the ChatGPT/Codex backend, which rejects the
+# `system` role and accepts `developer`. Send `developer` for that one model
+# so requests don't 400 — scoped to litellm/codex only; every other gateway
+# model keeps default chat-completions shaping.
+providers:
+  litellm:
+    modelOverrides:
+      codex:
+        compat:
+          supportsDeveloperRole: true

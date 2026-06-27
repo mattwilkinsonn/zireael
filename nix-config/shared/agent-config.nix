@@ -9,10 +9,11 @@
 #     intentionally no ~/.omp/agent/{AGENTS.md,rules,skills}, so a review that
 #     flags their absence under ~/.omp/agent as "legacy paths missing" is
 #     mistaken: ~/.agents IS the live location (per the .agents discovery above).
-#   - ~/.omp/agent/{extensions,mcp.json,config.yml}: OMP-specific (read by the
-#     native omp provider; config.yml is also written back, in-place, so the
-#     write follows the symlink). Not part of .agents discovery, so they stay
-#     under ~/.omp/agent. agent.db + sessions stay OMP-managed live (not linked).
+#   - ~/.omp/agent/{extensions,mcp.json,config.yml,models.yml}: OMP-specific
+#     (read by the native omp provider + model registry; config.yml is also
+#     written back in-place, so the write follows the symlink). Not part of
+#     .agents discovery, so they stay under ~/.omp/agent. agent.db + sessions
+#     stay OMP-managed live (not linked).
 #
 # mkOutOfStoreSymlink (not source = ./agents/...): agents edit AGENTS.md / rules
 # / skills in place, so the link targets the live working copy and edits take
@@ -33,6 +34,15 @@ in
     ".agents/skills".source = linkAgent "skills";
     ".omp/agent/extensions".source = linkAgent "extensions";
     ".omp/agent/mcp.json".source = linkAgent "mcp.json";
-    ".omp/agent/config.yml".source = linkAgent "config.yml";
+    # force: clobber any file OMP already wrote at these paths so a switch
+    # never stalls on an existing regular file at the symlink target.
+    ".omp/agent/config.yml" = {
+      source = linkAgent "config.yml";
+      force = true;
+    };
+    ".omp/agent/models.yml" = {
+      source = linkAgent "models.yml";
+      force = true;
+    };
   };
 }
