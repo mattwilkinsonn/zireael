@@ -262,13 +262,15 @@
   # `zellij --layout <name>`, or in a session via Ctrl-t w|p|m (see config.kdl)
   # or the `zwave`/`zpush`/`zmon` aliases. See skill://multi-agent-wave.
   home.file.".config/zellij/layouts".source = ../dotfiles/zellij/layouts;
-  # Drop a stale REAL ~/.config/zellij/layouts dir (left by a prior generation
+  # Back up a stale REAL ~/.config/zellij/layouts dir (left by a prior generation
   # that managed per-file layouts) so Home Manager can replace it with the
   # whole-dir symlink above instead of aborting checkLinkTargets ("in the way").
+  # Moved aside, not deleted, so any user-added layouts stay recoverable.
   home.activation.cleanStaleZellijLayouts = lib.hm.dag.entryBefore [ "checkLinkTargets" ] ''
     d="$HOME/.config/zellij/layouts"
     if [ -d "$d" ] && [ ! -L "$d" ]; then
-      run rm -rf "$d"
+      run rm -rf -- "$d.pre-hm.bak"
+      run mv -- "$d" "$d.pre-hm.bak"
     fi
   '';
   # Zellij layout-switch aliases — run inside a session to open the layout as a

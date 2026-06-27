@@ -102,7 +102,8 @@ path simply won't resolve, and vice versa. Defense in depth.
 ### Eager batch loader — `load-secrets`
 
 Lives in `shared/load-secrets.nix` (`programs.zsh.initContent` on
-NixOS/Mac) and `windows/profile.ps1` (PowerShell on Windows). Runs on
+NixOS/Mac); the tables below describe the Nix loader. `windows/profile.ps1`
+(PowerShell) loads only a subset (Claude + Linear), not the full set. Runs on
 every interactive shell startup; non-interactive shells (systemd
 units, cron, ssh-running-a-command, bash subshells) intentionally
 skip it.
@@ -131,7 +132,6 @@ the duration of the call.
 | `op://Local Dev/Linear API Key/credential` | `LINEAR_API_KEY` |
 | `op://Local Dev/CodeRabbit API Key/credential` | `CODERABBIT_API_KEY` |
 | `op://Local Dev/OpenAI API Key mattdev/credential` | `OPENAI_API_KEY` |
-| `op://Local Dev/Buildkite API Token/credential` | `BUILDKITE_API_TOKEN` |
 | `op://Local Dev/Tailscale API Key/credential` | `TAILSCALE_API_KEY` |
 
 `CLAUDE_CODE_OAUTH_TOKEN` is loaded by `load-secrets` from either
