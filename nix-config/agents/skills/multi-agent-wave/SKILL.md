@@ -1,0 +1,63 @@
+---
+name: multi-agent-wave
+description: "Run several agents in parallel: headless task subagents vs persistent peer sessions, conflict-first slot assignment, shared tracker"
+---
+
+# Multi-Agent Wave
+
+A playbook for running more than one agent at once. Two models, picked by what you are parallelizing. All agents share one model — codenames are scaffolding for the human's eye, never a memory or specialization model.
+
+## Two parallelism models
+
+### 1. Headless `task` subagents (decompose one task)
+
+Spawn ephemeral subagents from inside a single session with the `task` tool.
+
+- No terminal panes; they run in-process and return a result to the spawning agent.
+- Nest at most 3 deep. Keep batches wide, not deep.
+- Use when one task splits into independent, disjoint-file pieces (edit unrelated files, map an unknown subsystem, write tests for separate modules) that you reassemble in one place.
+- The spawning agent owns verification — subagents skip lint/build/test gates; you run them once over the union of changed files when the batch returns.
+- Subagents have no shared chat history; front-load every path, fact, and acceptance criterion into the assignment. They can still reach peers live via `irc`.
+
+### 2. Persistent peer sessions (the visible wave)
+
+One top-level `omp` agent per workspace, each its own long-lived session.
+
+- **Emdash** — single-repo cockpit: one task per slot, all on the same repo.
+- **Ghostty + Zellij panes** — cross-repo: one pane per slot, each pointed at its own repo/worktree.
+- Peers coordinate over the `irc` tool (direct or broadcast) plus a shared markdown tracker. The tracker is the wave's state; `irc` is for live questions and unblocking.
+- Use when the work is several genuinely separate jobs that each want their own context, run for a long time, or span repos — not slices of one task.
+
+### Choosing
+
+Slices of one task that reassemble in one place → `task` subagents. Separate long-running jobs, especially across repos or needing independent review checkpoints → peer sessions. When unsure, prefer `task`; promote to peer sessions only when a slice needs its own durable context.
+
+## Slot assignment: conflict-avoidance first
+
+Assign by what a slot can safely touch, then by priority — **not** by specialization (all agents are the same model and can work any area).
+
+1. **Disjoint files first.** A candidate is only eligible for a slot if its file set does not overlap any in-flight slot's file set. Overlap → stall the candidate or have the human re-order, explicitly.
+2. **Then priority.** Among conflict-free candidates, take the highest priority. Standing rule: flake / CI-health fixes jump the queue — a broken pipeline taxes the whole wave.
+3. **Stacking.** If B genuinely depends on A's unmerged work, branch B from A's tip rather than forcing them disjoint; note the dependency in the tracker.
+
+## Tracker: single source of truth
+
+One markdown file, owned and edited by the human supervisor. Read it first; it is authoritative when live state has drifted. Update it immediately after every assignment, status change, or finish. Sections:
+
+- **Agent/state table** — slot, codename, current task, status.
+- **Conflict map** — file ranges and which slot owns them; a row clears when that work merges.
+- **Candidate queue** — waiting items ordered by priority (flake/CI first), with any stacking/blocked-by notes.
+
+Markdownlint-clean (blank lines around headings, lists, tables; compact `| a | b |` rows).
+
+## Carried-over discipline
+
+These hold for every agent in a wave, both models:
+
+- **Asking-first checkpoints.** Before removing/replacing code, changing a public API, or choosing between plausible approaches, present 2-3 options with a recommendation and wait. Halt immediately on pushback.
+- **BDD-then-TDD gating.** Outer behavior test first, then unit tests for the new logic, run them and confirm they fail, then implement to green. Bugfixes get a regression test that fails before and passes after.
+- **Commit/push policy.** A slot MAY commit (Conventional Commits subject, terse body); it NEVER pushes — the human pushes.
+
+## Codenames / personas
+
+Optional, human-facing only. Pick a codename theme with distinct first letters for eye-scanning if it helps you track slots; keep it out of commits, PR bodies, and code. It is labeling for the supervisor, not a behavioral or memory difference between agents.

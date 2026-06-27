@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ pkgs, lib, ... }:
 
 {
   home.stateVersion = "25.11";
@@ -16,32 +16,6 @@
   # guard and never pick the var up.
   programs.zsh.envExtra = ''
     export COLORFGBG="15;0"
-
-    # _evalcache <key> <bin> <command...>: run a tool's shell-init once, cache
-    # the output, and source the cache on later shells — regenerating only when
-    # the tool's resolved path or mtime changes. Turns each `eval "$(tool init)"`
-    # from a per-shell subprocess into a plain file source. No-ops if <bin> is
-    # absent (preserves the old `command -v … &&` guards).
-    [ -n "''${ZSH_VERSION:-}" ] && zmodload -F zsh/stat b:zstat 2>/dev/null
-    _evalcache() {
-      # No `emulate -L zsh`: its -L localizes option changes, so a setopt run by
-      # a sourced init (e.g. starship's `setopt promptsubst`) is reverted when
-      # this function returns — which breaks the prompt (shows raw $(starship …)).
-      local key=$1 bin=$2; shift 2
-      local binpath; binpath=$(command -v "$bin" 2>/dev/null) || return 0
-      local cache="''${XDG_CACHE_HOME:-$HOME/.cache}/zsh/evalcache/''${key}.zsh"
-      local -a st; zstat -A st +mtime -- "$binpath" 2>/dev/null
-      local stamp="#''${binpath:A}@''${st[1]:-0}"
-      local head=""
-      [[ -r $cache ]] && IFS= read -r head < "$cache"
-      if [[ $head != $stamp ]]; then
-        mkdir -p -- "''${cache:h}"
-        if ! { print -r -- "$stamp"; "$@" } >| "$cache" 2>/dev/null; then
-          command rm -f -- "$cache"; eval "$("$@" 2>/dev/null)"; return
-        fi
-      fi
-      source "$cache"
-    }
   '';
 
   # Packages — universal set, present on every host (including headless
@@ -105,7 +79,44 @@
 
     sessionVariables = { };
 
-    initContent = builtins.readFile ../dotfiles/zsh/zshrc;
+    initContent = lib.mkMerge [
+      # _evalcache is defined here (interactive init), not in envExtra/.zshenv, so
+      # a bash process that sources ~/.zshenv (e.g. the Linux Obsidian systemd
+      # wrappers under `set -euo pipefail`) never parses its zsh-only syntax. The
+      # low mkOrder puts it before the mkBefore brew blocks (darwin/home.nix,
+      # shared/linux.nix) that call it.
+      (lib.mkOrder 250 ''
+        # _evalcache <key> <bin> <command...>: run a tool's shell-init once, cache
+        # the output, and source the cache on later shells — regenerating only when
+        # the tool's resolved path or mtime changes. Turns each `eval "$(tool init)"`
+        # from a per-shell subprocess into a plain file source. No-ops if <bin> is
+        # absent (preserves the old `command -v … &&` guards).
+        zmodload -F zsh/stat b:zstat 2>/dev/null
+        _evalcache() {
+          # No `emulate -L zsh`: its -L localizes option changes, so a setopt run by
+          # a sourced init (e.g. starship's `setopt promptsubst`) is reverted when
+          # this function returns — which breaks the prompt (shows raw $(starship …)).
+          local key=$1 bin=$2; shift 2
+          local binpath; binpath=$(command -v "$bin" 2>/dev/null) || return 0
+          local cache="''${XDG_CACHE_HOME:-$HOME/.cache}/zsh/evalcache/''${key}.zsh"
+          local -a st; zstat -A st +mtime -- "$binpath" 2>/dev/null
+          local stamp="#''${binpath:A}@''${st[1]:-0}"
+          local head=""
+          [[ -r $cache ]] && IFS= read -r head < "$cache"
+          if [[ $head != $stamp ]]; then
+            mkdir -p -- "''${cache:h}"
+            local tmp="''${cache}.$$.tmp"
+            if { print -r -- "$stamp"; "$@" } >| "$tmp" 2>/dev/null; then
+              command mv -f -- "$tmp" "$cache"
+            else
+              command rm -f -- "$tmp"; eval "$("$@" 2>/dev/null)"; return
+            fi
+          fi
+          source "$cache"
+        }
+      '')
+      (builtins.readFile ../dotfiles/zsh/zshrc)
+    ];
 
     plugins = [
       {
@@ -246,9 +257,29 @@
   # the full keymap — swap-layout binds are intentionally omitted so a
   # stray Alt [ / Alt ] / tmux-space can't reshuffle the workspace.
   home.file.".config/zellij/config.kdl".source = ../dotfiles/zellij/config.kdl;
-  # Wave layout for the multi-agent workflow (supervisor + worker panes).
-  # Launch with `zellij --layout wave`. See skill://multi-agent-wave.
-  home.file.".config/zellij/layouts/wave.kdl".source = ../dotfiles/zellij/layouts/wave.kdl;
+  # Layouts for the multi-agent workflow + helpers (wave / push / sysmonitor).
+  # Whole-dir source so new layouts are picked up automatically. Launch with
+  # `zellij --layout <name>`, or in a session via Ctrl-t w|p|m (see config.kdl)
+  # or the `zwave`/`zpush`/`zmon` aliases. See skill://multi-agent-wave.
+  home.file.".config/zellij/layouts".source = ../dotfiles/zellij/layouts;
+  # Back up a stale REAL ~/.config/zellij/layouts dir (left by a prior generation
+  # that managed per-file layouts) so Home Manager can replace it with the
+  # whole-dir symlink above instead of aborting checkLinkTargets ("in the way").
+  # Moved aside, not deleted, so any user-added layouts stay recoverable.
+  home.activation.cleanStaleZellijLayouts = lib.hm.dag.entryBefore [ "checkLinkTargets" ] ''
+    d="$HOME/.config/zellij/layouts"
+    if [ -d "$d" ] && [ ! -L "$d" ]; then
+      run rm -rf -- "$d.pre-hm.bak"
+      run mv -- "$d" "$d.pre-hm.bak"
+    fi
+  '';
+  # Zellij layout-switch aliases — run inside a session to open the layout as a
+  # new tab (fresh launch is `zellij --layout <name>`; keys are Ctrl-t w|p|m).
+  programs.zsh.shellAliases = {
+    zwave = "zellij action new-tab --layout wave";
+    zpush = "zellij action new-tab --layout push";
+    zmon = "zellij action new-tab --layout sysmonitor";
+  };
 
   # ─── Files folded in from the old dotfiles repo ──────────────────────
   #

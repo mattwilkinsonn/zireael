@@ -110,6 +110,11 @@
       cleanup = "none";
     };
     brews = [
+      # terminal-notifier — desktop banners for the `notify` extension.
+      # Homebrew builds it native arm64 (xcodebuild -arch); the nixpkgs
+      # build ships the upstream x86 .app, which fails to post under
+      # Rosetta on Apple Silicon, so it lives here, not in systemPackages.
+      "terminal-notifier"
       "rtk"
       "xcodes"
       "vjeantet/tap/alerter"

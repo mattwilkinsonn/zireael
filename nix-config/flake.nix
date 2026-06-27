@@ -37,6 +37,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     llm-agents.url = "github:numtide/llm-agents.nix";
+    hk = {
+      url = "github:jdx/hk/v1.48.0";
+      inputs.nixpkgs.follows = "nixpkgs-unstable";
+    };
   };
 
   outputs =
@@ -114,6 +118,7 @@
                 ./shared/linux-build-deps.nix
                 ./shared/load-secrets.nix
                 ./shared/privatefiles-symlinks.nix
+                ./shared/agent-config.nix
                 ./nixos/mattpc-wsl/home.nix
               ];
             };

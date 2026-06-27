@@ -32,17 +32,6 @@ let
 in
 {
   home.file = {
-    # Agent config (OMP / oh-my-pi). The instruction file is tool-agnostic
-    # and canonical at ~/.agents/AGENTS.md; OMP reads it via the
-    # ~/.omp/agent/AGENTS.md symlink (OMP only auto-loads a user-global
-    # AGENTS.md from ~/.omp/agent). rules/skills/mcp.json/extensions are
-    # OMP-specific; config.yml + agent.db stay OMP-managed (live, unlinked).
-    ".agents/AGENTS.md".source = linkOut "home/.agents/AGENTS.md";
-    ".omp/agent/AGENTS.md".source = linkOut "home/.agents/AGENTS.md";
-    ".omp/agent/mcp.json".source = linkOut "home/.omp/agent/mcp.json";
-    ".omp/agent/rules".source = linkOut "home/.omp/agent/rules";
-    ".omp/agent/skills".source = linkOut "home/.omp/agent/skills";
-    ".omp/agent/extensions".source = linkOut "home/.omp/agent/extensions";
 
     # sealedsecurity workspace meta — the .code-workspace VS Code
     # multi-root config that opens the multi-repo workspace. References

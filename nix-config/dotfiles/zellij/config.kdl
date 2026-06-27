@@ -56,6 +56,9 @@ keybinds clear-defaults=true {
         bind "Ctrl t" { SwitchToMode "normal"; }
         bind "x" { CloseTab; SwitchToMode "normal"; }
         bind "tab" { ToggleTab; }
+        bind "w" { NewTab { layout "wave"; }; SwitchToMode "normal"; }
+        bind "p" { NewTab { layout "push"; }; SwitchToMode "normal"; }
+        bind "m" { NewTab { layout "sysmonitor"; }; SwitchToMode "normal"; }
     }
     resize {
         bind "left" { Resize "Increase left"; }

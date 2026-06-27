@@ -101,10 +101,13 @@ path simply won't resolve, and vice versa. Defense in depth.
 
 ### Eager batch loader — `load-secrets`
 
-Lives in `shared/load-secrets.nix` (`programs.zsh.initContent` on
-NixOS/Mac) and `windows/profile.ps1` (PowerShell on Windows). Runs on
-every interactive shell startup; non-interactive shells (systemd
-units, cron, ssh-running-a-command, bash subshells) intentionally
+Lives in `shared/load-secrets.nix` (`programs.zsh.profileExtra` → `.zprofile` on
+NixOS/Mac); the tables below describe the Nix loader. `windows/profile.ps1`
+(PowerShell) loads its own overlapping set; `TAILSCALE_API_KEY`,
+`CODERABBIT_API_KEY`, and `OPENAI_API_KEY` are Nix-only (not exported
+there). Runs at login-shell startup (`.zprofile`); child shells inherit
+the exported keys. Non-interactive and non-login shells (systemd units,
+cron, ssh-running-a-command, a fresh `zsh` not under a login session)
 skip it.
 
 Runs **two `op inject` passes** — one per account. The two passes
@@ -131,7 +134,7 @@ the duration of the call.
 | `op://Local Dev/Linear API Key/credential` | `LINEAR_API_KEY` |
 | `op://Local Dev/CodeRabbit API Key/credential` | `CODERABBIT_API_KEY` |
 | `op://Local Dev/OpenAI API Key mattdev/credential` | `OPENAI_API_KEY` |
-| `op://Local Dev/Buildkite API Token/credential` | `BUILDKITE_API_TOKEN` |
+| `op://Local Dev/Tailscale API Key/credential` | `TAILSCALE_API_KEY` |
 
 `CLAUDE_CODE_OAUTH_TOKEN` is loaded by `load-secrets` from either
 `op://Dev/Personal Claude Code OAuth Token/credential` or

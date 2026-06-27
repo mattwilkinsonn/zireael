@@ -58,6 +58,11 @@ $env:NEON_API_KEY = "{{ op://Dev/Neon API Key/credential }}"
         Write-Warning 'OP_SERVICE_ACCOUNT_TOKEN unset - Personal secrets not loaded.'
     }
 
+    # Clear any ANTHROPIC_API_KEY inherited from a pre-rename session so the
+    # magic name can't shadow the OAuth path (we export TESTING_ANTHROPIC_API_KEY
+    # above for that reason). Mirrors `unset ANTHROPIC_API_KEY` in load-secrets.nix.
+    Remove-Item Env:\ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
+
     # Team account (sealedsecurity.1password.com) — items in op://Local Dev/...
     # Swap $env:OP_SERVICE_ACCOUNT_TOKEN for the call, then restore so the
     # rest of the session sees the personal token.

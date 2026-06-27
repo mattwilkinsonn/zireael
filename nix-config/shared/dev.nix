@@ -95,18 +95,6 @@ in
       # not yet automated via op-cli because gt auth is a one-time
       # action and the token is durable.
       graphite-cli
-      # Buildkite CLI (`bk`) — for triggering builds, viewing
-      # logs, and downloading artifacts from the terminal.
-      # Consume Buildkite via the GitHub App + per-pipeline
-      # orchestrator YAML (`.buildkite/pipelines/` in seal/), not
-      # self-hosted agents — so the agent binary is NOT included
-      # here. Auth is one-time per host: `bk configure` walks
-      # through an OAuth flow (token from
-      # https://buildkite.com/user/api-access-tokens; scopes
-      # `read_builds`, `read_pipelines`, `read_artifacts` cover
-      # the read-only inspection workflow; add `write_builds`
-      # only if you'll trigger builds locally).
-      buildkite-cli
       # Nix / shell / toml linters — invoked by the hk pre-push hook
       # (~/hk.pkl). Cheap to keep on dev boxes for one-off CLI use too.
       deadnix # unused let bindings / function args in Nix
@@ -147,6 +135,11 @@ in
       # jj workspaces under <repo>.ws/). Pairs with the `wave` zellij layout.
       (writeShellScriptBin "jj-ws" (builtins.readFile ../dotfiles/scripts/jj-ws))
 
+      # hk — jj/git hook runner (jdx/hk), pinned via the `hk` flake input to
+      # match the `hk.pkl` schema at the repo root. Built from source by nix so
+      # the binary and schema can't drift (cargo-installed hk silently did).
+      inputs.hk.packages.${pkgs.system}.default
+
       # Misc dev-machine utilities
       rclone # Drive/Dropbox/etc remote sync (used by Berkeley Mono font activation)
       zstd # compression — occasional CLI use
@@ -180,17 +173,11 @@ in
     [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
     export RUSTC_WRAPPER=sccache
 
-    # Buildkite CLI (`bk`): the org slug isn't a secret and bk reads
-    # it from ~/.config/bk.yaml — but `bk configure` writes the slug
-    # and the API token together in one keychain-backed operation that
-    # aborts on headless hosts with no Secret Service, so bk.yaml never
-    # gets created and the org has to come from the env instead. (See
-    # SEA-829.) The seal bk bundle forwards this var into the sandbox.
-    export BUILDKITE_ORGANIZATION_SLUG=sealedsecurity
-
-    # fnm — cached via _evalcache (.zshenv); `fnm env` is otherwise a
-    # per-shell subprocess. Regenerates on fnm path/mtime change.
-    _evalcache fnm fnm fnm env --use-on-cd --shell zsh
+    # fnm — initialise per-shell, NOT via _evalcache: `fnm env` mints a fresh
+    # multishell symlink and exports its path on each call, so caching pins
+    # every shell to the first one and `fnm use` / --use-on-cd then leak
+    # across panes.
+    command -v fnm >/dev/null && eval "$(fnm env --use-on-cd --shell zsh)"
   '';
 
   # rustup default toolchain: set stable as default on first install.
@@ -471,13 +458,6 @@ in
   home.file.".bunfig.toml".text = ''
     [install]
     minimumReleaseAge = 7200
-  '';
-
-  # hk (https://hk.jdx.dev): not in nixpkgs. cargo-binstall is cross-platform
-  # (prebuilt aarch64-darwin + x86_64-linux binaries).
-  home.activation.installHk = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    echo "Installing/updating hk..."
-    run ${pkgs.cargo-binstall}/bin/cargo-binstall --no-confirm hk
   '';
 
   # Graphite CLI auth — `gt auth --token <token>` writes

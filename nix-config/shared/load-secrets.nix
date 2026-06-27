@@ -129,6 +129,11 @@ _:
     export NEON_API_KEY="{{ op://Dev/Neon API Key/credential }}"
     export PULUMI_ACCESS_TOKEN="{{ op://Dev/Personal Pulumi Access Token/token }}"'
               _op_inject_with_token OP_SERVICE_ACCOUNT_TOKEN Personal "$personal_template"
+              # Clear any ANTHROPIC_API_KEY inherited from a pre-rename shell so
+              # the magic name can't shadow the OAuth path — the export above uses
+              # TESTING_ANTHROPIC_API_KEY precisely to stop the SDKs auto-detecting
+              # a key and billing the pay-per-token API instead of the sub.
+              unset ANTHROPIC_API_KEY
 
               # Team account (sealedsecurity.1password.com): items in
               # op://Local Dev/... Read with OP_TEAM_SERVICE_ACCOUNT_TOKEN
@@ -140,7 +145,7 @@ _:
               team_template='export LINEAR_API_KEY="{{ op://Local Dev/Linear API Key/credential }}"
     export CODERABBIT_API_KEY="{{ op://Local Dev/CodeRabbit API Key/credential }}"
     export OPENAI_API_KEY="{{ op://Local Dev/OpenAI API Key mattdev/credential }}"
-    export BUILDKITE_API_TOKEN="{{ op://Local Dev/Buildkite API Token/credential }}"'
+    export TAILSCALE_API_KEY="{{ op://Local Dev/Tailscale API Key/credential }}"'
               _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN Team "$team_template"
 
               # Choose which Claude OAuth token to load by default.
