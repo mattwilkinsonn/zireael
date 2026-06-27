@@ -468,13 +468,6 @@ in
     minimumReleaseAge = 7200
   '';
 
-  # hk (https://hk.jdx.dev): not in nixpkgs. cargo-binstall is cross-platform
-  # (prebuilt aarch64-darwin + x86_64-linux binaries).
-  home.activation.installHk = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    echo "Installing/updating hk..."
-    run ${pkgs.cargo-binstall}/bin/cargo-binstall --no-confirm hk
-  '';
-
   # Graphite CLI auth — `gt auth --token <token>` writes
   # ~/.config/graphite/user_config and that's all the CLI checks
   # on subsequent invocations. (gt 1.5+ migrated from the legacy

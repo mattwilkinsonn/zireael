@@ -4,7 +4,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 // tries to override them. Commits are allowed; pushes are not (Matt pushes),
 // and broad pattern-matching process kills are never allowed.
 
-const PUSH = /\bgit(?:\s+-\S+(?:\s+[^-]\S*)?)*\s+push\b|\bjj(?:\s+-\S+(?:\s+[^-]\S*)?)*\s+git\s+push\b/;
+const PUSH = /\bgit(?:\s+-\S+(?:\s+[^-]\S*)?)*\s+push\b|\bjj(?:\s+-\S+(?:\s+[^-]\S*)?)*\s+git\s+push\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*submit\b/;
 // pkill / killall are always pattern-based -> broad. For `kill`, skip the
 // leading signal spec (-9, -KILL, -s NAME, -n NUM, ...) and block only when a
 // remaining target is negative (-1 / -<pgid> = a process group / everything);
@@ -35,8 +35,8 @@ export default function pushGuard(pi: ExtensionAPI): void {
       return {
         block: true,
         reason:
-          "Push blocked: Matt pushes, the agent never does (git push / jj git push). " +
-          "Commit freely; hand the push command to Matt and stop. See rule://commit-conventions.",
+          "Push blocked: Matt pushes/submits, the agent never does (git push / jj git push / jj-gt submit). " +
+          "Commit freely; hand the push or submit command to Matt and stop. See rule://commit-conventions.",
       };
     }
 
