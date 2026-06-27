@@ -44,7 +44,7 @@ GitHub `merged` field and `is:merged` search both lie. Authoritative = what
 landed on `main`:
 
 ```bash
-cd <repo> && jj git fetch && jj log -r 'latest(::main, 60)' --no-graph -T 'description.first_line() ++ "\n"'
+cd <repo> && jj git fetch && jj log -r 'latest(::main@origin, 60)' --no-graph -T 'description.first_line() ++ "\n"'
 ```
 
 Scan the squashed titles for issue keys / PR numbers. For open-PR truth
