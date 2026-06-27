@@ -38,4 +38,4 @@ If formatting a change surfaces churn in files an earlier commit owns, push thos
 
 ## Commit / push posture
 
-You MAY commit the verified change with a Conventional Commits subject (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …). You NEVER push — Matt pushes.
+You MAY commit the verified change with a Conventional Commits subject (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …). You NEVER push or submit — `git push`, `jj-gt submit`, any variant — Matt does.
