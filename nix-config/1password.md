@@ -188,11 +188,13 @@ restore it. `claude-personal` uses the personal token (already in
 env). All three helpers set both `CLAUDE_CODE_OAUTH_TOKEN` and
 `ANTHROPIC_OAUTH_TOKEN`.
 
-`claude-default` lives in `shared/load-secrets.nix`; the one-shot
-helpers live in both `shared/load-secrets.nix` and
-`windows/profile.ps1`. Use `claude-default` when you want a sticky
-preference (most people most of the time); use the one-shot helpers
-when you just need to flip a single terminal.
+`claude-default` lives in `shared/load-secrets.nix` and works only on
+zsh/Nix dev hosts; the one-shot helpers live in both
+`shared/load-secrets.nix` and `windows/profile.ps1`. On zsh/Nix use
+`claude-default` for a sticky preference (most people most of the
+time). PowerShell has no sticky default: use the one-shot helpers to
+flip the current terminal — new shells always start from the Matt
+Sealed token.
 
 ### One-shot activation — `graphiteAuth`
 
