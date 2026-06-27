@@ -12,9 +12,10 @@ const PUSH = /\bgit(?:\s+-\S+(?:\s+[^-]\S*)?)*\s+push\b|\bjj(?:\s+-\S+(?:\s+[^-]
 const PUSH_TOOLS = new Set(["bash", "ssh", "recipe"]);
 const LOCAL_TOOLS = new Set(["bash", "recipe"]);
 // pkill / killall are always pattern-based -> broad. For `kill`, skip the
-// leading signal spec (-9, -KILL, -s NAME, -n NUM, ...) and block only when a
-// remaining target is negative (-1 / -<pgid> = a process group / everything);
-// a plain `kill <pid>` or `kill -9 <pid>` stays allowed.
+// leading signal spec (-9, -KILL, -s NAME, -n NUM, ...) and block when a
+// remaining TARGET is negative (-1 / -<pgid> = a process group / everything).
+// `kill -1 <pid>` (SIGHUP to one PID) and `kill -9 <pid>` stay allowed; only a
+// negative target like `kill -- -1` or `kill -TERM -1` is the broad form.
 function hasBroadKill(cmd: string): boolean {
   for (const seg of cmd.split(/[\n;&|]+/)) {
     const toks = seg.trim().split(/\s+/).filter(Boolean);
