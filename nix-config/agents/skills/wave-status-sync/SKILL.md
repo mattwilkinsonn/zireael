@@ -74,10 +74,16 @@ Cross-reference the three sources. Per issue:
   `main`, no open PR).
 - **Don't mutate on a guess.** If a state looks stale but you can't find a
   PR/commit either way, leave it and flag it for the human.
-- **Link the PR.** Every In-Review / Done issue carries its PR in the tracker —
-  the `#N` in `tracker.md` and the `pr: N` field on the `tracker.html` card
-  (that field is the Graphite deep-link). Pull the number from the issue's
-  attachments (`get_issue`); if Linear itself never auto-attached it (no
+- **Link every PR — all repos, not just SEA issues.** Every pushed bookmark that
+  has a PR gets a clickable link in the tracker (sealed *and* zireael / oh-my-pi /
+  woodpecker / compass — the non-SEA infra / OMP / skills work counts too). In
+  `tracker.md`: a reference link — `[#N]` for sealed, `[z#N]` (zireael) /
+  `[omp#N]` (oh-my-pi) for other repos — with the matching `[label]: <github-pr-url>`
+  def in the PR-links block at the file end. In `tracker.html`: `pr: N` (or
+  `prs: [N, …]`) on the card, plus `prRepo:` for non-sealed (the render maps it
+  through `PR_BASE`). Sealed PR numbers come from `get_issue` attachments; non-SEA
+  from `list_pull_requests` per repo (`mattwilkinsonn/zireael`,
+  `can1357/oh-my-pi`, …). If Linear never auto-attached a SEA PR (no
   `Closes SEA-NNN`), add it with `save_issue` `links`.
 
 Then update the artifacts: rewrite `tracker.md` (roster/status, conflict
