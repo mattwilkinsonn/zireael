@@ -461,7 +461,9 @@ in
   home.activation.installBun = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     BUN_VERSION="1.3.14"
     target="${if pkgs.stdenv.isDarwin then "bun-darwin-aarch64" else "bun-linux-x64"}"
-    if [ "$("$HOME/.bun/bin/bun" --version 2>/dev/null)" != "$BUN_VERSION" ]; then
+    current="$("$HOME/.bun/bin/bun" --version 2>/dev/null || true)"
+    # Install only if missing or older; never downgrade a newer Bun.
+    if [ "$current" != "$(printf '%s\n%s\n' "$current" "$BUN_VERSION" | sort -V | tail -n1)" ]; then
       echo "Installing bun $BUN_VERSION to ~/.bun/bin (nixpkgs ships ${pkgs.bun.version})..."
       tmp="$(mktemp -d)"
       ${pkgs.curl}/bin/curl -fsSL \
