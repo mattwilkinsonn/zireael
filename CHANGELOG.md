@@ -30,11 +30,12 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
 
 ### Fixed — jj-hooks
 
-- Parallel `jj-gt submit` hook runs no longer fail intermittently on a
-  cold Pkl cache. The N per-bookmark `hk run` evaluations raced to
-  populate the shared `~/.pkl` cache, surfacing as nondeterministic
-  `field not found` errors; the cache is now warmed once with a serial
-  `hk validate` before the parallel fan-out. Best-effort and hk-only —
+- Parallel `jj-gt submit` hook runs no longer fail intermittently with
+  nondeterministic `Eval error: field not found` panics. Each bookmark's
+  hooks run in their own ephemeral worktree, and the concurrent cold
+  evaluations of `hk.pkl` raced hk's per-worktree config cache. Every
+  worktree is now warmed with a serial `hk validate` before its hooks
+  run, so the cold-cache writes never collide. Best-effort and hk-only —
   the sequential path and non-hk runners are unaffected.
 
 ## [0.3.0] — 2026-05-26

@@ -162,6 +162,7 @@ pub fn run_for_update(
         update,
         opts,
         &Cancel::never(),
+        None,
     )
 }
 
@@ -177,7 +178,7 @@ pub fn run_for_update(
 /// it skips the next one. For an hk config with N steps that
 /// translates to "save the (N-1) remaining steps".
 #[allow(clippy::too_many_arguments)]
-pub fn run_for_update_with_cancel(
+fn run_for_update_with_cancel(
     jj: &JjCli,
     primary_git_dir: &Path,
     workspace_root: &Path,
@@ -186,6 +187,7 @@ pub fn run_for_update_with_cancel(
     update: &BookmarkUpdate,
     opts: RunOpts,
     cancel: &Cancel,
+    warm: Option<&PklWarmCache>,
 ) -> Result<HookOutcome> {
     let Some(new_commit) = update.new_commit.as_ref() else {
         // Pure delete — nothing to check.
@@ -215,6 +217,7 @@ pub fn run_for_update_with_cancel(
         opts.all_files,
         opts.capture_output,
         cancel,
+        warm,
     )?;
 
     // Initial run was clean OR caller opted out of retry OR there's nothing
@@ -248,6 +251,7 @@ pub fn run_for_update_with_cancel(
         opts.all_files,
         opts.capture_output,
         cancel,
+        warm,
     )?;
 
     // The retry should be clean (no failure, no new fixup) for the
@@ -290,84 +294,78 @@ pub fn run_for_update_with_cancel(
     })
 }
 
-/// Warm the hook runner's evaluation cache once, serially, before the
-/// parallel fan-out launches N concurrent hook backends.
-///
-/// Only hk needs this. hk's config (`hk.pkl`) `amends`/`import`s hk's
-/// Pkl library through `package://…` modules resolved via the shared
-/// `~/.pkl` cache. On a cold cache the N parallel `hk run` evaluations
-/// race to populate it; that populate is not atomic across processes, so
-/// an eval can read a half-written module and hk aborts with a
-/// nondeterministic `field not found` error. Evaluating the config once
-/// up front (`hk validate`) populates the cache serially, so the fan-out
-/// always hits a warm cache. Same shape as `worktree.rs`'s
-/// `WORKTREE_CREATE_LOCK`: serialize the one racy step, keep the
-/// expensive work (hook execution) parallel.
-///
-/// Best-effort by construction — the return type is `()`, so a failure
-/// (hk missing, a genuine `hk.pkl` error) can never abort the batch; it
-/// is logged and swallowed. A real config error still surfaces, with
-/// full context, through the per-bookmark runs that follow.
-fn warm_runner_cache(
-    jj: &JjCli,
-    primary_git_dir: &Path,
-    workspace_root: &Path,
-    cli_runner: Option<Runner>,
-    stage: Stage,
-) {
-    warm_runner_cache_with(workspace_root, cli_runner, || {
-        // Resolve the hk binary the same way the per-bookmark runs do
-        // (config `runner-bin.hk` override → $PATH) so warming uses the
-        // exact hk that will grade the hooks.
-        let prefix = match crate::runner::resolve_runner_argv(
-            Runner::Hk,
-            jj,
-            workspace_root,
-            primary_git_dir,
-            stage,
-        ) {
-            Ok(prefix) => prefix,
-            Err(e) => {
-                tracing::debug!("skipping Pkl cache warm: cannot resolve hk: {e}");
-                return;
-            }
-        };
-        let argv = splice_runner_prefix(&prefix, &crate::runner::hk_validate_command());
-        tracing::info!("warming hk Pkl cache: {argv:?}");
-        // current_dir = workspace_root so `hk validate` evaluates the
-        // workspace's hk.pkl, caching its `package://` imports. Output is
-        // captured (silent on success); any failure is logged + swallowed.
-        match Command::new(&argv[0])
-            .args(&argv[1..])
-            .current_dir(workspace_root)
-            .output()
-        {
-            Ok(out) if out.status.success() => {}
-            Ok(out) => tracing::debug!(
+/// Run `hk validate` in `cwd`, best-effort. `hk validate` evaluates
+/// `hk.pkl` — resolving + caching its `package://` imports into the
+/// shared `~/.pkl` cache — without running any hook. Output is captured
+/// (silent on success); a failure is logged and swallowed — it never aborts
+/// the batch (a real config error resurfaces through the per-bookmark run that
+/// follows) — and reported as `false` so the caller only marks warmed on success.
+fn run_hk_validate(argv: &[String], cwd: &Path) -> bool {
+    tracing::info!("warming hk Pkl cache: {argv:?}");
+    match Command::new(&argv[0])
+        .args(&argv[1..])
+        .current_dir(cwd)
+        .output()
+    {
+        Ok(out) if out.status.success() => true,
+        Ok(out) => {
+            tracing::debug!(
                 "hk Pkl cache warm exited {}: {}",
                 out.status,
                 String::from_utf8_lossy(&out.stderr).trim()
-            ),
-            Err(e) => tracing::debug!("hk Pkl cache warm failed to spawn: {e}"),
+            );
+            false
         }
-    });
+        Err(e) => {
+            tracing::debug!("hk Pkl cache warm failed to spawn: {e}");
+            false
+        }
+    }
 }
 
-/// Gating + single-invocation core for [`warm_runner_cache`], split out
-/// so the warm-only-for-hk invariant is unit-testable without a real
-/// `hk` binary. Resolves the runner — the `--runner` override wins, else
-/// autodetect against `workspace_root` — and invokes `warm` exactly once
-/// iff the runner is hk. The other runners have no Pkl cache, so `warm`
-/// never fires for them.
-fn warm_runner_cache_with(workspace_root: &Path, cli_runner: Option<Runner>, warm: impl FnOnce()) {
-    let runner = match cli_runner {
-        Some(r) => Some(r),
-        // Ambiguous / absent config → nothing to warm; the per-bookmark
-        // runs surface any real misconfiguration with full context.
-        None => Runner::autodetect(workspace_root).unwrap_or(None),
-    };
-    if runner == Some(Runner::Hk) {
-        warm();
+/// Serializes per-worktree Pkl config evaluation across a parallel hook
+/// batch so the cold-cache writes never race. hk caches each worktree's
+/// resolved config separately, keyed by the config's PATH
+/// (`~/.cache/hk/configs/<path-keyed>.json`), so every ephemeral
+/// worktree must be warmed individually — deduping on config CONTENT
+/// would collapse same-content worktrees (every worktree has the same
+/// `hk.pkl` but a unique `/tmp` path) and leave all but one to race.
+/// Shared across all per-bookmark threads in one parallel batch; the
+/// sequential / single-bookmark paths pass no cache (no concurrency →
+/// no race).
+#[derive(Default)]
+struct PklWarmCache {
+    warmed: std::sync::Mutex<std::collections::HashSet<PathBuf>>,
+}
+
+impl PklWarmCache {
+    /// Warm `worktree`'s cache at most once *successfully*, serialized across
+    /// threads so the cold-cache config evaluations never write concurrently.
+    /// The lock is held across `validate`, so concurrent callers block until it
+    /// returns (and skip an already-warmed worktree).
+    ///
+    /// Returns `None` when the worktree is warm — already, or `validate` just
+    /// succeeded — so the caller's `hk run` may proceed in parallel against the
+    /// now-written cache. Returns `Some(guard)` when `validate` failed: the
+    /// cache may still be cold, so the caller holds the returned lock guard
+    /// across its `hk run`, keeping that cold run serialized against other
+    /// workers' warm/run rather than racing the non-atomic cache write.
+    #[must_use]
+    fn warm_once(
+        &self,
+        worktree: &Path,
+        validate: impl FnOnce() -> bool,
+    ) -> Option<std::sync::MutexGuard<'_, std::collections::HashSet<PathBuf>>> {
+        let mut warmed = self.warmed.lock().unwrap();
+        if warmed.contains(worktree) {
+            return None;
+        }
+        if validate() {
+            warmed.insert(worktree.to_path_buf());
+            None
+        } else {
+            Some(warmed)
+        }
     }
 }
 
@@ -429,10 +427,14 @@ where
     S: Fn(usize, &BookmarkUpdate) + Send + Sync,
     F: Fn(usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
 {
+    // One warm cache shared across the batch: the first per-bookmark run
+    // for each distinct config validates it (serially) from its own
+    // worktree; the rest reuse the now-warm `~/.pkl` cache.
+    let warm = PklWarmCache::default();
+    let warm = &warm;
     run_updates_parallel_core(
         updates,
         opts.capture_output,
-        || warm_runner_cache(jj, primary_git_dir, workspace_root, cli_runner, stage),
         |_idx, update, cancel| {
             run_for_update_with_cancel(
                 jj,
@@ -443,6 +445,7 @@ where
                 update,
                 opts,
                 cancel,
+                Some(warm),
             )
         },
         progress_start,
@@ -458,7 +461,6 @@ where
 fn run_updates_parallel_core<Work, S, F>(
     updates: &[BookmarkUpdate],
     capture_output: bool,
-    warm: impl FnOnce(),
     work: Work,
     progress_start: S,
     progress: F,
@@ -472,10 +474,6 @@ where
         capture_output,
         "run_for_updates_parallel requires capture_output=true; parallel runs without capture garble the terminal",
     );
-
-    // Warm the hk Pkl cache once, serially, before the fan-out below.
-    // See `warm_runner_cache`: a cold cache races under concurrency.
-    warm();
 
     use std::sync::Mutex;
     let work = &work;
@@ -549,10 +547,14 @@ where
     S: Fn(usize, usize, &BookmarkUpdate) + Send + Sync,
     F: Fn(usize, usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
 {
+    // One warm cache shared across all partitions (see
+    // `run_for_updates_parallel`): each distinct config is warmed once,
+    // serially, from its own target worktree.
+    let warm = PklWarmCache::default();
+    let warm = &warm;
     run_partitioned_updates_parallel_core(
         partitions,
         opts.capture_output,
-        || warm_runner_cache(jj, primary_git_dir, workspace_root, cli_runner, stage),
         |_p_idx, _u_idx, update, cancel| {
             run_for_update_with_cancel(
                 jj,
@@ -563,6 +565,7 @@ where
                 update,
                 opts,
                 cancel,
+                Some(warm),
             )
         },
         progress_start,
@@ -577,7 +580,6 @@ where
 fn run_partitioned_updates_parallel_core<Work, S, F>(
     partitions: &[Vec<BookmarkUpdate>],
     capture_output: bool,
-    warm: impl FnOnce(),
     work: Work,
     progress_start: S,
     progress: F,
@@ -591,9 +593,6 @@ where
         capture_output,
         "run_for_partitioned_updates_parallel requires capture_output=true",
     );
-
-    // Warm once before the fan-out (see `run_updates_parallel_core`).
-    warm();
 
     use std::sync::Mutex;
     let work = &work;
@@ -742,6 +741,7 @@ fn run_once(
     all_files: bool,
     capture_output: bool,
     cancel: &Cancel,
+    warm: Option<&PklWarmCache>,
 ) -> Result<OnceOutcome> {
     if cancel.is_cancelled() {
         return Ok(OnceOutcome {
@@ -854,6 +854,26 @@ fn run_once(
     // (4) plain $PATH. See `resolve_runner_argv` for details.
     let runner_argv =
         crate::runner::resolve_runner_argv(runner, jj, workspace_root, primary_git_dir, stage)?;
+
+    // Warm hk's config cache for THIS worktree before the runner runs.
+    // hk caches each worktree's resolved config separately, keyed by the
+    // config's path; on a cold cache the parallel per-bookmark
+    // evaluations race the (non-atomic) cache writes and abort with a
+    // nondeterministic `field not found` error. `warm` (present only on
+    // the parallel paths) runs a serial `hk validate` per worktree, so
+    // every concurrent `hk run` reads an already-written cache.
+    // Best-effort — a real error resurfaces through the run below. When the
+    // warm fails the cache may still be cold, so `warm_once` hands back the
+    // lock guard; holding it through this worker's run (to fn end) keeps that
+    // cold run serialized against other workers instead of racing the write.
+    let _warm_guard = match warm {
+        Some(warm) if runner == Runner::Hk => {
+            let validate_argv =
+                splice_runner_prefix(&runner_argv, &crate::runner::hk_validate_command());
+            warm.warm_once(wt.path(), || run_hk_validate(&validate_argv, wt.path()))
+        }
+        _ => None,
+    };
 
     // all_files: ignore the diff range and run each runner's
     // "lint every tracked file" command exactly once. from_refs
@@ -1254,7 +1274,6 @@ fn run_git_capture_with_git_dir(git_dir: &Path, cwd: &Path, args: &[&str]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bookmark_updates::UpdateType;
     use std::sync::atomic::AtomicUsize;
 
     #[test]
@@ -1353,179 +1372,107 @@ mod tests {
         assert_eq!(fixup_bookmark("revset:@"), "jj-hooks-fixup/revset_@");
     }
 
-    // The cold-cache race itself is timing-/filesystem-dependent and is
-    // deliberately NOT reproduced here (a non-hermetic race repro would be
-    // flaky). These tests guard the *invariant* the fix relies on: the
-    // Pkl-cache warm runs exactly once, before any per-bookmark work, and
-    // only for the hk runner.
+    // PklWarmCache serializes the per-worktree cold-cache config writes
+    // and warms each worktree once (keyed by PATH — hk's config cache is
+    // path-keyed, so same-content worktrees must each be warmed). The
+    // cold-cache race itself is timing-dependent and is deliberately not
+    // reproduced (a non-hermetic repro would be flaky); these guard the
+    // invariants the fix relies on.
 
-    fn dummy_update(name: &str) -> BookmarkUpdate {
-        BookmarkUpdate {
-            remote: "origin".into(),
-            bookmark: name.into(),
-            update_type: UpdateType::Add,
-            old_commit: Some("0".repeat(40)),
-            new_commit: Some("1".repeat(40)),
+    #[test]
+    fn pkl_warm_cache_dedups_same_worktree() {
+        let cache = PklWarmCache::default();
+        let count = AtomicUsize::new(0);
+        let wt = Path::new("/tmp/wt-a");
+        for _ in 0..3 {
+            let _ = cache.warm_once(wt, || {
+                count.fetch_add(1, Ordering::SeqCst);
+                true
+            });
         }
+        assert_eq!(count.load(Ordering::SeqCst), 1, "same worktree warms once");
     }
 
-    fn passing_outcome() -> HookOutcome {
-        HookOutcome {
-            success: true,
-            fixup_commit: None,
-            retried: false,
-            initial_failure: false,
-            captured_output: None,
-            cancelled: false,
+    #[test]
+    fn pkl_warm_cache_warms_each_distinct_worktree() {
+        // Same-content worktrees at distinct paths must EACH warm: hk's
+        // config cache is path-keyed, so deduping by content would leave
+        // all but one cold.
+        let cache = PklWarmCache::default();
+        let count = AtomicUsize::new(0);
+        for p in ["/tmp/wt-a", "/tmp/wt-b", "/tmp/wt-c"] {
+            let _ = cache.warm_once(Path::new(p), || {
+                count.fetch_add(1, Ordering::SeqCst);
+                true
+            });
         }
-    }
-
-    #[test]
-    fn warm_gating_fires_once_for_autodetected_hk() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("hk.pkl"), "amends \"x\"\n").unwrap();
-        let count = AtomicUsize::new(0);
-        warm_runner_cache_with(dir.path(), None, || {
-            count.fetch_add(1, Ordering::SeqCst);
-        });
-        assert_eq!(count.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn warm_gating_skips_non_hk_runner() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join(".pre-commit-config.yaml"), "repos: []\n").unwrap();
-        let count = AtomicUsize::new(0);
-        warm_runner_cache_with(dir.path(), None, || {
-            count.fetch_add(1, Ordering::SeqCst);
-        });
-        assert_eq!(count.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn warm_gating_skips_when_no_runner_detected() {
-        let dir = tempfile::tempdir().unwrap();
-        let count = AtomicUsize::new(0);
-        warm_runner_cache_with(dir.path(), None, || {
-            count.fetch_add(1, Ordering::SeqCst);
-        });
-        assert_eq!(count.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn warm_gating_honors_hk_cli_override() {
-        // `--runner hk` forces hk even when the workspace has no hk.pkl.
-        let dir = tempfile::tempdir().unwrap();
-        let count = AtomicUsize::new(0);
-        warm_runner_cache_with(dir.path(), Some(Runner::Hk), || {
-            count.fetch_add(1, Ordering::SeqCst);
-        });
-        assert_eq!(count.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn warm_gating_cli_override_to_non_hk_skips_despite_hk_pkl() {
-        // Explicit `--runner pre-commit` must not warm hk's cache even if
-        // an hk.pkl is sitting in the workspace.
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("hk.pkl"), "amends \"x\"\n").unwrap();
-        let count = AtomicUsize::new(0);
-        warm_runner_cache_with(dir.path(), Some(Runner::PreCommit), || {
-            count.fetch_add(1, Ordering::SeqCst);
-        });
-        assert_eq!(count.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn parallel_core_warms_once_before_any_work() {
-        let updates = vec![dummy_update("b1"), dummy_update("b2"), dummy_update("b3")];
-        let warm_count = AtomicUsize::new(0);
-        let work_count = AtomicUsize::new(0);
-        let warmed = AtomicBool::new(false);
-        let saw_unwarmed_work = AtomicBool::new(false);
-
-        let outcomes = run_updates_parallel_core(
-            &updates,
-            true,
-            || {
-                warm_count.fetch_add(1, Ordering::SeqCst);
-                warmed.store(true, Ordering::SeqCst);
-            },
-            |_idx, _update, _cancel| {
-                if !warmed.load(Ordering::SeqCst) {
-                    saw_unwarmed_work.store(true, Ordering::SeqCst);
-                }
-                work_count.fetch_add(1, Ordering::SeqCst);
-                Ok(passing_outcome())
-            },
-            |_idx, _update| {},
-            |_idx, _update, _outcome| {},
-        )
-        .unwrap();
-
-        assert_eq!(outcomes.len(), 3);
         assert_eq!(
-            warm_count.load(Ordering::SeqCst),
-            1,
-            "warm must fire exactly once"
-        );
-        assert_eq!(
-            work_count.load(Ordering::SeqCst),
+            count.load(Ordering::SeqCst),
             3,
-            "every update must run"
-        );
-        assert!(
-            !saw_unwarmed_work.load(Ordering::SeqCst),
-            "no per-bookmark work may begin before the warm completes"
+            "each distinct worktree warms once"
         );
     }
 
     #[test]
-    fn partitioned_core_warms_once_before_any_work() {
-        let partitions = vec![
-            vec![dummy_update("a1")],
-            vec![dummy_update("b1"), dummy_update("b2")],
-        ];
-        let warm_count = AtomicUsize::new(0);
-        let work_count = AtomicUsize::new(0);
-        let warmed = AtomicBool::new(false);
-        let saw_unwarmed_work = AtomicBool::new(false);
-
-        let outcomes = run_partitioned_updates_parallel_core(
-            &partitions,
-            true,
-            || {
-                warm_count.fetch_add(1, Ordering::SeqCst);
-                warmed.store(true, Ordering::SeqCst);
-            },
-            |_p, _u, _update, _cancel| {
-                if !warmed.load(Ordering::SeqCst) {
-                    saw_unwarmed_work.store(true, Ordering::SeqCst);
-                }
-                work_count.fetch_add(1, Ordering::SeqCst);
-                Ok(passing_outcome())
-            },
-            |_p, _u, _update| {},
-            |_p, _u, _update, _outcome| {},
-        )
-        .unwrap();
-
-        assert_eq!(outcomes.len(), 2);
-        assert_eq!(outcomes[0].len(), 1);
-        assert_eq!(outcomes[1].len(), 2);
+    fn pkl_warm_cache_same_worktree_validates_once_under_concurrency() {
+        let cache = PklWarmCache::default();
+        let count = AtomicUsize::new(0);
+        let wt = Path::new("/tmp/wt-x");
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                s.spawn(|| {
+                    let _ = cache.warm_once(wt, || {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        true
+                    });
+                });
+            }
+        });
         assert_eq!(
-            warm_count.load(Ordering::SeqCst),
+            count.load(Ordering::SeqCst),
             1,
-            "warm must fire exactly once"
+            "concurrent callers warm a worktree once"
+        );
+    }
+
+    #[test]
+    fn pkl_warm_cache_serializes_distinct_worktrees() {
+        // Distinct worktrees each warm once, and never two validates at a
+        // time — the per-worktree writes must be serial (the whole point
+        // of the lock).
+        let cache = PklWarmCache::default();
+        let total = AtomicUsize::new(0);
+        let active = AtomicUsize::new(0);
+        let max_active = AtomicUsize::new(0);
+        // Capture shared references (Copy) so each scoped thread borrows
+        // the same atomics + cache rather than moving them.
+        let (cache, total, active, max_active) = (&cache, &total, &active, &max_active);
+        let paths: Vec<PathBuf> = (0..8)
+            .map(|i| PathBuf::from(format!("/tmp/wt-{i}")))
+            .collect();
+        std::thread::scope(|s| {
+            for p in &paths {
+                s.spawn(move || {
+                    let _ = cache.warm_once(p, || {
+                        let cur = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_active.fetch_max(cur, Ordering::SeqCst);
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        total.fetch_add(1, Ordering::SeqCst);
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        true
+                    });
+                });
+            }
+        });
+        assert_eq!(
+            total.load(Ordering::SeqCst),
+            8,
+            "each distinct worktree warms once"
         );
         assert_eq!(
-            work_count.load(Ordering::SeqCst),
-            3,
-            "every update must run"
-        );
-        assert!(
-            !saw_unwarmed_work.load(Ordering::SeqCst),
-            "no per-bookmark work may begin before the warm completes"
+            max_active.load(Ordering::SeqCst),
+            1,
+            "writes must be serialized"
         );
     }
 
@@ -1538,7 +1485,7 @@ mod tests {
         let count = AtomicUsize::new(0);
         let wt = Path::new("/tmp/wt-fail");
         for _ in 0..2 {
-            cache.warm_once(wt, || {
+            let _ = cache.warm_once(wt, || {
                 count.fetch_add(1, Ordering::SeqCst);
                 false
             });
@@ -1548,11 +1495,11 @@ mod tests {
             2,
             "a failed validate must not mark the worktree warmed"
         );
-        cache.warm_once(wt, || {
+        let _ = cache.warm_once(wt, || {
             count.fetch_add(1, Ordering::SeqCst);
             true
         });
-        cache.warm_once(wt, || {
+        let _ = cache.warm_once(wt, || {
             count.fetch_add(1, Ordering::SeqCst);
             true
         });
@@ -1560,6 +1507,33 @@ mod tests {
             count.load(Ordering::SeqCst),
             3,
             "once warmed, further callers skip validate"
+        );
+    }
+
+    #[test]
+    fn pkl_warm_cache_failed_warm_returns_guard_for_serialized_run() {
+        // The fix: a failed warm hands back the lock guard so the caller holds
+        // it across its cold-cache `hk run`, serializing that run against other
+        // workers instead of racing the non-atomic cache write. A successful
+        // (or already-warm) warm returns None so runs proceed in parallel.
+        let cache = PklWarmCache::default();
+        assert!(
+            cache
+                .warm_once(Path::new("/tmp/wt-fail"), || false)
+                .is_some(),
+            "failed warm returns the lock guard to serialize the cold run"
+        );
+        assert!(
+            cache.warm_once(Path::new("/tmp/wt-ok"), || true).is_none(),
+            "successful warm returns None — run may proceed in parallel"
+        );
+        let wt = Path::new("/tmp/wt-warm");
+        let _ = cache.warm_once(wt, || true);
+        assert!(
+            cache
+                .warm_once(wt, || panic!("must not re-validate"))
+                .is_none(),
+            "already-warm worktree returns None without re-validating"
         );
     }
 }
