@@ -68,6 +68,7 @@ $env:NEON_API_KEY = "{{ op://Dev/Neon API Key/credential }}"
     # rest of the session sees the personal token.
     $teamTemplate = @'
 $env:CLAUDE_CODE_OAUTH_TOKEN = "{{ op://Local Dev/Claude Code OAuth Token matt sealed/credential }}"
+$env:ANTHROPIC_OAUTH_TOKEN = $env:CLAUDE_CODE_OAUTH_TOKEN
 $env:LINEAR_API_KEY = "{{ op://Local Dev/Linear API Key/credential }}"
 '@
     if ($env:OP_TEAM_SERVICE_ACCOUNT_TOKEN) {
@@ -102,9 +103,20 @@ if (-not [Console]::IsOutputRedirected) {
 }
 
 # Claude Code OAuth token swap helpers. Each new shell starts with the
-# Sealed default loaded by load-secrets above; these flip
-# CLAUDE_CODE_OAUTH_TOKEN in the current shell to the other account
-# without restarting it. New shells revert to Sealed.
+# Sealed default loaded by load-secrets above; these flip both Claude
+# OAuth env vars in the current shell to another account without
+# restarting it. New shells revert to Sealed.
+function Set-ClaudeOAuthToken {
+    param(
+        [Parameter(Mandatory = $true)][string]$Token,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $env:CLAUDE_CODE_OAUTH_TOKEN = $Token
+    $env:ANTHROPIC_OAUTH_TOKEN = $Token
+    Write-Host "Claude OAuth token -> $Label"
+}
+
 function claude-sealed {
     if (-not $env:OP_TEAM_SERVICE_ACCOUNT_TOKEN) {
         Write-Error 'OP_TEAM_SERVICE_ACCOUNT_TOKEN unset - cannot read Sealed claude token.'
@@ -118,18 +130,35 @@ function claude-sealed {
         $env:OP_SERVICE_ACCOUNT_TOKEN = $savedTok
     }
     if ($val) {
-        $env:CLAUDE_CODE_OAUTH_TOKEN = $val
-        Write-Host 'CLAUDE_CODE_OAUTH_TOKEN -> Sealed'
+        Set-ClaudeOAuthToken -Token $val -Label 'Sealed'
     } else {
         Write-Error 'failed to read Sealed claude token (OP_TEAM_SERVICE_ACCOUNT_TOKEN invalid?)'
+    }
+}
+
+function claude-xavier {
+    if (-not $env:OP_TEAM_SERVICE_ACCOUNT_TOKEN) {
+        Write-Error 'OP_TEAM_SERVICE_ACCOUNT_TOKEN unset - cannot read Xavier Sealed claude token.'
+        return
+    }
+    $savedTok = $env:OP_SERVICE_ACCOUNT_TOKEN
+    $env:OP_SERVICE_ACCOUNT_TOKEN = $env:OP_TEAM_SERVICE_ACCOUNT_TOKEN
+    try {
+        $val = & op read 'op://Local Dev/Claude Code OAuth Token xavier sealed/credential' 2>$null
+    } finally {
+        $env:OP_SERVICE_ACCOUNT_TOKEN = $savedTok
+    }
+    if ($val) {
+        Set-ClaudeOAuthToken -Token $val -Label 'Xavier Sealed'
+    } else {
+        Write-Error 'failed to read Xavier Sealed claude token (OP_TEAM_SERVICE_ACCOUNT_TOKEN invalid?)'
     }
 }
 
 function claude-personal {
     $val = & op read 'op://Dev/Personal Claude Code OAuth Token/credential' 2>$null
     if ($val) {
-        $env:CLAUDE_CODE_OAUTH_TOKEN = $val
-        Write-Host 'CLAUDE_CODE_OAUTH_TOKEN -> Personal'
+        Set-ClaudeOAuthToken -Token $val -Label 'Personal'
     } else {
         Write-Error 'failed to read Personal claude token (op locked or signed out?)'
     }
