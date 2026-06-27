@@ -44,13 +44,13 @@ Most automated bots auto-resolve their own threads when the flagged code stops a
 - `is_resolved` — resolved threads are usually noise when triaging, but read the body before dismissing.
 - `is_outdated` — attached to a since-rewritten line; **not** the same as resolved. An outdated-but-unresolved thread is either still relevant or needs resolving — don't auto-drop it.
 
-## Discipline: reply or resolve only with the green light
+## Discipline: replies need Matt's go-ahead; resolves only when settled
 
 **Replying — only what Matt has approved.** Draft a reply if one's useful, but don't post it until Matt approves the exact wording. Never free-hand "addressed in fixup" or "we're not doing this" — an unapproved reply speaks for the maintainer on his own PR.
 
 **Resolving — only post-fix, only what's settled.** You may resolve an inline thread when either:
 
-1. it's a **bot-authored** thread, **genuinely addressed** by a fix that's **committed and live on the PR head**, and the reviewers have had their **re-review pass** but left it open — some bots don't auto-resolve their own comments (**Codex never does**; **CodeRabbit doesn't while rate-limited**, frequent now), while cubic / Greptile / healthy CodeRabbit close their own and you clear the stragglers; or
+1. it's a **bot-authored** thread **with no human comments in it** (a human reply turns it into Matt's call, even if a bot opened it), **genuinely addressed** by a fix that's **committed and live on the PR head**, and the reviewers have had their **re-review pass** but left it open — some bots don't auto-resolve their own comments (**Codex never does**; **CodeRabbit doesn't while rate-limited**, frequent now), while cubic / Greptile / healthy CodeRabbit close their own and you clear the stragglers; or
 2. Matt has **OK'd deferring it** — note the tracking-issue reference in your turn summary; only post it as a thread reply if Matt approved that wording (resolving the thread itself needs no reply).
 
 Never resolve an **addressed** thread before its fix is live (that hides an unaddressed finding) — the Matt-OK'd deferral in (2) is the one exception, since a deferral has no live fix by definition. And never resolve a **human-authored** thread, an out-of-scope or disagreed thread, or a deferral Matt hasn't approved — those stay his call.
