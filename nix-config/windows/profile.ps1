@@ -44,7 +44,6 @@ function load-secrets {
 $env:TESTING_ANTHROPIC_API_KEY = "{{ op://Dev/Anthropic API Key/credential }}"
 $env:OPENROUTER_API_KEY = "{{ op://Dev/OpenRouter API Key/credential }}"
 $env:GITHUB_PERSONAL_ACCESS_TOKEN = "{{ op://Dev/GitHub Personal Access Token/token }}"
-$env:CLOUDFLARE_API_TOKEN = "{{ op://Dev/Personal Cloudflare API Token/token }}"
 $env:NEON_API_KEY = "{{ op://Dev/Neon API Key/credential }}"
 '@
     if ($env:OP_SERVICE_ACCOUNT_TOKEN) {
@@ -70,6 +69,7 @@ $env:NEON_API_KEY = "{{ op://Dev/Neon API Key/credential }}"
 $env:CLAUDE_CODE_OAUTH_TOKEN = "{{ op://Local Dev/Claude Code OAuth Token matt sealed/credential }}"
 $env:ANTHROPIC_OAUTH_TOKEN = $env:CLAUDE_CODE_OAUTH_TOKEN
 $env:LINEAR_API_KEY = "{{ op://Local Dev/Linear API Key/credential }}"
+$env:CLOUDFLARE_API_TOKEN = "{{ op://Local Dev/Cloudflare API Token/credential }}"
 '@
     if ($env:OP_TEAM_SERVICE_ACCOUNT_TOKEN) {
         $savedTok = $env:OP_SERVICE_ACCOUNT_TOKEN

@@ -145,7 +145,6 @@
               personal_template='export TESTING_ANTHROPIC_API_KEY="{{ op://Dev/Anthropic API Key/credential }}"
     export OPENROUTER_API_KEY="{{ op://Dev/OpenRouter API Key/credential }}"
     export GITHUB_PERSONAL_ACCESS_TOKEN="{{ op://Dev/GitHub Personal Access Token/token }}"
-    export CLOUDFLARE_API_TOKEN="{{ op://Dev/Personal Cloudflare API Token/token }}"
     export NEON_API_KEY="{{ op://Dev/Neon API Key/credential }}"
     export PULUMI_ACCESS_TOKEN="{{ op://Dev/Personal Pulumi Access Token/token }}"'
               _op_inject_with_token OP_SERVICE_ACCOUNT_TOKEN Personal "$personal_template"
@@ -165,7 +164,8 @@
               team_template='export LINEAR_API_KEY="{{ op://Local Dev/Linear API Key/credential }}"
     export CODERABBIT_API_KEY="{{ op://Local Dev/CodeRabbit API Key/credential }}"
     export OPENAI_API_KEY="{{ op://Local Dev/OpenAI API Key mattdev/credential }}"
-    export TAILSCALE_API_KEY="{{ op://Local Dev/Tailscale API Key/credential }}"'
+    export TAILSCALE_API_KEY="{{ op://Local Dev/Tailscale API Key/credential }}"
+    export CLOUDFLARE_API_TOKEN="{{ op://Local Dev/Cloudflare API Token/credential }}"'
               _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN Team "$team_template"
 
               # Choose which Claude OAuth token to load by default.
