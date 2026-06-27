@@ -16,7 +16,7 @@ _:
 # in/out — op CLI has no native multi-account-svc-token mode.
 
 {
-  programs.zsh.initContent = ''
+  programs.zsh.profileExtra = ''
           # API keys from 1Password CLI. `op` is provided per-host
           # (1Password.app cask on Mac, NixOS env packages on Linux), so
           # `command -v op` gracefully no-ops on hosts where the module
@@ -166,7 +166,19 @@ _:
             # non-tty contexts still avoids adding ~500ms HTTPS-call
             # latency to every subshell startup (cron, systemd, env-
             # resolvers, scripted shells, etc.).
-            if [ -t 1 ]; then
+            # ...and skip the re-run only when the secrets are already in the env
+            # (inherited from a parent that loaded them). Gate on the actual MCP
+            # tokens — one per 1Password account (GITHUB = personal, LINEAR =
+            # team), so a skip means BOTH accounts' secrets are present — NOT a
+            # bare "we tried" marker. A context that inherits no secrets (a
+            # GUI-launched Emdash agent, a stripped env) then still loads them
+            # instead of starting omp with tokenless MCP servers.
+            # Billing safeguard: clear the magic ANTHROPIC_API_KEY on every shell
+            # (outside the skip below) so a nested shell that inherited it from a
+            # pre-rename session can't make OMP/the SDKs prefer the pay-per-token
+            # API over the subscription OAuth. Mirrors windows/profile.ps1.
+            unset ANTHROPIC_API_KEY
+            if [ -t 1 ] && { [ -z "''${LINEAR_API_KEY:-}" ] || [ -z "''${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; }; then
               load-secrets
             fi
           fi

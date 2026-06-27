@@ -19,33 +19,41 @@
       nix-switch = "sudo HOME=\"$HOME\" /nix/var/nix/profiles/system/sw/bin/darwin-rebuild switch --flake \"$HOME/repos/zireael/nix-config#Matts-MacBook-Pro\" --show-trace";
     };
 
-    profileExtra = lib.mkAfter ''
-      # Swiftly (Swift toolchain manager)
-      . "$HOME/.swiftly/env.sh"
-    '';
+    profileExtra = lib.mkMerge [
+      (lib.mkBefore ''
+        # op (1Password CLI) lives in /opt/homebrew/bin, which nix-darwin's base
+        # PATH (set-environment) omits and `brew shellenv` only adds in .zshrc —
+        # never sourced by the login *non-interactive* `zsh -lc` that Emdash
+        # spawns for agents. Prepend it here so `op` is on PATH for the
+        # load-secrets block (shared/load-secrets.nix, also profileExtra) in
+        # every login shell. Interactive shells still run full `brew shellenv`
+        # in .zshrc; the duplicate /opt/homebrew/bin entry is harmless.
+        export PATH="/opt/homebrew/bin:$PATH"
+
+        # 1Password service account tokens from Keychain. In .zprofile (login
+        # shells) rather than .zshrc so agents get them too — `security` is
+        # always on PATH (/usr/bin). Read BEFORE load-secrets' `op inject` so it
+        # uses the token directly: no signin, biometric, consent, or TCC prompt.
+        #   OP_SERVICE_ACCOUNT_TOKEN      → personal account (macbook-svc).
+        #   OP_TEAM_SERVICE_ACCOUNT_TOKEN → sealedsecurity team (matt-dev-svc).
+        # Stored once per Mac via mac-setup.sh (security add-generic-password);
+        # rotate by re-running with the new token. 2>/dev/null + true => harmless
+        # if an entry is missing (load-secrets then warns per-account).
+        export OP_SERVICE_ACCOUNT_TOKEN=$(security find-generic-password -a "$USER" -s "OP_SERVICE_ACCOUNT_TOKEN" -w 2>/dev/null || true)
+        export OP_TEAM_SERVICE_ACCOUNT_TOKEN=$(security find-generic-password -a "$USER" -s "OP_TEAM_SERVICE_ACCOUNT_TOKEN" -w 2>/dev/null || true)
+      '')
+      (lib.mkAfter ''
+        # Swiftly (Swift toolchain manager)
+        . "$HOME/.swiftly/env.sh"
+      '')
+    ];
 
     initContent = lib.mkBefore ''
-      # macOS-specific PATH
-      eval "$(/opt/homebrew/bin/brew shellenv)"
-
-      # 1Password service account tokens from Keychain. Loaded BEFORE
-      # shared/home.nix's load-secrets auto-invoke, so `op inject` uses
-      # the token directly — no signin, no biometric, no consent
-      # dialog, no TCC prompts. Two tokens for two accounts:
-      #
-      #   OP_SERVICE_ACCOUNT_TOKEN      → personal account (macbook-svc).
-      #     Scope: op://Dev/... + op://Server/...
-      #   OP_TEAM_SERVICE_ACCOUNT_TOKEN → sealedsecurity team (matt-dev-svc).
-      #     Scope: op://Local Dev/...
-      #
-      # Stored once per Mac via:
-      #   security add-generic-password -a "$USER" -s "OP_SERVICE_ACCOUNT_TOKEN"      -w "ops_..."
-      #   security add-generic-password -a "$USER" -s "OP_TEAM_SERVICE_ACCOUNT_TOKEN" -w "ops_..."
-      # Token rotation: re-run the relevant command with the new token.
-      # 2>/dev/null + true so the export is harmless if either keychain
-      # entry doesn't exist yet (load-secrets will then warn).
-      export OP_SERVICE_ACCOUNT_TOKEN=$(security find-generic-password -a "$USER" -s "OP_SERVICE_ACCOUNT_TOKEN" -w 2>/dev/null || true)
-      export OP_TEAM_SERVICE_ACCOUNT_TOKEN=$(security find-generic-password -a "$USER" -s "OP_TEAM_SERVICE_ACCOUNT_TOKEN" -w 2>/dev/null || true)
+      # macOS PATH via Homebrew — cached (see _evalcache in .zshenv, which runs
+      # before .zshrc so the helper is defined here). Absolute brew path because
+      # brew isn't on PATH until shellenv runs; `brew shellenv` is otherwise a
+      # per-shell subprocess.
+      _evalcache brew /opt/homebrew/bin/brew /opt/homebrew/bin/brew shellenv
 
       # 1Password SSH agent socket. macOS defaults SSH_AUTH_SOCK to
       # Apple's launchd-managed agent (`/var/run/com.apple.launchd.*/Listeners`)
@@ -60,10 +68,10 @@
       export SSH_AUTH_SOCK="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
     '';
   };
-  # `load-secrets` (op-backed, cross-platform) lives in shared/home.nix
-  # and runs after this mkBefore block. It uses `op inject` against
-  # the OP_SERVICE_ACCOUNT_TOKEN we just exported — token-based auth,
-  # no desktop integration required, no prompts.
+  # `load-secrets` (op-backed, cross-platform) lives in shared/load-secrets.nix
+  # as `profileExtra` too, ordered right after the token export above (mkBefore).
+  # It runs `op inject` against OP_SERVICE_ACCOUNT_TOKEN — token-based auth, no
+  # desktop integration, no prompts.
 
   # Make Apple cctools + standard system paths available as a *fallback*
   # for home-manager activations on macOS. Nix activations otherwise inherit

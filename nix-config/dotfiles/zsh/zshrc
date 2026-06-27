@@ -4,21 +4,22 @@ export PATH="$HOME/.local/bin:$PATH"
 setopt AUTO_PUSHD
 setopt PUSHD_IGNORE_DUPS
 
-# jj (Jujutsu) CLI completion
-source <(COMPLETE=zsh jj)
+# CLI completions, cached via _evalcache (defined in .zshenv). The generators
+# are slow Node/clap subprocesses run on every shell; the registration script
+# they emit is static per tool version, while live TAB-completion still
+# re-invokes the tool (e.g. gt's yargs / jj's clap dynamic completer). So
+# caching the script keeps completions dynamic but drops the startup cost.
+# _evalcache no-ops when a tool is absent (replaces the old `command -v` guards)
+# and regenerates when the binary's path/mtime changes.
+_evalcache jj    jj    env COMPLETE=zsh jj
+_evalcache jj-hp jj-hp jj-hp completions zsh
+_evalcache jj-gt jj-gt jj-gt completions zsh
+_evalcache gt    gt    gt completion zsh
 
-# jj-hp (Jujutsu Hooks) CLI completion - only when installed
-# (cargo-installed binary; not present on hosts without dev.nix).
-command -v jj-hp >/dev/null 2>&1 && eval "$(jj-hp completions zsh)"
-
-# jj-gt CLI completion - only when installed (cargo-installed
-# binary; not present on hosts without dev.nix).
-command -v jj-gt >/dev/null 2>&1 && eval "$(jj-gt completions zsh)"
-
-# gt (Graphite CLI) completion. gt emits yargs-style
-# completions via `gt completion zsh`. Only wire when
-# installed (graphite-cli is in dev.nix -> not on hosts
-# without dev tooling). The completion script is dynamic -
-# the script registers a function that re-invokes `gt
-# --get-yargs-completions` on TAB to enumerate live values.
-command -v gt >/dev/null 2>&1 && eval "$(gt completion zsh 2>/dev/null)"
+# Tool shell-inits, cached via _evalcache (see .zshenv). These replace the
+# home-manager enableZshIntegration evals (disabled in shared/home.nix); each
+# is a per-shell subprocess otherwise. Guards mirror the home-manager originals.
+_evalcache zoxide zoxide zoxide init zsh
+_evalcache direnv direnv direnv hook zsh
+[[ $options[zle] = on ]] && _evalcache fzf fzf fzf --zsh
+[[ $TERM != dumb ]] && _evalcache starship starship starship init zsh

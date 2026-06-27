@@ -1,6 +1,21 @@
 {
   description = "Matt's personal system configuration (MacBook Pro + WSL)";
 
+  # Binary cache for the llm-agents.nix packages (omp, codex, claude-code,
+  # gemini-cli, ...). llm-agents declares this in its own flake nixConfig,
+  # but a flake's nixConfig is only read from the top-level flake being built
+  # — on nix-switch that's THIS flake, not llm-agents (a transitive input),
+  # so without declaring it here the fast-moving agent CLIs compile from
+  # source. Honored via the accept-flake-config + trusted-users already set
+  # on Mac (/etc/nix/nix.custom.conf) and WSL (nixos/common.nix), so
+  # nix-switch substitutes these instead of rebuilding them.
+  nixConfig = {
+    extra-substituters = [ "https://cache.numtide.com" ];
+    extra-trusted-public-keys = [
+      "niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g="
+    ];
+  };
+
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
     # Base channel for the dev hosts via shared/unstable-wholesale.nix —

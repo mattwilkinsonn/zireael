@@ -32,35 +32,23 @@ let
 in
 {
   home.file = {
-    # Agent instruction files — live-edited from various agent
-    # contexts (Claude Code, seal); content is private so the
-    # source-of-truth lives in privatefiles/.
-    ".claude/CLAUDE.md".source = linkOut "home/.claude/CLAUDE.md";
-    ".claude/RTK.md".source = linkOut "home/.claude/RTK.md";
-    ".seal/SEAL.md".source = linkOut "home/.seal/SEAL.md";
-
-    # OMP (oh-my-pi) agent config. AGENTS.md is the canonical
-    # tool-agnostic instruction file (CLAUDE.md above is now a stub
-    # pointing here). rules/skills/extensions are whole-dir links;
-    # config.yml + agent.db stay OMP-managed (live, not linked).
-    ".omp/agent/AGENTS.md".source = linkOut "home/.omp/agent/AGENTS.md";
+    # Agent config (OMP / oh-my-pi). The instruction file is tool-agnostic
+    # and canonical at ~/.agents/AGENTS.md; OMP reads it via the
+    # ~/.omp/agent/AGENTS.md symlink (OMP only auto-loads a user-global
+    # AGENTS.md from ~/.omp/agent). rules/skills/mcp.json/extensions are
+    # OMP-specific; config.yml + agent.db stay OMP-managed (live, unlinked).
+    ".agents/AGENTS.md".source = linkOut "home/.agents/AGENTS.md";
+    ".omp/agent/AGENTS.md".source = linkOut "home/.agents/AGENTS.md";
     ".omp/agent/mcp.json".source = linkOut "home/.omp/agent/mcp.json";
     ".omp/agent/rules".source = linkOut "home/.omp/agent/rules";
     ".omp/agent/skills".source = linkOut "home/.omp/agent/skills";
     ".omp/agent/extensions".source = linkOut "home/.omp/agent/extensions";
 
-    # sealedsecurity workspace meta — the SEAL.md describing the
-    # multi-repo workspace layout and the .code-workspace VS Code
-    # multi-root config that opens it. Both reference the private
-    # sealed/ repo path so they stay in privatefiles.
-    #
-    # The sealedsecurity workspace dir is set up by the bootstrap
-    # scripts on dev hosts (mattfw, MBP). On mattpc-wsl it lives at
-    # the same path. If the workspace dir doesn't exist on a given
-    # dev host these two links land in nowhere — harmless (the file
-    # just sits there); home-manager doesn't fail on missing parent
-    # dirs because `home.file` mkdir's the parent on activation.
-    "repos/sealedsecurity/SEAL.md".source = linkOut "repos/sealedsecurity/SEAL.md";
+    # sealedsecurity workspace meta — the .code-workspace VS Code
+    # multi-root config that opens the multi-repo workspace. References
+    # the private sealed/ repo path so it stays in privatefiles. If the
+    # workspace dir doesn't exist on a host the link lands in nowhere —
+    # harmless; home.file mkdir's the parent on activation.
     "repos/sealedsecurity/sealedsecurity.code-workspace".source =
       linkOut "repos/sealedsecurity/sealedsecurity.code-workspace";
 

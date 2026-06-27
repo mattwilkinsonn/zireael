@@ -302,9 +302,8 @@ init_jj_on_zireael() {
 }
 
 # Optional: clone the privatefiles repo too. Dev boxes need it (it
-# carries CLAUDE.md / RTK.md / the user-level SEAL.md / the
-# sealedsecurity workspace meta files + the Tailscale ACL); headless
-# server boxes don't. Idempotent.
+# carries the sealedsecurity workspace meta files + the Tailscale ACL);
+# headless server boxes don't. Idempotent.
 clone_privatefiles_via_gh() {
 	local repo_slug="${1:-mattwilkinsonn/privatefiles}"
 	local dest="$HOME/repos/privatefiles"
