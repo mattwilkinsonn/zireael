@@ -27,4 +27,4 @@ Use inline `code` for identifiers and paths — it renders well on hosted diffs 
 
 ## Push policy
 
-The agent MAY create commits. The agent NEVER pushes — Matt pushes, in every form: `git push`, `git push --force`, `jj git push`, and any variant or subcommand. If a workflow seems to need a push, hand the command to Matt and stop.
+The agent MAY create commits + create/move bookmarks. The agent NEVER pushes or submits — Matt does, in every form: `git push`, `git push --force`, `jj git push`, `jj-gt submit`, and any variant or subcommand. When a change is ready, create the bookmark and hand Matt the submit command — `jj-gt submit -b <bookmark> --ai` (the `--ai` drafts the PR title + description on first push) — then stop.
