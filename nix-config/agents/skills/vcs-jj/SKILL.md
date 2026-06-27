@@ -108,6 +108,60 @@ jj bookmark delete <name>              # remove after a PR merges
 - **Naming:** lead with the issue ref + a short kebab description, no `user/` prefix (e.g. `sea-931-mattmini-adminuser`). In multi-agent work, **always** suffix the agent handle as a lane-tracking aid for Matt: `sea-930-woodpecker-fleet-conversion--hudson`. This branch-name handle is expected and is the *one* place it belongs — keep agent/persona names out of commit messages, PR titles/descriptions, and code (a "no persona in PRs" rule means PR *content*, not the branch name).
 - **Prepping a change for Matt to submit:** creating the bookmark is *your* job, not his — it's a local op, not a push. Create or point it (`jj bookmark create <name> -r <change>`), then hand Matt only the submit command — `jj-gt submit -b <name> --ai` (drafts the PR title + description). `jj-gt` bridges the jj bookmark stack to Graphite PRs; bare `jj git push` is not Matt's path.
 
+## Stacking on in-progress work
+
+Sometimes the change you need isn't merged yet — it's another agent's bookmark
+still in review (or your own earlier one). You **stack**: base your new commit
+on that bookmark's tip instead of `main`, so you build on its changes before
+they land.
+
+```bash
+jj git fetch                                          # import the base's tip
+jj new <base-bookmark>@origin -m "feat: my change"    # base on their tip, not main
+jj bookmark create sea-NNN-<slug>--<me> -r @
+```
+
+The catch: an **in-progress base keeps moving** — its author pushes review
+fixes, rebases it, or Matt lands it. Your bookmark must **follow that tip**, or
+you're building on a stale base and your PR diff shows their old commits as
+yours. Re-base onto the current tip whenever the base moves:
+
+```bash
+jj git fetch                                      # pull the base's new tip
+jj rebase -b <your-bookmark> -d <base-bookmark>@origin   # move your whole stack onto it
+# base merged to main since? rebase onto main instead:
+jj rebase -b <your-bookmark> -d main@origin
+```
+
+- **Rebase the whole stack with `-b`** — `-b <your-bookmark>` moves that
+  bookmark plus its ancestors back to where they fork from the destination
+  (and any descendants), i.e. the revset `(dest..<your-bookmark>)::`, so the
+  whole stack travels as a unit even when the bookmark sits only on the tip.
+- **Commit before you rebase.** Uncommitted edits don't travel a rebase cleanly
+  (see Workspaces → commit-promptly); `jj describe` each pass first.
+- **Conflicts are stored in the commit**, non-blocking — jj rebases through a
+  conflict and marks it; resolve after, then check `jj log` for markers.
+- **When the base finally merges**, do one last `jj rebase -b <your-bookmark>
+  -d main@origin` — keep the explicit `-b`; a bare `jj rebase -d …` defaults to
+  `-b @` and rebases only the working-copy commit, leaving your bookmark on the
+  stale base — then confirm your diff no longer carries the base's commits:
+  `jj log -r 'main@origin..<your-bookmark>'` should show only yours.
+- **Reference the base as `<base-bookmark>@origin`, not a bare local name** — jj
+  auto-tracks only `main`, so another agent's bookmark arrives as a
+  remote-tracking ref after `jj git fetch`; a bare `<base-bookmark>` may not
+  exist locally (or is stale). `jj bookmark track <base-bookmark>@origin` once
+  if you want a local name to rebase onto.
+- **`jj-gt submit -b <your-bookmark>` submits the whole selected stack** — if
+  yours is still stacked on another agent's unmerged base, it can re-submit
+  their base PR too, so coordinate with the base's owner (or wait for it to
+  land) before handing Matt the submit. If your stack grew past the first
+  commit, move the bookmark to the tip first (`jj bookmark set <your-bookmark>
+  -r @`) — `bookmark create` pins the original change ID and doesn't auto-advance.
+- **Disjoint files?** If your work touches entirely different files from the
+  base, you can instead work off `main` and rebase once at the end — stacking is
+  for when you genuinely need the base's changes to build/test. Pick per how
+  coupled the work is; coordinate the base with the supervisor.
+
 ## Revsets
 
 | Expression | Meaning |
