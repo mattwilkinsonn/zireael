@@ -13,8 +13,8 @@
 #   2. Clone (or refresh) zireael into ~/repos/zireael/.
 #   3. On dev boxes (--dev or auto-detected by hostname against
 #      DEV_HOSTNAMES below), clone privatefiles into
-#      ~/repos/privatefiles/. The symlinks back into $HOME
-#      (~/.claude/CLAUDE.md, ~/.seal/SEAL.md, etc.) are authored
+#      ~/repos/privatefiles/. The workspace symlinks back into $HOME
+#      (`~/repos/repos.code-workspace`, the sealedsecurity workspace) are authored
 #      declaratively by home-manager — see
 #      shared/privatefiles-symlinks.nix — and laid down by step 4's
 #      nix-rebuild, not by this script.
@@ -174,8 +174,8 @@ if [ "$DEV" = "yes" ]; then
 		run jj -R "$PRIVATEFILES_DIR" bookmark track main --remote=origin
 	fi
 
-	# Note: symlinks from $HOME → privatefiles (~/.claude/CLAUDE.md,
-	# ~/.seal/SEAL.md, ~/repos/sealedsecurity/*, ~/repos/repos.code-workspace)
+	# Note: workspace symlinks from $HOME → privatefiles
+	# (~/repos/sealedsecurity/*, ~/repos/repos.code-workspace)
 	# are NOT authored here. home-manager creates them declaratively
 	# on activation — see nix-config/shared/privatefiles-symlinks.nix.
 	# Step 4's nix-rebuild lays them down; if you ever lose one, run
@@ -232,7 +232,7 @@ cat <<EOF
 
 Done. Verify:
   - \`nix-switch\` runs and rebuilds against $NIX_CONFIG_DIR.
-  - \`ls -la ~/.claude/CLAUDE.md ~/.seal/SEAL.md\` show symlinks into $PRIVATEFILES_DIR (dev hosts only).
+  - \`ls -la ~/repos/repos.code-workspace\` shows a symlink into $PRIVATEFILES_DIR (dev hosts only).
   - \`cd $ZIREAEL_DIR && jj status\` runs cleanly.
 
 After ~1-2 weeks of confirmed-working state, delete:

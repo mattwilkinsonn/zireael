@@ -121,8 +121,8 @@ if [ "$PHASE" = "1" ]; then
 		git --git-dir="$ZIREAEL_DIR/.git" config core.filemode false
 	fi
 
-	# Optionally copy privatefiles too. Dev hosts need it (CLAUDE.md,
-	# user-level SEAL.md, sealedsecurity workspace meta). Skip
+	# Optionally copy privatefiles too. Dev hosts need it (the
+	# sealedsecurity workspace meta). Skip
 	# silently when the Windows side didn't clone it.
 	WIN_PRIVATEFILES="/mnt/c/Users/${WIN_USER:-$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r\n')}/repos/privatefiles"
 	if [ -d "$WIN_PRIVATEFILES/.git" ] && [ ! -d "$PRIVATEFILES_DIR/.git" ]; then
