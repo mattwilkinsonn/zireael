@@ -203,34 +203,18 @@ in
     run ${pkgs.uv}/bin/uv python install --preview-features python-install-default --default --force
   '';
 
-  # Claude Code: install via the official bash installer if the binary isn't
-  # already on disk. Cross-platform (Mac + Linux). Claude Code self-updates on
-  # launch, so we only need the installer for the first-time install — checking
-  # the install paths instead of re-running every rebuild.
-  home.activation.installClaudeCode = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    if [ -x "$HOME/.local/bin/claude" ] || [ -x "$HOME/.claude/local/claude" ]; then
-      echo "Claude Code already installed; skipping (it self-updates on launch)"
-    else
-      echo "Installing Claude Code..."
-      export PATH="${pkgs.curl}/bin:$PATH"
-      run ${pkgs.curl}/bin/curl -fsSL https://claude.ai/install.sh | ${pkgs.bash}/bin/bash
-    fi
-  '';
-
-  # rtk init -g: registers the RTK Pre/Post tool-use hooks in
-  # ~/.claude/settings.json. Cross-platform — rtk lives at different paths
-  # depending on host (cargo-installed on Pi, brew on Mac). Skip if the
-  # hooks already look registered (avoids re-writing settings.json on every
-  # rebuild). Match `rtk` as a substring — the hook entry writes something
-  # like `"command": "rtk-hook"`, which doesn't contain the literal `"rtk"`.
-  home.activation.initRtk = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-    PATH="$HOME/.cargo/bin:$HOME/.local/bin:/opt/homebrew/bin:/home/linuxbrew/.linuxbrew/bin:$PATH"
-    if command -v rtk >/dev/null 2>&1; then
-      if ! grep -q rtk "$HOME/.claude/settings.json" 2>/dev/null; then
-        echo "Initializing RTK for Claude Code..."
-        run rtk init -g
+  # Remove stale Claude Code symlinks left behind when its nix-managed config
+  # was dropped (settings.json + status-line.sh). home-manager prunes dropped
+  # files only while they're still the managed store-symlink, so clear any that
+  # remain — guarded to a nix-store symlink so a real file Claude wrote is kept.
+  home.activation.cleanupStaleClaudeLinks = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    for f in "$HOME/.claude/settings.json" "$HOME/.claude/scripts/status-line.sh"; do
+      if [ -L "$f" ]; then
+        case "$(readlink "$f")" in
+          /nix/store/*) run rm -f "$f" ;;
+        esac
       fi
-    fi
+    done
   '';
 
   # Ensure fnm has the latest Node LTS installed and aliased as the
