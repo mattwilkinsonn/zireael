@@ -325,12 +325,17 @@ jobs:
 
       - uses: actions/checkout@v6
         with:
-          # Checkout with the App token so the local git remote
-          # carries it for the `git push` later. actions/checkout
-          # also writes this token into .git/config's extraheader,
-          # so plain `git push` Just Works without re-auth.
+          # The workflow is triggered by a tag, but the tap bump must be
+          # committed on top of current main. Checking out the tag and
+          # pushing HEAD:main races any main update after the tag was cut
+          # and gets rejected as non-fast-forward.
+          ref: main
+          fetch-depth: 0
+          # Checkout with the App token so the local git remote carries it
+          # for the `git push` later. actions/checkout also writes this
+          # token into .git/config's extraheader, so plain `git push` Just
+          # Works without re-auth.
           token: ${{ steps.app-token.outputs.token }}
-
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
@@ -389,9 +394,11 @@ jobs:
           git config user.email "${{ vars.RELEASE_BOT_APP_ID }}+zireael-release[bot]@users.noreply.github.com"
           git add Formula/
           git commit -m "chore(tap): bump formulae to ${{ needs.meta.outputs.tag }}"
-          # Push uses the App token wired in by actions/checkout's
-          # extraheader. The App is in the main-ruleset bypass list,
-          # so this skips the PR + status-checks requirement.
+          # Main can advance while the release builds artifacts. Rebase the
+          # formula bump over the latest main immediately before pushing so
+          # the bot push stays a fast-forward instead of leaving the tap stale.
+          git fetch origin main:refs/remotes/origin/main
+          git rebase origin/main
           git push origin HEAD:main
 
   # ----- Validate the freshly published tap installs end-to-end.
