@@ -21,7 +21,6 @@
       url = "github:nix-community/NixOS-WSL/main";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    codex-cli.url = "github:sadjow/codex-cli-nix";
     llm-agents.url = "github:numtide/llm-agents.nix";
   };
 

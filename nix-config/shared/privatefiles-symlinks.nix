@@ -39,6 +39,16 @@ in
     ".claude/RTK.md".source = linkOut "home/.claude/RTK.md";
     ".seal/SEAL.md".source = linkOut "home/.seal/SEAL.md";
 
+    # OMP (oh-my-pi) agent config. AGENTS.md is the canonical
+    # tool-agnostic instruction file (CLAUDE.md above is now a stub
+    # pointing here). rules/skills/extensions are whole-dir links;
+    # config.yml + agent.db stay OMP-managed (live, not linked).
+    ".omp/agent/AGENTS.md".source = linkOut "home/.omp/agent/AGENTS.md";
+    ".omp/agent/mcp.json".source = linkOut "home/.omp/agent/mcp.json";
+    ".omp/agent/rules".source = linkOut "home/.omp/agent/rules";
+    ".omp/agent/skills".source = linkOut "home/.omp/agent/skills";
+    ".omp/agent/extensions".source = linkOut "home/.omp/agent/extensions";
+
     # sealedsecurity workspace meta — the SEAL.md describing the
     # multi-repo workspace layout and the .code-workspace VS Code
     # multi-root config that opens it. Both reference the private

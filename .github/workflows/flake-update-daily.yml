@@ -1,0 +1,42 @@
+name: flake-update-daily
+
+# Daily refresh of llm-agents — the fast-moving input that bundles the LLM
+# CLIs (omp / claude-code / codex / amp / sandbox-runtime / etc.) and bumps
+# basically every day.
+# Opens a PR against main; Matt reviews + merges. The weekly job
+# (flake-update-weekly.yml) refreshes everything else.
+#
+# flake.nix lives under nix-config/, hence path-to-flake-dir. A PAT in
+# GH_TOKEN_FOR_UPDATES (optional) lets PR checks run automatically;
+# without it the PR is still opened (close/reopen to trigger CI).
+
+"on":
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC daily (after nightly's 06:00 eval)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write # Determinate Nix OIDC
+
+jobs:
+  update:
+    name: update flake.lock (llm-agents)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - uses: DeterminateSystems/update-flake-lock@main
+        with:
+          path-to-flake-dir: nix-config
+          inputs: llm-agents
+          branch: flake-update-daily
+          commit-msg: "chore(nix): update flake.lock (llm-agents)"
+          pr-title: "chore(nix): daily flake.lock (llm-agents)"
+          pr-labels: |
+            nix
+            automated
+          nix-options: --accept-flake-config
+          token: ${{ secrets.GH_TOKEN_FOR_UPDATES || github.token }}

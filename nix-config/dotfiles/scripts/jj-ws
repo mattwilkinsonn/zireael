@@ -1,0 +1,64 @@
+set -euo pipefail
+
+# jj-ws — thin convenience around `jj workspace` for the multi-agent
+# wave. Workspaces are created as siblings of the repo in a `<repo>.ws/`
+# directory so they stay out of the main checkout. Run inside any jj
+# repo (most repos here are colocated jj+git).
+#
+#   jj-ws add <name>   create + print path of a new workspace
+#   jj-ws rm  <name>   forget the workspace and delete its directory
+#   jj-ws ls           list workspaces (alias: list)
+#
+# Pair with the `wave` zellij layout: open a worker pane, `cd "$(jj-ws
+# add slot1)"`, then `omp`. Forget with `jj-ws rm slot1` when done.
+
+usage() {
+  echo "usage: jj-ws {add|rm|ls} [name]" >&2
+  exit 2
+}
+
+cmd="${1:-ls}"
+[ "$#" -gt 0 ] && shift || true
+
+root="$(jj workspace root 2>/dev/null)" || {
+  echo "jj-ws: not inside a jj repo" >&2
+  exit 1
+}
+# Anchor the .ws dir to the MAIN repo, not the current workspace, so add/rm
+# work even when run from inside a worker workspace (the wave case): from
+# `<repo>.ws/<slot>` this strips back to `<repo>`; from the main repo it is a
+# no-op. (jj-ws always creates workspaces at `<repo>.ws/<name>`.)
+mainroot="${root%.ws/*}"
+wsdir="${mainroot%/}.ws"
+
+case "$cmd" in
+  add)
+    name="${1:?$(usage)}"
+    mkdir -p "$wsdir"
+    jj workspace add --name "$name" "$wsdir/$name" >&2
+    printf '%s\n' "$wsdir/$name"
+    ;;
+  rm | forget)
+    name="${1:?$(usage)}"
+    target="${wsdir:?}/${name:?}"
+    # refuse to delete the workspace you're standing in (resolve symlinks so
+    # macOS /var vs /private/var doesn't defeat the check)
+    here="$(pwd -P)"
+    canon="$(cd "$target" 2>/dev/null && pwd -P || printf '%s' "$target")"
+    case "$here/" in
+      "$canon/"*)
+        echo "jj-ws: cd out of '$name' before removing it" >&2
+        exit 1
+        ;;
+    esac
+    jj workspace forget "$name" 2>/dev/null || true
+    rm -rf "$target"
+    echo "jj-ws: removed workspace '$name' ($target)" >&2
+    ;;
+  ls | list)
+    jj workspace list
+    ;;
+  *)
+    usage
+    ;;
+esac

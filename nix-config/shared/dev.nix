@@ -17,8 +17,8 @@
 # clang, gnumake + PKG_CONFIG_PATH) live in `shared/linux-build-deps.nix`
 # — Mac uses brew + Xcode CLI Tools for the equivalent.
 let
-  # Agent CLIs come from external flakes (numtide/llm-agents.nix +
-  # sadjow/codex-cli-nix). Resolve the per-system package set once here
+  # Agent CLIs all come from the numtide/llm-agents.nix flake. Resolve the
+  # per-system package set once here
   # so adding a new agent CLI is a single line in `home.packages` below —
   # `agents.gemini-cli`, `agents.opencode`, etc. — instead of threading a
   # new `fooPackage` arg through flake.nix's per-host extraSpecialArgs and
@@ -26,7 +26,6 @@ let
   #   nix eval github:numtide/llm-agents.nix#packages.${pkgs.system} \
   #     --apply builtins.attrNames
   agents = inputs.llm-agents.packages.${pkgs.system};
-  codex = inputs.codex-cli.packages.${pkgs.system}.codex;
 in
 {
   home.packages =
@@ -129,13 +128,24 @@ in
       # the repo shells provision.
       devenv
 
-      # AI / LLM tooling. Agent CLIs from external flakes are referenced
-      # via the `agents` / `codex` bindings in the `let` above — add a new
-      # one by dropping a single `agents.<name>` line here.
-      codex # OpenAI Codex CLI (sadjow/codex-cli-nix)
+      # AI / LLM tooling. Agent CLIs are referenced via the `agents` binding
+      # in the `let` above — add a new one by dropping a single
+      # `agents.<name>` line here.
+      agents.codex # OpenAI Codex CLI (numtide/llm-agents.nix)
       agents.coderabbit-cli # CodeRabbit CLI (numtide/llm-agents.nix)
       agents.gemini-cli # Google Gemini CLI (numtide/llm-agents.nix)
       agents.omp # Oh My Pi CLI (numtide/llm-agents.nix)
+      # Emdash's ADE provider registry detects the `pi` binary (upstream
+      # @earendil-works/pi); we run the oh-my-pi fork (`omp`). This shim
+      # puts `pi` on PATH so Emdash launches omp. Basic launch + worktree
+      # flow work; pi-specific Emdash hooks (Resume) may not, since omp has
+      # diverged far from upstream pi — the clean fix is a first-class
+      # `omp` provider upstream in Emdash (generalaction/emdash).
+      (writeShellScriptBin "pi" ''exec ${agents.omp}/bin/omp "$@"'')
+
+      # jj-ws — workspace helper for the multi-agent wave (creates/forgets
+      # jj workspaces under <repo>.ws/). Pairs with the `wave` zellij layout.
+      (writeShellScriptBin "jj-ws" (builtins.readFile ../dotfiles/scripts/jj-ws))
 
       # Misc dev-machine utilities
       rclone # Drive/Dropbox/etc remote sync (used by Berkeley Mono font activation)

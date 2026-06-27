@@ -117,7 +117,7 @@ the duration of the call.
 
 | op:// reference | Env var |
 | --- | --- |
-| `op://Dev/Anthropic API Key/credential` | `ANTHROPIC_API_KEY` |
+| `op://Dev/Anthropic API Key/credential` | `TESTING_ANTHROPIC_API_KEY` |
 | `op://Dev/OpenRouter API Key/credential` | `OPENROUTER_API_KEY` |
 | `op://Dev/GitHub Personal Access Token/token` | `GITHUB_PERSONAL_ACCESS_TOKEN` |
 | `op://Dev/Personal Cloudflare API Token/token` | `CLOUDFLARE_API_TOKEN` |
@@ -139,10 +139,13 @@ the duration of the call.
 depending on the per-user marker file — see the *Claude Code token
 swap* section below.
 
-The Claude Code subscription token is an OAuth token (`sk-ant-oat…`),
-not an API key, so it goes in `CLAUDE_CODE_OAUTH_TOKEN` — the slot
-Anthropic's SDK / Claude Code use for OAuth specifically.
-`ANTHROPIC_API_KEY` is left for real `sk-ant-api…` keys when/if needed.
+The subscription token is an OAuth token (`sk-ant-oat…`), not an API
+key, so it lives in `CLAUDE_CODE_OAUTH_TOKEN` — the OAuth slot. The
+Anthropic API key is now parked under `TESTING_ANTHROPIC_API_KEY`, not
+the magic `ANTHROPIC_API_KEY` name: OMP and the Anthropic SDKs
+auto-detect `ANTHROPIC_API_KEY` and would bill the pay-per-token API
+instead of the claude.ai subscription OAuth. Rename it back only if a
+tool genuinely needs a raw `sk-ant-api…` key.
 
 If `op` fails (token unset, app locked, signed out), each export is
 *skipped* rather than set to empty — downstream tools fall back to
