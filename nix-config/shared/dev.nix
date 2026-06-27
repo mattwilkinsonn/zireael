@@ -126,11 +126,13 @@ in
       agents.omp # Oh My Pi CLI (numtide/llm-agents.nix)
       # Emdash's ADE provider registry detects the `pi` binary (upstream
       # @earendil-works/pi); we run the oh-my-pi fork (`omp`). This shim
-      # puts `pi` on PATH so Emdash launches omp. Basic launch + worktree
-      # flow work; pi-specific Emdash hooks (Resume) may not, since omp has
-      # diverged far from upstream pi — the clean fix is a first-class
-      # `omp` provider upstream in Emdash (generalaction/emdash).
-      (writeShellScriptBin "pi" ''exec ${agents.omp}/bin/omp "$@"'')
+      # puts `pi` on PATH pointing at the dogfood `omp` (~/.local/bin/omp,
+      # defined below), so Emdash launches the same local build as plain `omp`
+      # rather than the nixpkgs `agents.omp`. Basic launch + worktree flow work;
+      # pi-specific Emdash hooks (Resume) may not, since omp has diverged far
+      # from upstream pi — the clean fix is a first-class `omp` provider upstream
+      # in Emdash (generalaction/emdash).
+      (writeShellScriptBin "pi" ''exec "$HOME/.local/bin/omp" "$@"'')
 
       # jj-ws — workspace helper for the multi-agent wave (creates/forgets
       # jj workspaces under <repo>.ws/). Pairs with the `wave` zellij layout.
@@ -448,7 +450,13 @@ in
   # Dogfood the local oh-my-pi build (in-flight fixes merged on upstream main)
   # as the default `omp`. Out-of-store symlink so rebuilding the binary in the
   # workspace takes effect with no nix-switch; ~/.local/bin precedes the nixpkgs
-  # `agents.omp` on PATH, so this shadows it — plain `omp` runs the dogfood build.
+  # `agents.omp` on PATH, so this shadows it — plain `omp` and the `pi` shim
+  # (which Emdash launches) both run the dogfood build. A host that hasn't built
+  # oh-my-pi.ws/omp-dev gets a dangling `omp` until it does — intentional; clone
+  # + build the workspace. Since this build carries the in-flight jj-statusline
+  # / Zellij-title fixes, the local workaround extensions (jj-status,
+  # zellij-status) are dropped — restore them only if we stop dogfooding before
+  # oh-my-pi #3582/#3583/#3587 merge.
   home.file.".local/bin/omp".source =
     config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/repos/oh-my-pi.ws/omp-dev/packages/coding-agent/dist/omp";
 
@@ -463,7 +471,7 @@ in
     target="${if pkgs.stdenv.isDarwin then "bun-darwin-aarch64" else "bun-linux-x64"}"
     current="$("$HOME/.bun/bin/bun" --version 2>/dev/null || true)"
     # Install only if missing or older; never downgrade a newer Bun.
-    if [ "$current" != "$(printf '%s\n%s\n' "$current" "$BUN_VERSION" | sort -V | tail -n1)" ]; then
+    if [ "$current" != "$(printf '%s\n%s\n' "$current" "$BUN_VERSION" | ${pkgs.coreutils}/bin/sort -V | tail -n1)" ]; then
       echo "Installing bun $BUN_VERSION to ~/.bun/bin (nixpkgs ships ${pkgs.bun.version})..."
       tmp="$(mktemp -d)"
       ${pkgs.curl}/bin/curl -fsSL \
