@@ -10,7 +10,11 @@
 // The agents run `omp` directly; they inherit the env (incl. 1Password
 // secrets + PATH) from the shell that launched zellij, so start zellij from a
 // normal login shell. For isolated per-agent workspaces, replace a worker's
-// `{ command "omp"; }` with a plain shell and run `cd "$(jj-ws add slotN)" && omp`.
+// `{ command "omp"; }` with a plain shell, then create its workspace per the
+// per-agent layout — `mkdir -p ~/agents/workspaces/<slot>-<codename> &&
+// jj workspace add --name <slot>-<codename>
+// ~/agents/workspaces/<slot>-<codename>/<repo> -r 'trunk()'` — and `cd` into it
+// before running `omp` (see skill://multi-agent-wave → Workspace layout).
 layout {
     tab name="wave" focus=true {
         pane split_direction="vertical" {

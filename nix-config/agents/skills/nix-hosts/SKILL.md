@@ -5,10 +5,12 @@ description: "Matt's nix-config flake — host configs, shared modules, secret l
 
 # Nix Hosts
 
-Matt's machines are declared in one flake at `~/repos/zireael/nix-config`
-(`flake.nix`). It tracks `nixos-25.11` plus a `nixos-unstable` channel; the
-dev hosts pull every package through unstable via `shared/unstable-wholesale.nix`,
-and home-manager follows its `master` branch.
+Matt's machines are declared in one flake under the `nix-config/` directory
+inside the `~/repos/zireael` monorepo (`~/repos/zireael/nix-config/flake.nix`);
+`nix-config` is not a separate repository checkout. It tracks `nixos-25.11`
+plus a `nixos-unstable` channel; the dev hosts pull every package through
+unstable via `shared/unstable-wholesale.nix`, and home-manager follows its
+`master` branch.
 
 ## Hosts
 
