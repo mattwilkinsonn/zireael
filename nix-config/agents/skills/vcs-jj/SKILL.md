@@ -105,7 +105,7 @@ jj bookmark delete <name>              # remove after a PR merges
 
 - `bookmark create` tracks the **change ID**, so it stays correct after `jj commit` moves the content to `@-` — no re-set needed.
 - Moving a named bookmark like `main` is always explicit: `jj bookmark set main -r main@origin` (fast-forward) or `-r @-`.
-- **Naming:** lead with the issue ref + a short kebab description, no `user/` prefix (e.g. `sea-931-mattmini-adminuser`). In multi-agent work, **always** suffix the agent handle as a lane-tracking aid for Matt: `sea-930-woodpecker-fleet-conversion--hudson`. This branch-name handle is expected and is the *one* place it belongs — keep agent/persona names out of commit messages, PR titles/descriptions, and code (a "no persona in PRs" rule means PR *content*, not the branch name).
+- **Naming:** `<name>-<issue>-<short-desc>` — in multi-agent work lead with the **codename** as the lane tag (the *one* place a persona name belongs — keep it out of commit messages, PR titles/descriptions, and code), then the issue ref, then a short kebab description: `hudson-sea-930-woodpecker-fleet-conversion`. No issue → `<name>-<short-desc>` (e.g. `cook-compass-scaffold`). Solo work drops the codename: `sea-931-mattmini-adminuser`. No `user/` prefix.
 - **Prepping a change for Matt to submit:** creating the bookmark is *your* job, not his — it's a local op, not a push. Create or point it (`jj bookmark create <name> -r <change>`), then hand Matt only the submit command — `jj-gt submit -b <name> --ai` (drafts the PR title + description). `jj-gt` bridges the jj bookmark stack to Graphite PRs; bare `jj git push` is not Matt's path.
 
 ## Stacking on in-progress work
@@ -118,7 +118,7 @@ they land.
 ```bash
 jj git fetch                                          # import the base's tip
 jj new <base-bookmark>@origin -m "feat: my change"    # base on their tip, not main
-jj bookmark create sea-NNN-<slug>--<me> -r @
+jj bookmark create <me>-sea-NNN-<slug> -r @
 ```
 
 The catch: an **in-progress base keeps moving** — its author pushes review
@@ -149,14 +149,19 @@ jj rebase -b <your-bookmark> -d main@origin
 - **Reference the base as `<base-bookmark>@origin`, not a bare local name** — jj
   auto-tracks only `main`, so another agent's bookmark arrives as a
   remote-tracking ref after `jj git fetch`; a bare `<base-bookmark>` may not
-  exist locally (or is stale). `jj bookmark track <base-bookmark>@origin` once
-  if you want a local name to rebase onto.
+  exist locally (or is stale). **Track it locally before you submit** — `jj
+  bookmark track <base-bookmark>@origin` — because `jj-gt submit` derives the
+  Graphite parent from local `bookmarks()` only: an untracked remote-only base
+  leaves it no parent, so it stacks your PR on trunk and the diff carries the
+  base's commits instead of stacking on its PR.
 - **`jj-gt submit -b <your-bookmark>` submits the whole selected stack** — if
   yours is still stacked on another agent's unmerged base, it can re-submit
   their base PR too, so coordinate with the base's owner (or wait for it to
   land) before handing Matt the submit. If your stack grew past the first
-  commit, move the bookmark to the tip first (`jj bookmark set <your-bookmark>
-  -r @`) — `bookmark create` pins the original change ID and doesn't auto-advance.
+  commit, move the bookmark to the **finalized tip** first — `jj bookmark set
+  <your-bookmark> -r @-` after `jj commit` (`@` is then the empty child; the
+  content tip is `@-`), or `-r @` if you snapshotted with `jj describe` —
+  `bookmark create` pins the original change ID and doesn't auto-advance.
 - **Disjoint files?** If your work touches entirely different files from the
   base, you can instead work off `main` and rebase once at the end — stacking is
   for when you genuinely need the base's changes to build/test. Pick per how
@@ -183,6 +188,8 @@ jj rebase -b <your-bookmark> -d main@origin
 ## Workspaces
 
 `jj workspace` gives you multiple working directories backed by one `.jj/` store — useful for running several lines of work (or several agents) at once without trampling each other's files. An automated dev environment may provision these for you.
+
+- **Agent workspaces live under `~/agents/workspaces/<slot>-<codename>/<repo>/`** — grouped by agent (one dir per agent; a repo-named jj workspace inside per repo it touches), never scattered beside the repos. Canonical clones stay in `~/repos/`. Create from the repo: `jj workspace add --name <slot>-<codename> ~/agents/workspaces/<slot>-<codename>/<repo> -r main`. Full wave model: `skill://multi-agent-wave`.
 
 ```bash
 jj workspace list                      # show all workspaces
