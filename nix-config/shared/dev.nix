@@ -1,5 +1,6 @@
 {
   lib,
+  config,
   pkgs,
   inputs,
   ...
@@ -442,6 +443,36 @@ in
   home.file.".bunfig.toml".text = ''
     [install]
     minimumReleaseAge = 7200
+  '';
+
+  # Dogfood the local oh-my-pi build (in-flight fixes merged on upstream main)
+  # as the default `omp`. Out-of-store symlink so rebuilding the binary in the
+  # workspace takes effect with no nix-switch; ~/.local/bin precedes the nixpkgs
+  # `agents.omp` on PATH, so this shadows it — plain `omp` runs the dogfood build.
+  home.file.".local/bin/omp".source =
+    config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/repos/oh-my-pi.ws/omp-dev/packages/coding-agent/dist/omp";
+
+  # bun: oh-my-pi's compiled binary asserts Bun >= 1.3.14 at startup, but
+  # nixpkgs ships only 1.3.13 (checked unstable + master). Fetch the pinned
+  # release into ~/.bun/bin — which precedes the nix profile on PATH, so it
+  # shadows pkgs.bun for the omp-dev build. Direct release download rather than
+  # bun.sh/install, which appends PATH lines to the store-symlinked shell rc.
+  # Remove once nixpkgs carries >= 1.3.14; bump BUN_VERSION as omp needs newer.
+  home.activation.installBun = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    BUN_VERSION="1.3.14"
+    target="${if pkgs.stdenv.isDarwin then "bun-darwin-aarch64" else "bun-linux-x64"}"
+    if [ "$("$HOME/.bun/bin/bun" --version 2>/dev/null)" != "$BUN_VERSION" ]; then
+      echo "Installing bun $BUN_VERSION to ~/.bun/bin (nixpkgs ships ${pkgs.bun.version})..."
+      tmp="$(mktemp -d)"
+      ${pkgs.curl}/bin/curl -fsSL \
+        "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/$target.zip" \
+        -o "$tmp/bun.zip"
+      ${pkgs.unzip}/bin/unzip -q "$tmp/bun.zip" -d "$tmp"
+      mkdir -p "$HOME/.bun/bin"
+      cp "$tmp/$target/bun" "$HOME/.bun/bin/bun"
+      chmod 755 "$HOME/.bun/bin/bun"
+      rm -rf "$tmp"
+    fi
   '';
 
   # Graphite CLI auth — `gt auth --token <token>` writes
