@@ -20,7 +20,7 @@ Prefer the correct, modern approach over workarounds, even when it's more work �
 
 ## Comment & doc hygiene
 
-- Never name other agent products in code/commits/docs ("Claude Code", "Cursor", "Codex", etc.) or use euphemisms ("the reference agent"). Describe the behavior directly. Literal interop strings (header values, keychain entry names) are fine.
+- Never name other agent products in code/commits/docs ("Claude Code", "Cursor", "Codex", etc.) or use euphemisms ("the reference agent"). Describe the behavior directly. Exceptions: literal interop strings (header values, keychain entry names), and the names of code-review bots (CodeRabbit, cubic, Greptile, Codex, …) in PR-review docs and skills, where the guidance must name each reviewer to describe its distinct behavior.
 - Never embed planning metadata in source: slice/phase numbers, issue IDs, "as discussed in chat", change IDs. Describe the constraint directly. Issue IDs belong in commit subjects/PR bodies, not code.
 - Never reference superseded tooling or "what we used to use" in new code, comments, or docs ("unlike the old X", "modeled on the retired Y", "same posture as the old Z"). Describe the current design on its own terms — historical contrasts confuse readers and add needless complexity. (Docs that are *about* a migration — runbooks, changelogs — are the exception.)
 
