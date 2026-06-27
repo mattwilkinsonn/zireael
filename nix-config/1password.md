@@ -103,7 +103,9 @@ path simply won't resolve, and vice versa. Defense in depth.
 
 Lives in `shared/load-secrets.nix` (`programs.zsh.initContent` on
 NixOS/Mac); the tables below describe the Nix loader. `windows/profile.ps1`
-(PowerShell) loads only a subset (Claude + Linear), not the full set. Runs on
+(PowerShell) loads its own overlapping set; `TAILSCALE_API_KEY`,
+`CODERABBIT_API_KEY`, and `OPENAI_API_KEY` are Nix-only (not exported
+there). Runs on
 every interactive shell startup; non-interactive shells (systemd
 units, cron, ssh-running-a-command, bash subshells) intentionally
 skip it.
