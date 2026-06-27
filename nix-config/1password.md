@@ -32,7 +32,7 @@ work around this by swapping the env var per `op inject` call.
 | Vault | Tier | Contents | Scope of compromise |
 | --- | --- | --- | --- |
 | **Employee** | Identity | Sealed master login, work email + 2FA codes, work bank/payroll if any, recovery codes for Sealed-managed accounts | Full Sealed identity — keep nothing automated reading from here |
-| **Local Dev** | Working | Sealed Claude Code OAuth token, Linear API key, CodeRabbit API key, OpenAI API key, Buildkite API token, Graphite API token, Sealed AWS credentials, internal Sealed API tokens, Sealed CI tokens, work VPN | Sealed working scope |
+| **Local Dev** | Working | Sealed Claude Code OAuth tokens (Matt + Xavier), Linear API key, CodeRabbit API key, OpenAI API key, Buildkite API token, Graphite API token, Sealed AWS credentials, internal Sealed API tokens, Sealed CI tokens, work VPN | Sealed working scope |
 | **Shared** | Identity | (future) Joint team identity — onboard creds for new hires, etc. | Whole team |
 
 ### Identity vs Working tier
@@ -136,19 +136,22 @@ the duration of the call.
 | `op://Local Dev/OpenAI API Key mattdev/credential` | `OPENAI_API_KEY` |
 | `op://Local Dev/Tailscale API Key/credential` | `TAILSCALE_API_KEY` |
 
-`CLAUDE_CODE_OAUTH_TOKEN` is loaded by `load-secrets` from either
-`op://Dev/Personal Claude Code OAuth Token/credential` or
-`op://Local Dev/Claude Code OAuth Token matt sealed/credential`
-depending on the per-user marker file — see the *Claude Code token
-swap* section below.
+`CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_OAUTH_TOKEN` are set
+together from one Claude OAuth token: either
+`op://Dev/Personal Claude Code OAuth Token/credential`,
+`op://Local Dev/Claude Code OAuth Token matt sealed/credential`, or
+`op://Local Dev/Claude Code OAuth Token xavier sealed/credential`.
+On zsh dev hosts, the per-user marker file chooses the default — see
+the *Claude Code token swap* section below.
 
 The subscription token is an OAuth token (`sk-ant-oat…`), not an API
-key, so it lives in `CLAUDE_CODE_OAUTH_TOKEN` — the OAuth slot. The
-Anthropic API key is now parked under `TESTING_ANTHROPIC_API_KEY`, not
-the magic `ANTHROPIC_API_KEY` name: OMP and the Anthropic SDKs
-auto-detect `ANTHROPIC_API_KEY` and would bill the pay-per-token API
-instead of the claude.ai subscription OAuth. Rename it back only if a
-tool genuinely needs a raw `sk-ant-api…` key.
+key. `CLAUDE_CODE_OAUTH_TOKEN` is the Claude Code name;
+`ANTHROPIC_OAUTH_TOKEN` is the OMP-compatible name for the same OAuth
+token. The Anthropic API key is parked under
+`TESTING_ANTHROPIC_API_KEY`, not the magic `ANTHROPIC_API_KEY` name:
+OMP and the Anthropic SDKs auto-detect `ANTHROPIC_API_KEY` and would
+bill the pay-per-token API instead of the claude.ai subscription OAuth.
+Rename it back only if a tool genuinely needs a raw `sk-ant-api…` key.
 
 If `op` fails (token unset, app locked, signed out), each export is
 *skipped* rather than set to empty — downstream tools fall back to
@@ -161,26 +164,32 @@ match `gh`'s convention, so any `op://Dev/GitHub Personal Access
 Token/token` reference in this file resolves the same way regardless
 of where it's read from.
 
-### Claude Code token swap — `claude-default` / `claude-personal` / `claude-sealed`
+### Claude Code token swap — `claude-default` / one-shot helpers
 
-`load-secrets` chooses which Claude OAuth token to export based on the
-marker file `~/.config/claude-code/default-account` (contents:
-`personal` or `sealed`; defaults to `sealed` if missing). The marker
-is read on every new shell, so changing it flips the default for every
+On zsh dev hosts, `load-secrets` chooses which Claude OAuth token to
+export based on the marker file
+`~/.config/claude-code/default-account` (contents: `personal`,
+`sealed`, or `xavier`; defaults to `sealed` if missing). The marker is
+read on every new shell, so changing it flips the default for every
 future shell without a nix-switch.
 
 ```bash
 claude-default personal   # persist + flip current shell to Personal
-claude-default sealed     # persist + flip current shell to Sealed
+claude-default sealed     # persist + flip current shell to Matt Sealed
+claude-default xavier     # persist + flip current shell to Xavier Sealed
 claude-personal           # one-shot: flip ONLY the current shell to Personal
-claude-sealed             # one-shot: flip ONLY the current shell to Sealed
+claude-sealed             # one-shot: flip ONLY the current shell to Matt Sealed
+claude-xavier             # one-shot: flip ONLY the current shell to Xavier Sealed
 ```
 
-`claude-sealed` temporarily swaps `OP_SERVICE_ACCOUNT_TOKEN` to the
-team token to do the read, then restores it. `claude-personal` uses
-the personal token (already in env).
+`claude-sealed` and `claude-xavier` temporarily swap
+`OP_SERVICE_ACCOUNT_TOKEN` to the team token to do the read, then
+restore it. `claude-personal` uses the personal token (already in
+env). All three helpers set both `CLAUDE_CODE_OAUTH_TOKEN` and
+`ANTHROPIC_OAUTH_TOKEN`.
 
-Defined alongside `load-secrets` in `shared/load-secrets.nix` /
+`claude-default` lives in `shared/load-secrets.nix`; the one-shot
+helpers live in both `shared/load-secrets.nix` and
 `windows/profile.ps1`. Use `claude-default` when you want a sticky
 preference (most people most of the time); use the one-shot helpers
 when you just need to flip a single terminal.
@@ -240,5 +249,5 @@ its desktop-app integration:
    sets. Both `op` accounts are reachable for interactive use.
 5. Reference secrets via `op://Vault/Item/field` format. Account
    disambiguation is implicit via the token-swap inside
-   `load-secrets` / `claude-sealed` — no `--account` flag needed in
-   day-to-day use.
+   `load-secrets` / `claude-sealed` / `claude-xavier` — no `--account`
+   flag needed in day-to-day use.

@@ -70,21 +70,34 @@ _:
             # every shell start based on the user's marker file —
             # function-resolution is at call time in zsh, so the
             # helpers must exist when load-secrets first runs.
+            _set_claude_oauth_token() {
+              local val=$1 label=$2
+              export CLAUDE_CODE_OAUTH_TOKEN=$val
+              export ANTHROPIC_OAUTH_TOKEN=$val
+              print "Claude OAuth token → $label"
+            }
             claude-sealed() {
               local val
               if val=$(OP_SERVICE_ACCOUNT_TOKEN=''${OP_TEAM_SERVICE_ACCOUNT_TOKEN:-} op read "op://Local Dev/Claude Code OAuth Token matt sealed/credential" 2>/dev/null) && [[ -n $val ]]; then
-                export CLAUDE_CODE_OAUTH_TOKEN=$val
-                print "CLAUDE_CODE_OAUTH_TOKEN → Sealed"
+                _set_claude_oauth_token "$val" "Sealed"
               else
                 print -u2 "failed to read Sealed claude token (OP_TEAM_SERVICE_ACCOUNT_TOKEN unset or invalid?)"
+                return 1
+              fi
+            }
+            claude-xavier() {
+              local val
+              if val=$(OP_SERVICE_ACCOUNT_TOKEN=''${OP_TEAM_SERVICE_ACCOUNT_TOKEN:-} op read "op://Local Dev/Claude Code OAuth Token xavier sealed/credential" 2>/dev/null) && [[ -n $val ]]; then
+                _set_claude_oauth_token "$val" "Xavier Sealed"
+              else
+                print -u2 "failed to read Xavier Sealed claude token (OP_TEAM_SERVICE_ACCOUNT_TOKEN unset or invalid?)"
                 return 1
               fi
             }
             claude-personal() {
               local val
               if val=$(op read "op://Dev/Personal Claude Code OAuth Token/credential" 2>/dev/null) && [[ -n $val ]]; then
-                export CLAUDE_CODE_OAUTH_TOKEN=$val
-                print "CLAUDE_CODE_OAUTH_TOKEN → Personal"
+                _set_claude_oauth_token "$val" "Personal"
               else
                 print -u2 "failed to read Personal claude token (op locked or signed out?)"
                 return 1
@@ -99,9 +112,9 @@ _:
             claude-default() {
               local choice=''${1:-}
               case "$choice" in
-                personal|sealed) ;;
+                personal|sealed|xavier) ;;
                 *)
-                  print -u2 "usage: claude-default <personal|sealed>"
+                  print -u2 "usage: claude-default <personal|sealed|xavier>"
                   return 2
                   ;;
               esac
@@ -111,6 +124,7 @@ _:
               case "$choice" in
                 personal) claude-personal ;;
                 sealed) claude-sealed ;;
+                xavier) claude-xavier ;;
               esac
             }
 
@@ -137,10 +151,10 @@ _:
 
               # Team account (sealedsecurity.1password.com): items in
               # op://Local Dev/... Read with OP_TEAM_SERVICE_ACCOUNT_TOKEN
-              # (matt-dev-svc). CLAUDE_CODE_OAUTH_TOKEN is intentionally
-              # NOT loaded here — it's set below from a per-user marker
-              # file so the default account is user-controllable without
-              # an edit-and-nix-switch cycle.
+              # (matt-dev-svc). Claude OAuth tokens are intentionally
+              # NOT loaded here — they're set below from a per-user
+              # marker file so the default account is user-controllable
+              # without an edit-and-nix-switch cycle.
               local team_template
               team_template='export LINEAR_API_KEY="{{ op://Local Dev/Linear API Key/credential }}"
     export CODERABBIT_API_KEY="{{ op://Local Dev/CodeRabbit API Key/credential }}"
@@ -150,16 +164,18 @@ _:
 
               # Choose which Claude OAuth token to load by default.
               # Marker at ~/.config/claude-code/default-account holds
-              # `personal` or `sealed`; missing/unknown values fall
-              # back to `sealed` (the original behavior). Use
-              # `claude-default <personal|sealed>` to flip it — takes
-              # effect on every new shell, no nix-switch required.
+              # `personal`, `sealed`, or `xavier`; missing/unknown
+              # values fall back to `sealed` (the original behavior).
+              # Use `claude-default <personal|sealed|xavier>` to flip
+              # it — takes effect on every new shell, no nix-switch
+              # required.
               local claude_default=sealed
               if [[ -r "$HOME/.config/claude-code/default-account" ]]; then
                 IFS= read -r claude_default < "$HOME/.config/claude-code/default-account"
               fi
               case "$claude_default" in
                 personal) claude-personal >/dev/null ;;
+                xavier) claude-xavier >/dev/null ;;
                 *) claude-sealed >/dev/null ;;
               esac
             }
