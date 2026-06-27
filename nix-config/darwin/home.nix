@@ -13,6 +13,7 @@ in
   imports = [
     ../shared/home.nix
     ../shared/dev.nix
+    ../shared/sccache-dev.nix
     ../shared/load-secrets.nix
     ../shared/privatefiles-symlinks.nix
     ../shared/agent-config.nix

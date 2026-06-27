@@ -169,6 +169,22 @@
     export POSTHOG_API_KEY="{{ op://Local Dev/PostHog API Key/credential }}"'
               _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN Team "$team_template"
 
+              # sccache dev cache (single Local Dev item with named
+              # fields). Kept separate from the team batch above so a
+              # missing cache item cannot block Linear / CodeRabbit /
+              # OpenAI / Tailscale exports.
+              local sccache_template
+              sccache_template='export SCCACHE_REDIS_ENDPOINT="{{ op://Local Dev/sccache dev cache/redis_endpoint }}"
+    export SCCACHE_REDIS_PASSWORD="{{ op://Local Dev/sccache dev cache/redis_password }}"
+    export SCCACHE_BUCKET="{{ op://Local Dev/sccache dev cache/r2_bucket }}"
+    export SCCACHE_ENDPOINT="{{ op://Local Dev/sccache dev cache/r2_endpoint }}"
+    export AWS_ACCESS_KEY_ID="{{ op://Local Dev/sccache dev cache/r2_access_key_id }}"
+    export AWS_SECRET_ACCESS_KEY="{{ op://Local Dev/sccache dev cache/r2_secret_access_key }}"'
+              if _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN Sccache "$sccache_template"; then
+                export SCCACHE_MULTILEVEL_CHAIN="disk,redis,s3"
+                export SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY=l0
+              fi
+
               # Choose which Claude OAuth token to load by default.
               # Marker at ~/.config/claude-code/default-account holds
               # `personal`, `sealed`, or `xavier`; missing/unknown

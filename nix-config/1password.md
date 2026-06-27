@@ -32,7 +32,7 @@ work around this by swapping the env var per `op inject` call.
 | Vault | Tier | Contents | Scope of compromise |
 | --- | --- | --- | --- |
 | **Employee** | Identity | Sealed master login, work email + 2FA codes, work bank/payroll if any, recovery codes for Sealed-managed accounts | Full Sealed identity — keep nothing automated reading from here |
-| **Local Dev** | Working | Sealed Claude Code OAuth tokens (Matt + Xavier), Linear API key, CodeRabbit API key, OpenAI API key, Cloudflare API token, PostHog API key, Buildkite API token, Graphite API token, Sealed AWS credentials, internal Sealed API tokens, Sealed CI tokens, work VPN | Sealed working scope |
+| **Local Dev** | Working | Sealed Claude Code OAuth tokens (Matt + Xavier), sccache dev cache Redis/R2 values, Linear API key, CodeRabbit API key, OpenAI API key, Cloudflare API token, PostHog API key, Buildkite API token, Graphite API token, Sealed AWS credentials, internal Sealed API tokens, Sealed CI tokens, work VPN | Sealed working scope |
 | **Shared** | Identity | (future) Joint team identity — onboard creds for new hires, etc. | Whole team |
 
 ### Identity vs Working tier
@@ -134,6 +134,7 @@ the duration of the call.
 | `op://Local Dev/Tailscale API Key/credential` | `TAILSCALE_API_KEY` |
 | `op://Local Dev/Cloudflare API Token/credential` | `CLOUDFLARE_API_TOKEN` |
 | `op://Local Dev/PostHog API Key/credential` | `POSTHOG_API_KEY` |
+| `op://Local Dev/sccache dev cache/{redis_endpoint,redis_password,r2_bucket,r2_endpoint,r2_access_key_id,r2_secret_access_key}` | `SCCACHE_REDIS_ENDPOINT`, `SCCACHE_REDIS_PASSWORD`, `SCCACHE_BUCKET`, `SCCACHE_ENDPOINT`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
 
 `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_OAUTH_TOKEN` are set
 together from one Claude OAuth token: either
