@@ -183,6 +183,15 @@ pub fn hook_command_all_files(runner: Runner, stage: Stage) -> Vec<String> {
     }
 }
 
+/// Build the argv that warms hk's Pkl cache: `hk validate` evaluates
+/// `hk.pkl` (resolving + caching its `package://` imports) without
+/// running any hook or needing git refs. The bare `hk` element is
+/// spliced with the resolved runner prefix by the caller, the same way
+/// [`hook_command`] is.
+pub fn hk_validate_command() -> Vec<String> {
+    vec![Runner::Hk.bin().into(), "validate".into()]
+}
+
 /// Build the argv for a lefthook invocation in all-files mode.
 /// Lefthook's `--all-files` flag replaces the per-`--file` selection
 /// [`lefthook_command`] would otherwise build.
@@ -739,6 +748,14 @@ exec "$INSTALL_PYTHON" -mpre_commit "${ARGS[@]}"
         assert_eq!(
             read_shim_argv(dir.path(), Stage::PreCommit, Runner::Hk),
             None
+        );
+    }
+
+    #[test]
+    fn hk_validate_command_is_hk_validate() {
+        assert_eq!(
+            hk_validate_command(),
+            vec!["hk".to_string(), "validate".to_string()]
         );
     }
 }

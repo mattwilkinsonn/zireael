@@ -290,6 +290,87 @@ pub fn run_for_update_with_cancel(
     })
 }
 
+/// Warm the hook runner's evaluation cache once, serially, before the
+/// parallel fan-out launches N concurrent hook backends.
+///
+/// Only hk needs this. hk's config (`hk.pkl`) `amends`/`import`s hk's
+/// Pkl library through `package://…` modules resolved via the shared
+/// `~/.pkl` cache. On a cold cache the N parallel `hk run` evaluations
+/// race to populate it; that populate is not atomic across processes, so
+/// an eval can read a half-written module and hk aborts with a
+/// nondeterministic `field not found` error. Evaluating the config once
+/// up front (`hk validate`) populates the cache serially, so the fan-out
+/// always hits a warm cache. Same shape as `worktree.rs`'s
+/// `WORKTREE_CREATE_LOCK`: serialize the one racy step, keep the
+/// expensive work (hook execution) parallel.
+///
+/// Best-effort by construction — the return type is `()`, so a failure
+/// (hk missing, a genuine `hk.pkl` error) can never abort the batch; it
+/// is logged and swallowed. A real config error still surfaces, with
+/// full context, through the per-bookmark runs that follow.
+fn warm_runner_cache(
+    jj: &JjCli,
+    primary_git_dir: &Path,
+    workspace_root: &Path,
+    cli_runner: Option<Runner>,
+    stage: Stage,
+) {
+    warm_runner_cache_with(workspace_root, cli_runner, || {
+        // Resolve the hk binary the same way the per-bookmark runs do
+        // (config `runner-bin.hk` override → $PATH) so warming uses the
+        // exact hk that will grade the hooks.
+        let prefix = match crate::runner::resolve_runner_argv(
+            Runner::Hk,
+            jj,
+            workspace_root,
+            primary_git_dir,
+            stage,
+        ) {
+            Ok(prefix) => prefix,
+            Err(e) => {
+                tracing::debug!("skipping Pkl cache warm: cannot resolve hk: {e}");
+                return;
+            }
+        };
+        let argv = splice_runner_prefix(&prefix, &crate::runner::hk_validate_command());
+        tracing::info!("warming hk Pkl cache: {argv:?}");
+        // current_dir = workspace_root so `hk validate` evaluates the
+        // workspace's hk.pkl, caching its `package://` imports. Output is
+        // captured (silent on success); any failure is logged + swallowed.
+        match Command::new(&argv[0])
+            .args(&argv[1..])
+            .current_dir(workspace_root)
+            .output()
+        {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => tracing::debug!(
+                "hk Pkl cache warm exited {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+            Err(e) => tracing::debug!("hk Pkl cache warm failed to spawn: {e}"),
+        }
+    });
+}
+
+/// Gating + single-invocation core for [`warm_runner_cache`], split out
+/// so the warm-only-for-hk invariant is unit-testable without a real
+/// `hk` binary. Resolves the runner — the `--runner` override wins, else
+/// autodetect against `workspace_root` — and invokes `warm` exactly once
+/// iff the runner is hk. The other runners have no Pkl cache, so `warm`
+/// never fires for them.
+fn warm_runner_cache_with(workspace_root: &Path, cli_runner: Option<Runner>, warm: impl FnOnce()) {
+    let runner = match cli_runner {
+        Some(r) => Some(r),
+        // Ambiguous / absent config → nothing to warm; the per-bookmark
+        // runs surface any real misconfiguration with full context.
+        None => Runner::autodetect(workspace_root).unwrap_or(None),
+    };
+    if runner == Some(Runner::Hk) {
+        warm();
+    }
+}
+
 /// Batch entrypoint: run hooks for N bookmark updates in parallel,
 /// with fail-fast cancellation across siblings.
 ///
@@ -348,12 +429,56 @@ where
     S: Fn(usize, &BookmarkUpdate) + Send + Sync,
     F: Fn(usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
 {
-    assert!(
+    run_updates_parallel_core(
+        updates,
         opts.capture_output,
+        || warm_runner_cache(jj, primary_git_dir, workspace_root, cli_runner, stage),
+        |_idx, update, cancel| {
+            run_for_update_with_cancel(
+                jj,
+                primary_git_dir,
+                workspace_root,
+                cli_runner,
+                stage,
+                update,
+                opts,
+                cancel,
+            )
+        },
+        progress_start,
+        progress,
+    )
+}
+
+/// Orchestration core for [`run_for_updates_parallel`], parameterized
+/// over the cache-warm step and the per-update work so the
+/// warm-once-before-fan-out invariant is unit-testable without a real
+/// git repo. `warm` runs once, serially, before the `thread::scope`
+/// fan-out; `work` runs per update on its own thread.
+fn run_updates_parallel_core<Work, S, F>(
+    updates: &[BookmarkUpdate],
+    capture_output: bool,
+    warm: impl FnOnce(),
+    work: Work,
+    progress_start: S,
+    progress: F,
+) -> Result<Vec<HookOutcome>>
+where
+    Work: Fn(usize, &BookmarkUpdate, &Cancel) -> Result<HookOutcome> + Send + Sync,
+    S: Fn(usize, &BookmarkUpdate) + Send + Sync,
+    F: Fn(usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
+{
+    assert!(
+        capture_output,
         "run_for_updates_parallel requires capture_output=true; parallel runs without capture garble the terminal",
     );
 
+    // Warm the hk Pkl cache once, serially, before the fan-out below.
+    // See `warm_runner_cache`: a cold cache races under concurrency.
+    warm();
+
     use std::sync::Mutex;
+    let work = &work;
     let progress_start = &progress_start;
     let progress = &progress;
     let results: Vec<Mutex<Option<Result<HookOutcome>>>> =
@@ -365,33 +490,9 @@ where
     std::thread::scope(|s| {
         for (idx, update) in updates.iter().enumerate() {
             s.spawn(move || {
-                // Fire `progress_start` before doing any work so the
-                // caller's tracker UI can flip this bookmark from
-                // pending → running while we're still inside
-                // worktree setup / setup-step / hook runner. The
-                // `cancelled` short-circuit inside `run_once` may
-                // mean the bookmark never actually executes a hook,
-                // but the start callback still fires — the tracker
-                // resolves that into a "cancelled" final state via
-                // the completion callback below.
                 progress_start(idx, update);
-                let outcome = run_for_update_with_cancel(
-                    jj,
-                    primary_git_dir,
-                    workspace_root,
-                    cli_runner,
-                    stage,
-                    update,
-                    opts,
-                    cancel_ref,
-                );
+                let outcome = work(idx, update, cancel_ref);
                 if let Ok(o) = &outcome {
-                    // Trip the cancellation token on any failure
-                    // (including initial-failure that ended up
-                    // healing via retry — the user wants the
-                    // siblings to stop). Cancelled outcomes don't
-                    // count as failures; they just bail out
-                    // because someone else already did.
                     if !o.success && !o.cancelled {
                         cancel_ref.cancel();
                     }
@@ -448,16 +549,56 @@ where
     S: Fn(usize, usize, &BookmarkUpdate) + Send + Sync,
     F: Fn(usize, usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
 {
-    assert!(
+    run_partitioned_updates_parallel_core(
+        partitions,
         opts.capture_output,
+        || warm_runner_cache(jj, primary_git_dir, workspace_root, cli_runner, stage),
+        |_p_idx, _u_idx, update, cancel| {
+            run_for_update_with_cancel(
+                jj,
+                primary_git_dir,
+                workspace_root,
+                cli_runner,
+                stage,
+                update,
+                opts,
+                cancel,
+            )
+        },
+        progress_start,
+        progress,
+    )
+}
+
+/// Orchestration core for [`run_for_partitioned_updates_parallel`].
+/// Mirrors [`run_updates_parallel_core`] but keeps the per-partition
+/// `Cancel` scoping: `warm` fires once before the fan-out; each
+/// partition still gets its own cancellation token.
+fn run_partitioned_updates_parallel_core<Work, S, F>(
+    partitions: &[Vec<BookmarkUpdate>],
+    capture_output: bool,
+    warm: impl FnOnce(),
+    work: Work,
+    progress_start: S,
+    progress: F,
+) -> Result<Vec<Vec<HookOutcome>>>
+where
+    Work: Fn(usize, usize, &BookmarkUpdate, &Cancel) -> Result<HookOutcome> + Send + Sync,
+    S: Fn(usize, usize, &BookmarkUpdate) + Send + Sync,
+    F: Fn(usize, usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
+{
+    assert!(
+        capture_output,
         "run_for_partitioned_updates_parallel requires capture_output=true",
     );
 
+    // Warm once before the fan-out (see `run_updates_parallel_core`).
+    warm();
+
     use std::sync::Mutex;
+    let work = &work;
     let progress_start = &progress_start;
     let progress = &progress;
-    // Pre-allocate the result shape. Outer index = partition;
-    // inner index = position in partition.
     let results: Vec<Vec<Mutex<Option<Result<HookOutcome>>>>> = partitions
         .iter()
         .map(|p| (0..p.len()).map(|_| Mutex::new(None)).collect())
@@ -466,26 +607,12 @@ where
 
     std::thread::scope(|s| {
         for (p_idx, partition) in partitions.iter().enumerate() {
-            // One Cancel token per partition — the fail-fast scope
-            // is exactly the partition.
             let cancel = Cancel::new();
             for (u_idx, update) in partition.iter().enumerate() {
                 let cancel = cancel.clone();
                 s.spawn(move || {
-                    // Fire start before any work so the tracker UI
-                    // can render "running" with elapsed time while
-                    // the hook subprocess is still going.
                     progress_start(p_idx, u_idx, update);
-                    let outcome = run_for_update_with_cancel(
-                        jj,
-                        primary_git_dir,
-                        workspace_root,
-                        cli_runner,
-                        stage,
-                        update,
-                        opts,
-                        &cancel,
-                    );
+                    let outcome = work(p_idx, u_idx, update, &cancel);
                     if let Ok(o) = &outcome {
                         if !o.success && !o.cancelled {
                             cancel.cancel();
@@ -1127,6 +1254,8 @@ fn run_git_capture_with_git_dir(git_dir: &Path, cwd: &Path, args: &[&str]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bookmark_updates::UpdateType;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn fixup_ref_for_plain_bookmark() {
@@ -1222,5 +1351,215 @@ mod tests {
         // fixup_bookmark feeds `jj bookmark forget` which is also strict
         // about colon (jj rejects bookmark names with `:` in them).
         assert_eq!(fixup_bookmark("revset:@"), "jj-hooks-fixup/revset_@");
+    }
+
+    // The cold-cache race itself is timing-/filesystem-dependent and is
+    // deliberately NOT reproduced here (a non-hermetic race repro would be
+    // flaky). These tests guard the *invariant* the fix relies on: the
+    // Pkl-cache warm runs exactly once, before any per-bookmark work, and
+    // only for the hk runner.
+
+    fn dummy_update(name: &str) -> BookmarkUpdate {
+        BookmarkUpdate {
+            remote: "origin".into(),
+            bookmark: name.into(),
+            update_type: UpdateType::Add,
+            old_commit: Some("0".repeat(40)),
+            new_commit: Some("1".repeat(40)),
+        }
+    }
+
+    fn passing_outcome() -> HookOutcome {
+        HookOutcome {
+            success: true,
+            fixup_commit: None,
+            retried: false,
+            initial_failure: false,
+            captured_output: None,
+            cancelled: false,
+        }
+    }
+
+    #[test]
+    fn warm_gating_fires_once_for_autodetected_hk() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hk.pkl"), "amends \"x\"\n").unwrap();
+        let count = AtomicUsize::new(0);
+        warm_runner_cache_with(dir.path(), None, || {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn warm_gating_skips_non_hk_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".pre-commit-config.yaml"), "repos: []\n").unwrap();
+        let count = AtomicUsize::new(0);
+        warm_runner_cache_with(dir.path(), None, || {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn warm_gating_skips_when_no_runner_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let count = AtomicUsize::new(0);
+        warm_runner_cache_with(dir.path(), None, || {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn warm_gating_honors_hk_cli_override() {
+        // `--runner hk` forces hk even when the workspace has no hk.pkl.
+        let dir = tempfile::tempdir().unwrap();
+        let count = AtomicUsize::new(0);
+        warm_runner_cache_with(dir.path(), Some(Runner::Hk), || {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn warm_gating_cli_override_to_non_hk_skips_despite_hk_pkl() {
+        // Explicit `--runner pre-commit` must not warm hk's cache even if
+        // an hk.pkl is sitting in the workspace.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hk.pkl"), "amends \"x\"\n").unwrap();
+        let count = AtomicUsize::new(0);
+        warm_runner_cache_with(dir.path(), Some(Runner::PreCommit), || {
+            count.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn parallel_core_warms_once_before_any_work() {
+        let updates = vec![dummy_update("b1"), dummy_update("b2"), dummy_update("b3")];
+        let warm_count = AtomicUsize::new(0);
+        let work_count = AtomicUsize::new(0);
+        let warmed = AtomicBool::new(false);
+        let saw_unwarmed_work = AtomicBool::new(false);
+
+        let outcomes = run_updates_parallel_core(
+            &updates,
+            true,
+            || {
+                warm_count.fetch_add(1, Ordering::SeqCst);
+                warmed.store(true, Ordering::SeqCst);
+            },
+            |_idx, _update, _cancel| {
+                if !warmed.load(Ordering::SeqCst) {
+                    saw_unwarmed_work.store(true, Ordering::SeqCst);
+                }
+                work_count.fetch_add(1, Ordering::SeqCst);
+                Ok(passing_outcome())
+            },
+            |_idx, _update| {},
+            |_idx, _update, _outcome| {},
+        )
+        .unwrap();
+
+        assert_eq!(outcomes.len(), 3);
+        assert_eq!(
+            warm_count.load(Ordering::SeqCst),
+            1,
+            "warm must fire exactly once"
+        );
+        assert_eq!(
+            work_count.load(Ordering::SeqCst),
+            3,
+            "every update must run"
+        );
+        assert!(
+            !saw_unwarmed_work.load(Ordering::SeqCst),
+            "no per-bookmark work may begin before the warm completes"
+        );
+    }
+
+    #[test]
+    fn partitioned_core_warms_once_before_any_work() {
+        let partitions = vec![
+            vec![dummy_update("a1")],
+            vec![dummy_update("b1"), dummy_update("b2")],
+        ];
+        let warm_count = AtomicUsize::new(0);
+        let work_count = AtomicUsize::new(0);
+        let warmed = AtomicBool::new(false);
+        let saw_unwarmed_work = AtomicBool::new(false);
+
+        let outcomes = run_partitioned_updates_parallel_core(
+            &partitions,
+            true,
+            || {
+                warm_count.fetch_add(1, Ordering::SeqCst);
+                warmed.store(true, Ordering::SeqCst);
+            },
+            |_p, _u, _update, _cancel| {
+                if !warmed.load(Ordering::SeqCst) {
+                    saw_unwarmed_work.store(true, Ordering::SeqCst);
+                }
+                work_count.fetch_add(1, Ordering::SeqCst);
+                Ok(passing_outcome())
+            },
+            |_p, _u, _update| {},
+            |_p, _u, _update, _outcome| {},
+        )
+        .unwrap();
+
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0].len(), 1);
+        assert_eq!(outcomes[1].len(), 2);
+        assert_eq!(
+            warm_count.load(Ordering::SeqCst),
+            1,
+            "warm must fire exactly once"
+        );
+        assert_eq!(
+            work_count.load(Ordering::SeqCst),
+            3,
+            "every update must run"
+        );
+        assert!(
+            !saw_unwarmed_work.load(Ordering::SeqCst),
+            "no per-bookmark work may begin before the warm completes"
+        );
+    }
+
+    #[test]
+    fn pkl_warm_cache_failed_validate_retries_then_caches() {
+        // A failed `validate` (returns false) must NOT mark the worktree
+        // warmed, so the next caller retries rather than running hooks on an
+        // unwarmed cache; once one succeeds, further callers skip.
+        let cache = PklWarmCache::default();
+        let count = AtomicUsize::new(0);
+        let wt = Path::new("/tmp/wt-fail");
+        for _ in 0..2 {
+            cache.warm_once(wt, || {
+                count.fetch_add(1, Ordering::SeqCst);
+                false
+            });
+        }
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            2,
+            "a failed validate must not mark the worktree warmed"
+        );
+        cache.warm_once(wt, || {
+            count.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+        cache.warm_once(wt, || {
+            count.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            3,
+            "once warmed, further callers skip validate"
+        );
     }
 }

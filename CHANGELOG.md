@@ -28,6 +28,15 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
   stage-hook ref bounds in v1.45.0). `jj-hp push` always uses the diff
   range — the bookmark's ref bounds are its identity.
 
+### Fixed — jj-hooks
+
+- Parallel `jj-gt submit` hook runs no longer fail intermittently on a
+  cold Pkl cache. The N per-bookmark `hk run` evaluations raced to
+  populate the shared `~/.pkl` cache, surfacing as nondeterministic
+  `field not found` errors; the cache is now warmed once with a serial
+  `hk validate` before the parallel fan-out. Best-effort and hk-only —
+  the sequential path and non-hk runners are unaffected.
+
 ## [0.3.0] — 2026-05-26
 
 Initial monorepo release. Consolidates four previously-standalone repos:
