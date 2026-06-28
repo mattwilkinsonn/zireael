@@ -1,0 +1,25 @@
+modelRoles: 
+  default: anthropic/claude-opus-4-8:xhigh
+theme: 
+  dark: dark-rose-pine
+  light: light-tokyo-night
+symbolPreset: nerd
+statusLine: 
+  preset: default
+  segmentOptions: 
+    git: 
+      showBranch: false
+hideThinkingBlock: true
+defaultThinkingLevel: xhigh
+steeringMode: one-at-a-time
+extensions: 
+  - ~/.omp/agent/extensions/push-guard.ts
+  - ~/.omp/agent/extensions/jj-status.ts
+  - ~/.omp/agent/extensions/notify.ts
+  - ~/.omp/agent/extensions/zellij-status.ts
+plan: 
+  enabled: true
+browser: 
+  enabled: false
+startup: 
+  setupWizard: true
