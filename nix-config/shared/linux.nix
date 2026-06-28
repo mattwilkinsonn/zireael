@@ -99,4 +99,22 @@
   # shared/home.nix programs.zsh.initContent — runs after this
   # mkBefore block, by which point op is on PATH via the per-host
   # install (NixOS env packages on Linux hosts, brew on Mac).
+
+  # Rootless container storage. NixOS's /etc/containers/storage.conf (from
+  # virtualisation.podman) hardcodes the rootful runroot
+  # "/run/containers/storage"; podman remaps that for rootless, but the
+  # skopeo bundled in nix2container ("devenv container copy") honors it
+  # literally and dies with `mkdir /run/containers: permission denied`. Set
+  # graphroot and runroot both under $HOME here, so every containers/storage
+  # tool (skopeo, podman, buildah) writes where the user can. containers/storage
+  # expands $HOME (and XDG vars) in these paths but NOT $UID — a /run/user/$UID
+  # runroot resolves to /run/user/containers and fails — and $HOME is always
+  # set, so runroot resolves even when $XDG_RUNTIME_DIR is unset (cron,
+  # `sudo -u`), unlike $XDG_RUNTIME_DIR which would expand to "" → /containers.
+  xdg.configFile."containers/storage.conf".text = ''
+    [storage]
+    driver = "overlay"
+    graphroot = "$HOME/.local/share/containers/storage"
+    runroot = "$HOME/.local/share/containers/runroot"
+  '';
 }
