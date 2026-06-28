@@ -7,7 +7,7 @@ description: "Jujutsu (jj) reference: mental model, everyday workflows, revsets,
 
 Use this any time you run a VCS operation in a jj repo (any directory containing `.jj/`). In jj repos, use jj commands exclusively — never reach for git.
 
-**You may commit and manage bookmarks; you never *push*.** Pushing is the *only* forbidden VCS step — Matt runs every `jj git push` / `git push` himself. Committing, describing, and creating/moving/deleting bookmarks are normal local work: when a change is ready for a PR, create its bookmark *yourself* and hand Matt the exact `jj git push` command — never make him create the bookmark. Use a Conventional Commits subject (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …) plus at most two sentences of body.
+**You may commit and manage bookmarks; you never *push* or *submit*.** Pushing/submitting is the *only* forbidden VCS step — Matt runs every `jj-gt submit` / `jj git push` / `git push` himself. Committing, describing, and creating/moving/deleting bookmarks are normal local work: when a change is ready for a PR, create its bookmark *yourself* and hand Matt the exact `jj-gt submit -b <bookmark> --ai` command — never make him create the bookmark. Use a Conventional Commits subject (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …) plus at most two sentences of body.
 
 ## Mental Model
 
@@ -106,7 +106,7 @@ jj bookmark delete <name>              # remove after a PR merges
 - `bookmark create` tracks the **change ID**, so it stays correct after `jj commit` moves the content to `@-` — no re-set needed.
 - Moving a named bookmark like `main` is always explicit: `jj bookmark set main -r main@origin` (fast-forward) or `-r @-`.
 - **Naming:** lead with the issue ref + a short kebab description, no `user/` prefix (e.g. `sea-931-mattmini-adminuser`). In multi-agent work, **always** suffix the agent handle as a lane-tracking aid for Matt: `sea-930-woodpecker-fleet-conversion--hudson`. This branch-name handle is expected and is the *one* place it belongs — keep agent/persona names out of commit messages, PR titles/descriptions, and code (a "no persona in PRs" rule means PR *content*, not the branch name).
-- **Prepping a change for Matt to push:** creating the bookmark is *your* job, not his — it's a local op, not a push. Create or point it (`jj bookmark create <name> -r <change>`), then hand Matt only the `jj git push --bookmark <name> --allow-new` command.
+- **Prepping a change for Matt to submit:** creating the bookmark is *your* job, not his — it's a local op, not a push. Create or point it (`jj bookmark create <name> -r <change>`), then hand Matt only the submit command — `jj-gt submit -b <name> --ai` (drafts the PR title + description). `jj-gt` bridges the jj bookmark stack to Graphite PRs; bare `jj git push` is not Matt's path.
 
 ## Revsets
 
