@@ -7,7 +7,7 @@ description: "Jujutsu (jj) reference: mental model, everyday workflows, revsets,
 
 Use this any time you run a VCS operation in a jj repo (any directory containing `.jj/`). In jj repos, use jj commands exclusively — never reach for git.
 
-**You may commit; you never push.** Matt pushes himself — never run `jj git push` in any form. Use a Conventional Commits subject (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …) plus at most two sentences of body.
+**You may commit and manage bookmarks; you never *push*.** Pushing is the *only* forbidden VCS step — Matt runs every `jj git push` / `git push` himself. Committing, describing, and creating/moving/deleting bookmarks are normal local work: when a change is ready for a PR, create its bookmark *yourself* and hand Matt the exact `jj git push` command — never make him create the bookmark. Use a Conventional Commits subject (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …) plus at most two sentences of body.
 
 ## Mental Model
 
@@ -105,6 +105,8 @@ jj bookmark delete <name>              # remove after a PR merges
 
 - `bookmark create` tracks the **change ID**, so it stays correct after `jj commit` moves the content to `@-` — no re-set needed.
 - Moving a named bookmark like `main` is always explicit: `jj bookmark set main -r main@origin` (fast-forward) or `-r @-`.
+- **Naming:** lead with the issue ref + a short kebab description, no `user/` prefix (e.g. `sea-931-mattmini-adminuser`). In multi-agent work, **always** suffix the agent handle as a lane-tracking aid for Matt: `sea-930-woodpecker-fleet-conversion--hudson`. This branch-name handle is expected and is the *one* place it belongs — keep agent/persona names out of commit messages, PR titles/descriptions, and code (a "no persona in PRs" rule means PR *content*, not the branch name).
+- **Prepping a change for Matt to push:** creating the bookmark is *your* job, not his — it's a local op, not a push. Create or point it (`jj bookmark create <name> -r <change>`), then hand Matt only the `jj git push --bookmark <name> --allow-new` command.
 
 ## Revsets
 
@@ -138,6 +140,7 @@ jj workspace update-stale              # re-sync a workspace another op left sta
 - `edit`, `new`, and `workspace add/forget` are workspace-local — they move only the current workspace's `@`. Bookmarks are repo-wide refs, so `bookmark set/create/delete` is visible in every workspace; it's still surgical (one ref, no graph rewrite, no other `@` moved).
 - Graph rewrites (`rebase`, `squash`, `split`, `abandon`, `describe`) are visible to every workspace sharing the store — safe on your own commits, disruptive if another workspace's `@` sits on the commit you rewrite. Check `jj op log` before rewriting something you didn't author.
 - **When you resume work on an existing workspace, run `jj workspace update-stale` first.** If another workspace operated in between, yours is stale; editing files on a stale `@` can let jj reset to a fresh op state and discard on-disk edits without ever snapshotting them. After editing, confirm the change landed in the *commit* with `jj diff -r <bookmark> --stat` — passing tests only prove the file is on disk, not that it's committed.
+- **Commit promptly — don't let uncommitted work pile up in a workspace.** A sibling or supervisor op can rewrite an ancestor of your `@` and rebase you at any time (a status tool that snapshots on a timer — jjui, `starship-jj` — does this constantly, and that's fine): *committed* work rebases cleanly, *uncommitted* edits are exactly what `update-stale` discards. Describe after each logical step rather than leaving a heap of working-copy changes exposed.
 
 ## Colocated git + jj
 

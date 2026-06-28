@@ -1,6 +1,6 @@
 # Agent instructions (Matt)
 
-Global, always-on rules for any agent working on Matt's machines. Tool-agnostic. Durable, situational, and reference material lives in `~/.omp/agent/rules/` (read `rule://<name>`) and `~/.omp/agent/skills/` (read `skill://<name>`) — pull them in when the work matches.
+Global, always-on rules for any agent working on Matt's machines. Tool-agnostic. Durable, situational, and reference material lives in `~/.agents/rules/` (read `rule://<name>`) and `~/.agents/skills/` (read `skill://<name>`) — pull them in when the work matches.
 
 ## Ask first; halt on pushback
 
@@ -20,8 +20,9 @@ Prefer the correct, modern approach over workarounds, even when it's more work �
 
 ## Comment & doc hygiene
 
-- Never name other agent products in code/commits/docs ("Claude Code", "Cursor", "Codex", etc.) or use euphemisms ("the reference agent"). Describe the behavior directly. Literal interop strings (header values, keychain entry names) are fine.
+- Never name other agent products in code/commits/docs ("Claude Code", "Cursor", "Codex", etc.) or use euphemisms ("the reference agent"). Describe the behavior directly. Exceptions: literal interop strings (header values, keychain entry names), and the names of code-review bots (CodeRabbit, cubic, Greptile, Codex, …) in PR-review docs and skills, where the guidance must name each reviewer to describe its distinct behavior.
 - Never embed planning metadata in source: slice/phase numbers, issue IDs, "as discussed in chat", change IDs. Describe the constraint directly. Issue IDs belong in commit subjects/PR bodies, not code.
+- Never reference superseded tooling or "what we used to use" in new code, comments, or docs ("unlike the old X", "modeled on the retired Y", "same posture as the old Z"). Describe the current design on its own terms — historical contrasts confuse readers and add needless complexity. (Docs that are *about* a migration — runbooks, changelogs — are the exception.)
 
 ## Repos: maintainer, not contributor
 
@@ -29,7 +30,7 @@ For Matt-owned repos (`mattwilkinsonn/*`, `sealedsecurity/*`, nix-config, dotfil
 
 ## Version control
 
-- **You may commit** (Conventional Commits subject: `feat(scope):`, `fix(scope):`, `refactor(scope):`, etc. + ≤2 sentences). **Never push** — Matt always pushes himself, every form (`git push`, `jj git push`, force, any variant). Hand push commands to Matt and stop.
+- **You may commit** (Conventional Commits subject: `feat(scope):`, `fix(scope):`, `refactor(scope):`, etc. + ≤2 sentences) **and create/move bookmarks** — only *pushing* is off-limits. **Never push** — Matt always pushes himself, every form (`git push`, `jj git push`, force, any variant). When a change is ready, create the bookmark yourself — name it `sea-NNN-<short-desc>` (issue ref first, no `user/` prefix; suffix `--<agent-handle>` in multi-agent work) — then hand Matt only the `jj git push` command and stop.
 - **jj-first.** Use `jj` for every VCS op in any repo with `.jj/` (the `$HOME` dotfiles repo and most repos are colocated jj+git). `git` only for pure-git repos. Never `git stash` (commit instead, or a worktree). Details + revsets + workspace model: `skill://vcs-jj`.
 - Before finishing: run format + lint + tests for the affected area and state they passed. Pattern + per-language gates: `rule://pre-finish-checks`.
 
@@ -46,7 +47,7 @@ When Matt points out a repeated mistake, don't just acknowledge it — add a con
 
 ## Persistence & layout
 
-Durable instructions live here (`~/.agents/AGENTS.md`, tool-agnostic canonical location), authored in `~/repos/privatefiles/home/.agents/` and symlinked by nix (`zireael/nix-config/shared/privatefiles-symlinks.nix`; OMP reads it via the `~/.omp/agent/AGENTS.md` symlink). Prefer this global file for cross-project preferences; project `AGENTS.md` for project-specific conventions.
+Durable instructions live here (`~/.agents/AGENTS.md`, tool-agnostic canonical location), authored in `zireael/nix-config/agents/` and symlinked into `~/.agents/` by nix (`zireael/nix-config/shared/agent-config.nix`); OMP reads them from `~/.agents/`. Prefer this global file for cross-project preferences; project `AGENTS.md` for project-specific conventions.
 
 Available on demand:
 
