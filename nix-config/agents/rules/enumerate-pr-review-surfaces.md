@@ -15,6 +15,6 @@ A PR is reviewed by multiple parties (humans plus bots), each a separate object 
 
 **Never report a surface "clean" without zero-count evidence.** "No findings from X" is a factual claim about X's findings array; it is only true once you have observed a zero count for X — not when a check for some other reviewer came back empty.
 
-**Do not auto-reply to or resolve review threads.** Surface findings to Matt — paste each one (path, line, author, body excerpt) and mark it Addressed (cite the fix), Deferred, or Disagreed (with reasoning). He replies and resolves; he is the maintainer and merger, so those decisions are his.
+**Replies always need Matt's go-ahead; resolves only in pre-authorized cases.** Surface findings — paste each (path, line, author, body excerpt) and mark Addressed (cite the fix), Deferred (cite the issue), or Disagreed (reasoning). Post a reply only once Matt approves the exact wording. **Without further go-ahead** you may resolve only: (a) a **bot-authored** thread **with no human comments in it** genuinely fixed and live on the PR head after reviewers re-reviewed but left it open (Codex never auto-resolves; CodeRabbit doesn't while rate-limited), or (b) a deferral Matt has OK'd (if that resolve needs a posted issue-reference reply, the reply wording needs his approval too — otherwise just note the issue in your summary). Everything else stays his call: **human-authored threads, out-of-scope or disagreed items, and any thread whose fix isn't yet live.** Detail: `skill://github-pr-review`.
 
 Tooling: read `skill://github-pr-review`.

@@ -1,6 +1,6 @@
 ---
 name: github-pr-review
-description: "Triage PR feedback across all four surfaces via the GitHub MCP (gh CLI as fallback); never auto-reply or resolve threads — surface findings instead."
+description: "Triage PR feedback across all four surfaces (GitHub MCP; gh CLI fallback); surface findings; reply only with Matt's approval; resolve only settled bot-only threads after a live fix and re-review, or a Matt-OK'd deferral."
 ---
 
 # Triaging PR Feedback
@@ -29,7 +29,7 @@ pull_request_read  get_comments         owner/repo #N   → (c) top-level conver
 pull_request_read  get_check_runs       owner/repo #N   → (d) CI check runs
 ```
 
-Each inline thread from `get_review_comments` carries a stable thread node ID (e.g. `PRRT_kwDO…`) plus `is_resolved` / `is_outdated`. That ID is the handle for any reply/resolve — which you do **not** run yourself (see discipline).
+Each inline thread from `get_review_comments` carries a stable thread node ID (e.g. `PRRT_kwDO…`) plus `is_resolved` / `is_outdated`. That ID is the handle for a reply or a resolve — both only under the conditions in Discipline below.
 
 ## Enumerate every reviewer
 
@@ -37,21 +37,25 @@ Each inline thread from `get_review_comments` carries a stable thread node ID (e
 
 Never report "no findings from X" unless you observed X's review with zero inline comments — a grep that matched some *other* reviewer's note is not evidence about X.
 
-Automated bots auto-resolve their own threads when the flagged code stops applying, and post non-actionable boilerplate (status linkbacks, stack-management notes, walkthrough summaries, merge-queue instructions) as top-level comments. Filter the known boilerplate out of surface (c); what remains — a human comment, a bot finding outside its summary — is real and must be triaged.
+Most automated bots auto-resolve their own threads when the flagged code stops applying — but **not all**: Codex never does, and CodeRabbit doesn't while rate-limited, so some threads stay open after re-review and you clear them (see Discipline). Bots also post non-actionable boilerplate (status linkbacks, stack-management notes, walkthrough summaries, merge-queue instructions) as top-level comments. Filter the known boilerplate out of surface (c); what remains — a human comment, a bot finding outside its summary — is real and must be triaged.
 
 ## Reading thread state
 
 - `is_resolved` — resolved threads are usually noise when triaging, but read the body before dismissing.
 - `is_outdated` — attached to a since-rewritten line; **not** the same as resolved. An outdated-but-unresolved thread is either still relevant or needs resolving — don't auto-drop it.
 
-## Discipline: surface, don't auto-reply or resolve
+## Discipline: replies need Matt's go-ahead; resolves only when settled
 
-**Default: never reply to or resolve review threads yourself.** The mutation tools exist (`pull_request_review_write` with `resolve_thread`/`unresolve_thread`/`create`, `add_reply_to_pull_request_comment`) — knowing them is for *understanding* the threads, not for running them. Two reasons:
+**Replying — only what Matt has approved.** Draft a reply if one's useful, but don't post it until Matt approves the exact wording. Never free-hand "addressed in fixup" or "we're not doing this" — an unapproved reply speaks for the maintainer on his own PR.
 
-1. Automated bots re-evaluate on each new diff and auto-close their own threads when the concern no longer triggers — pushing the fixup is sufficient. A manual "addressed in fixup" reply just adds noise on top of the bot's own auto-close.
-2. For findings you are *not* addressing (out-of-scope, disagreed, deferred), the agent commenting "we're not addressing this" reads as unilaterally closing review feedback. Matt is the maintainer and the merger; that call is his.
+**Resolving — only post-fix, only what's settled.** You may resolve an inline thread when either:
 
-When surfacing, paste each finding into the turn summary verbatim — path, line, author, body excerpt — and mark it Addressed (cite the fixup commit), Deferred (cite the tracking issue), or Disagreed (state the reasoning). Matt picks what to reply to and what to resolve.
+1. it's a **bot-authored** thread **with no human comments in it** (a human reply turns it into Matt's call, even if a bot opened it), **genuinely addressed** by a fix that's **committed and live on the PR head**, and the reviewers have had their **re-review pass** but left it open — some bots don't auto-resolve their own comments (**Codex never does**; **CodeRabbit doesn't while rate-limited**, frequent now), while cubic / Greptile / healthy CodeRabbit close their own and you clear the stragglers; or
+2. Matt has **OK'd deferring it** — note the tracking-issue reference in your turn summary; only post it as a thread reply if Matt approved that wording (resolving the thread itself needs no reply). This is the one case you may resolve a **human-opened** thread: Matt's explicit approval to defer is what authorizes it.
+
+Never resolve an **addressed** thread before its fix is live (that hides an unaddressed finding) — the Matt-OK'd deferral in (2) is the one exception, since a deferral has no live fix by definition. Otherwise these stay his call: a **human-authored** thread (outside the (2) deferral), an out-of-scope or disagreed thread, or a deferral Matt hasn't approved.
+
+Note every reply/resolve in the turn summary (thread + the commit or issue behind it). For anything you're not touching, surface it verbatim — path, line, author, body excerpt — marked Addressed (cite the commit), Deferred (cite the issue + Matt's OK), or Disagreed (reasoning).
 
 ## Where review-fix commits go
 
