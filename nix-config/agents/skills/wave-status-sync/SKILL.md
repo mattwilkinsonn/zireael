@@ -55,7 +55,9 @@ Scan the squashed titles for issue keys / PR numbers. For open-PR truth
 
 `list_issues` per live project + `list_issue_statuses` for the exact status
 names. Sort by `createdAt` to catch newly filed issues (and follow-ups).
-Note each issue's status and its linked PR attachments.
+`get_issue <KEY>` returns each issue's **attachments** — the linked PR(s) +
+commits (the forge/Graphite integration attaches them on submit); that's the
+source of truth for which PR is the issue's, and the PR number to record.
 
 ## 4. Reconcile — the point of the exercise
 
@@ -72,6 +74,11 @@ Cross-reference the three sources. Per issue:
   `main`, no open PR).
 - **Don't mutate on a guess.** If a state looks stale but you can't find a
   PR/commit either way, leave it and flag it for the human.
+- **Link the PR.** Every In-Review / Done issue carries its PR in the tracker —
+  the `#N` in `tracker.md` and the `pr: N` field on the `tracker.html` card
+  (that field is the Graphite deep-link). Pull the number from the issue's
+  attachments (`get_issue`); if Linear itself never auto-attached it (no
+  `Closes SEA-NNN`), add it with `save_issue` `links`.
 
 Then update the artifacts: rewrite `tracker.md` (roster/status, conflict
 map, candidate queue), mirror the data arrays in `tracker.html`, and update
