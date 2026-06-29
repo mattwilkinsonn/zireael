@@ -17,15 +17,17 @@ rules) lives in `skill://github-pr-review` — this skill adds the **loop** and 
 ## The loop
 
 1. **Commit + submit.** Commit your change, create/move your bookmark, and submit
-   it yourself: `jj-gt submit -b <bookmark> --ai` (the `--ai` drafts the PR title + description on first push). Attribution per `rule://commit-conventions`:
-   the commit is authored as Matt with the per-repo email, trailered
-   `Co-Authored-By: seal <noreply@sealedsecurity.com>`, and pushed over the
-   seal-bot token. Feature branches on allowlisted-owner repos only (see
-   Boundaries).
-2. **Wait for the bots.** Run `wait-for-reviews <pr>` with `bash` `async: true`
-   and a generous `timeout` (~1800s). Then yield — you're woken when it returns
-   (bots reviewed the head, or are rate/usage-limited, or the 20-min backstop
-   fired). No webhook/cron needed.
+   it yourself: `jj-gt submit -b <bookmark>` — **no `--ai`** (it regenerates the
+   body every submit and clobbers your prose). You author the PR title +
+   description and **keep it accurate as the loop lands commits** — set/update
+   via `gh pr edit <n> --body …` or the GitHub MCP `update_pull_request`.
+   Attribution per `rule://commit-conventions`: the commit is authored as Matt
+   with the per-repo email, trailered `Co-Authored-By: seal
+   <noreply@sealedsecurity.com>`, and pushed over the seal-bot token — `jj-gt`
+   hoists that trailer into the PR body's trailing block so GitHub records
+   co-authorship on squash-merge. Feature branches on allowlisted-owner repos
+   only (see Boundaries).
+2. **Wait for the bots — always as a background task.** Launch `wait-for-reviews <pr>` through `bash` with **`async: true`** (never a blocking/foreground call) and a generous `timeout` (~1800s), then **yield** — do other work or end the turn; the harness wakes you with the result when it returns. **Don't busy-poll it** (no `job`-poll loop). It returns when every bot has reviewed the head, is rate/usage-limited, or reviewed an earlier commit and didn't re-trigger within the grace window; a backstop is the final fallback. No webhook/cron needed.
 3. **Triage** all four surfaces per `skill://github-pr-review`; enumerate every
    reviewer (CodeRabbit / Greptile / cubic / Codex + any human).
 4. **Act:**
@@ -61,8 +63,12 @@ the commit it reviewed (match the head SHA); **CodeRabbit edits its summary
 comment in place** (key on its content/`updated_at`, not "a new comment");
 **CodeRabbit rate-limit** (`rate limited by coderabbit.ai`) and **Codex
 usage-limit** (`usage limits for code reviews`) → that bot is skipped, don't
-block on it; Codex's 👍 reaction is not a reliable "done" signal. 20-min backstop
-then proceed.
+block on it; Codex's 👍 reaction is not a reliable "done" signal. A bot that
+reviewed an **earlier** commit but not the head is **stale**: re-review-on-push
+bots (Greptile, CodeRabbit) reach the head within the grace, but smart/manual-
+trigger bots (Codex) may not — and nothing signals which will — so after the
+grace a stale bot counts as done (reported), not a blocker. A `pending` bot (no
+review at all) blocks until the backstop.
 
 ## Boundaries
 

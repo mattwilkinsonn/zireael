@@ -1,39 +1,56 @@
 # wait-for-reviews <pr> [owner/repo] — block until the PR's review bots have
-# reviewed the current head (or are rate/usage-limited, or a backstop elapses),
+# reviewed the current head (or are rate/usage-limited, or reviewed an earlier
+# commit and didn't re-trigger within a grace window, or a backstop elapses),
 # so an agent can push → wait → triage in one autonomous loop.
 #
 # Run async from the agent (bash async:true, generous timeout): when it returns,
 # the agent wakes and triages. No webhook needed.
 #
-# Per-bot "reviewed head" / "limited" signals (empirical, from real sealed PRs):
+# Per-bot state each poll:
+#   done    — reviewed the CURRENT head (commit_id == head, or summary names it)
+#   limited — rate/usage-limited (don't block on it)
+#   stale   — reviewed an EARLIER commit but not the head
+#   pending — no review from this bot yet
+# Re-review signals (empirical, from real sealed PRs):
 #   cubic      (cubic-dev-ai)             review.commit_id == head
 #   greptile   (greptile-apps)            review.commit_id == head, or its summary
-#                                         comment names the head SHA ("Last reviewed commit")
-#   codex      (chatgpt-codex-connector)  review.commit_id == head ; the 👍 reaction is
-#                                         NOT trusted ; ignore if a "usage limits" comment
-#   coderabbit (coderabbitai)             EDITS its summary comment in place (so key on the
-#                                         comment body referencing head, not a new comment) ;
-#                                         ignore if "rate limited by coderabbit.ai"
-# A rate/usage-limited bot is dropped from the wait set (don't block on it).
-# Backstop (default 20 min from start) → proceed regardless, reporting stragglers.
+#                                         comment names the head SHA
+#   codex      (chatgpt-codex-connector)  review.commit_id == head ; the 👍 reaction
+#                                         is NOT trusted ; ignore on "usage limits"
+#   coderabbit (coderabbitai)             EDITS its summary comment in place (key on
+#                                         the body naming head) ; ignore on "rate limited"
 #
-# Env: WAIT_BOTS (space list), WAIT_BACKSTOP_SECS (default 1200), WAIT_POLL_SECS (default 30).
+# Why "stale": most bots re-review on every push (Greptile, CodeRabbit) and reach
+# "done" within the grace, but some only re-review on a smart/manual trigger
+# (Codex) and there is no signal for whether a given push will re-trigger them.
+# So a `stale` bot blocks only until WAIT_GRACE_SECS, then counts as done-stale
+# (reported, not blocked) — we wait briefly for a maybe-re-review, then proceed
+# rather than stranding the loop at the backstop. A `pending` bot (no review at
+# all) blocks until the backstop, since it may simply be slow on a first pass —
+# scope WAIT_BOTS to the bots that actually review the repo.
+#
+# Env: WAIT_BOTS (space list), WAIT_BACKSTOP_SECS (1200), WAIT_GRACE_SECS (300),
+#      WAIT_POLL_SECS (30).
 set -euo pipefail
-PR="${1:?usage: wait-for-reviews <pr> [owner/repo]   (env: WAIT_BOTS WAIT_BACKSTOP_SECS WAIT_POLL_SECS)}"
+PR="${1:?usage: wait-for-reviews <pr> [owner/repo]   (env: WAIT_BOTS WAIT_GRACE_SECS WAIT_BACKSTOP_SECS WAIT_POLL_SECS)}"
 REPO="${2:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 BOTS="${WAIT_BOTS:-coderabbitai cubic-dev-ai greptile-apps chatgpt-codex-connector}"
 BACKSTOP="${WAIT_BACKSTOP_SECS:-1200}"
+GRACE="${WAIT_GRACE_SECS:-300}"
 INTERVAL="${WAIT_POLL_SECS:-30}"
 
 head="$(gh pr view "$PR" --repo "$REPO" --json headRefOid -q .headRefOid)"
-echo "wait-for-reviews: $REPO#$PR head=${head:0:10} bots=[$BOTS] backstop=${BACKSTOP}s"
+echo "wait-for-reviews: $REPO#$PR head=${head:0:10} bots=[$BOTS] grace=${GRACE}s backstop=${BACKSTOP}s"
 start=$(date +%s)
 
-# classify <bot> <reviews-json> <comments-json> → done | limited | pending
+# classify <bot> <reviews-json> <comments-json> → done | limited | stale | pending
 classify() {
-  local bot="$1" reviews="$2" comments="$3" rev_head cbody
+  local bot="$1" reviews="$2" comments="$3" rev_head rev_any cbody
   rev_head=$(jq -r --arg b "$bot" --arg h "$head" \
     '[.[] | select((.user.login|ascii_downcase|sub("\\[bot\\]";""))==$b) | select(.commit_id==$h)] | length' \
+    <<<"$reviews" 2>/dev/null || echo 0)
+  rev_any=$(jq -r --arg b "$bot" \
+    '[.[] | select((.user.login|ascii_downcase|sub("\\[bot\\]";""))==$b)] | length' \
     <<<"$reviews" 2>/dev/null || echo 0)
   cbody=$(jq -r --arg b "$bot" \
     '[.[] | select((.user.login|ascii_downcase|sub("\\[bot\\]";""))==$b)] | sort_by(.updated_at) | last | .body // ""' \
@@ -41,15 +58,19 @@ classify() {
   case "$bot" in
     coderabbitai)
       grep -qi "rate limited by coderabbit.ai" <<<"$cbody" && { echo "limited"; return; }
-      grep -q "$head" <<<"$cbody" && { echo "done"; return; } ;;
+      grep -qE "$head|${head:0:7}" <<<"$cbody" && { echo "done"; return; }
+      [ -n "$cbody" ] && { echo "stale"; return; } ;;
     chatgpt-codex-connector)
       grep -qi "usage limits for code reviews" <<<"$cbody" && { echo "limited"; return; }
-      [ "${rev_head:-0}" -gt 0 ] && { echo "done"; return; } ;;
+      [ "${rev_head:-0}" -gt 0 ] && { echo "done"; return; }
+      [ "${rev_any:-0}" -gt 0 ] && { echo "stale"; return; } ;;
     greptile-apps)
       [ "${rev_head:-0}" -gt 0 ] && { echo "done"; return; }
-      grep -q "$head" <<<"$cbody" && { echo "done"; return; } ;;
+      grep -qE "$head|${head:0:7}" <<<"$cbody" && { echo "done"; return; }
+      { [ "${rev_any:-0}" -gt 0 ] || [ -n "$cbody" ]; } && { echo "stale"; return; } ;;
     *)
-      [ "${rev_head:-0}" -gt 0 ] && { echo "done"; return; } ;;
+      [ "${rev_head:-0}" -gt 0 ] && { echo "done"; return; }
+      [ "${rev_any:-0}" -gt 0 ] && { echo "stale"; return; } ;;
   esac
   echo "pending"
 }
@@ -57,16 +78,27 @@ classify() {
 while :; do
   reviews="$( (gh api "repos/$REPO/pulls/$PR/reviews" --paginate 2>/dev/null || true) | jq -s 'add // []')"
   comments="$( (gh api "repos/$REPO/issues/$PR/comments" --paginate 2>/dev/null || true) | jq -s 'add // []')"
-  pending=()
+  now=$(date +%s)
+  elapsed=$((now - start))
+  blocking=()
   for bot in $BOTS; do
     st=$(classify "$bot" "$reviews" "$comments")
+    # A stale bot blocks only until the grace window passes: re-review-on-push
+    # bots usually reach "done" within it; smart/manual-trigger bots don't, and
+    # there's no signal to tell in advance — so wait briefly, then proceed.
+    [ "$st" = stale ] && [ "$elapsed" -lt "$GRACE" ] && st="stale(waiting)"
     printf '  %-26s %s\n' "$bot" "$st"
-    [ "$st" = pending ] && pending+=("$bot")
+    case "$st" in
+      pending | "stale(waiting)") blocking+=("$bot") ;;
+    esac
   done
-  if [ "${#pending[@]}" -eq 0 ]; then echo "wait-for-reviews: reviews ready (all reviewed or limited)"; exit 0; fi
-  now=$(date +%s); elapsed=$((now - start))
+  if [ "${#blocking[@]}" -eq 0 ]; then
+    echo "wait-for-reviews: reviews ready (done / limited / stale)"
+    exit 0
+  fi
   if [ "$elapsed" -ge "$BACKSTOP" ]; then
-    echo "wait-for-reviews: backstop ${BACKSTOP}s reached; proceeding. still pending: ${pending[*]}"; exit 0
+    echo "wait-for-reviews: backstop ${BACKSTOP}s reached; proceeding. still blocking: ${blocking[*]}"
+    exit 0
   fi
   sleep "$INTERVAL"
 done

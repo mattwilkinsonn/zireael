@@ -21,16 +21,17 @@ const ALLOWED_OWNERS: Record<string, true> = {
 const PUSH =
 	/\bgit(?:\s+-\S+(?:\s+[^-]\S*)?)*\s+push\b|\bjj(?:\s+-\S+(?:\s+[^-]\S*)?)*\s+git\s+push\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*(?:submit|ss?)\b/;
 // Merge — the human gate, blocked for every repo.
-const MERGE = /\bgh\s+pr\s+merge\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*merge\b/;
-// A `gh <thing> <write-verb>` mutation (pr / issue / release / repo / ...).
+const MERGE = /\bgh\b[^\n;|&]*\bmerge\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*merge\b/;
+// A `gh` mutation: a write verb anywhere in the `gh` segment (so flags between
+// the noun and the verb — `gh pr -R owner/repo create` — don't slip past).
 const GH_WRITE_CMD =
-	/\bgh\s+\w+\s+(?:create|edit|comment|close|merge|delete|review|reopen|ready|lock|unlock|develop|transfer|rename|sync|fork)\b/;
+	/\bgh\b[^\n;|&]*\b(?:create|edit|comment|close|delete|review|reopen|ready|lock|unlock|develop|transfer|rename|sync|fork)\b/;
 // Pushing to a remote literally named `upstream` — the OSS-upstream vector a
 // URL-owner check can't see (`git push upstream` carries no URL/owner).
 const PUSH_UPSTREAM = /\bpush\b(?:\s+-\S+)*\s+upstream\b/;
 // `main` as an explicit push target — `origin main`, `-b main`, `:main`. Scoped
 // so it doesn't fire on a feature branch that merely contains "main".
-const PUSH_MAIN = /:main\b|(?:^|\s)(?:-b|--bookmark|--branch)\s+main\b|\borigin\s+(?:-\S+\s+)*main\b/;
+const PUSH_MAIN = /:(?:refs\/heads\/)?main(?![\w-])|\brefs\/heads\/main(?![\w-])|(?:^|\s)(?:-b|--bookmark|--branch)\s+main(?![\w-])|\borigin\s+(?:-\S+\s+)*main(?![\w-])/;
 
 // Explicit GitHub owners named in a command: full URLs + `gh -R owner/repo`.
 function namedOwners(cmd: string): string[] {
@@ -142,13 +143,13 @@ export function evaluate(toolName: string, input: Record<string, unknown>): Bloc
 		}
 		if (GH_MCP_WRITE.test(toolName)) {
 			const owner = typeof input.owner === "string" ? input.owner.toLowerCase() : "";
-			if (owner && ALLOWED_OWNERS[owner] !== true) {
+			if (ALLOWED_OWNERS[owner] !== true) {
 				return {
 					block: true,
 					reason:
-						`GitHub write to ${owner}/* blocked: outside the owner allowlist ` +
-						"(mattwilkinsonn, sealedsecurity). Never open PRs/issues on an upstream or OSS " +
-						"repo. See rule://commit-conventions.",
+						`GitHub write blocked: owner '${owner || "(missing)"}' is outside the allowlist ` +
+						"(mattwilkinsonn, sealedsecurity) — fail-closed on an absent or disallowed owner. " +
+						"Never open PRs/issues on an upstream or OSS repo. See rule://commit-conventions.",
 				};
 			}
 		}
