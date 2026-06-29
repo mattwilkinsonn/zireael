@@ -13,7 +13,14 @@ if command -v fnm >/dev/null; then
 		[[ -n ${FNM_MULTISHELL_PATH:-} ]] || return 0
 		local fnm_bin="$FNM_MULTISHELL_PATH/bin"
 		[[ -d "$fnm_bin" ]] || return 0
-		path=("$fnm_bin" ${path:#$fnm_bin})
+		local -a repaired_path
+		local entry
+		repaired_path=("$fnm_bin")
+		for entry in "${path[@]}"; do
+			[[ "$entry" == "$fnm_bin" ]] && continue
+			repaired_path+=("$entry")
+		done
+		path=("${repaired_path[@]}")
 		export PATH
 	}
 
