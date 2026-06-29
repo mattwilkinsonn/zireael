@@ -206,10 +206,11 @@ jj workspace update-stale              # re-sync a workspace another op left sta
 ## Colocated git + jj
 
 - A **colocated** repo has both `.jj/` and `.git/`; git-aware tools read `.git/` naturally. Drive all VCS through jj — git is just the transport that talks to the remote.
-- **Secondary workspaces lack a `.git/`.** Wire one up so git-aware tools (e.g. `gh`) work: write a `.envrc` that sets `GIT_DIR` to the primary repo's `.git`, then `direnv allow` (or `source .envrc`). Treat the `.envrc` write and the approval as one atomic step.
+- **Secondary workspaces lack a `.git/`.** Wire one up so git-aware tools (`gh`, `gt`, `jj-gt`) work. **First verify the repo's tracked `.envrc` sources `.envrc.local`** — if it doesn't, add `source_env_if_exists .envrc.local` to `.envrc` and commit that (one-time per repo), so a per-workspace override loads without dirtying the tracked file. Then drop a gitignored `.envrc.local` that points `GIT_DIR` at the primary repo's `.git`, and `direnv allow`.
 
 ```bash
-echo 'export GIT_DIR=<primary-repo>/.git' > .envrc
+grep -q 'source_env_if_exists .envrc.local' .envrc || echo 'source_env_if_exists .envrc.local' >> .envrc
+echo 'export GIT_DIR=<primary-repo>/.git' > .envrc.local
 direnv allow
 ```
 
