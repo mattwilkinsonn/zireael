@@ -1,0 +1,72 @@
+# wait-for-reviews <pr> [owner/repo] — block until the PR's review bots have
+# reviewed the current head (or are rate/usage-limited, or a backstop elapses),
+# so an agent can push → wait → triage in one autonomous loop.
+#
+# Run async from the agent (bash async:true, generous timeout): when it returns,
+# the agent wakes and triages. No webhook needed.
+#
+# Per-bot "reviewed head" / "limited" signals (empirical, from real sealed PRs):
+#   cubic      (cubic-dev-ai)             review.commit_id == head
+#   greptile   (greptile-apps)            review.commit_id == head, or its summary
+#                                         comment names the head SHA ("Last reviewed commit")
+#   codex      (chatgpt-codex-connector)  review.commit_id == head ; the 👍 reaction is
+#                                         NOT trusted ; ignore if a "usage limits" comment
+#   coderabbit (coderabbitai)             EDITS its summary comment in place (so key on the
+#                                         comment body referencing head, not a new comment) ;
+#                                         ignore if "rate limited by coderabbit.ai"
+# A rate/usage-limited bot is dropped from the wait set (don't block on it).
+# Backstop (default 20 min from start) → proceed regardless, reporting stragglers.
+#
+# Env: WAIT_BOTS (space list), WAIT_BACKSTOP_SECS (default 1200), WAIT_POLL_SECS (default 30).
+set -euo pipefail
+PR="${1:?usage: wait-for-reviews <pr> [owner/repo]   (env: WAIT_BOTS WAIT_BACKSTOP_SECS WAIT_POLL_SECS)}"
+REPO="${2:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
+BOTS="${WAIT_BOTS:-coderabbitai cubic-dev-ai greptile-apps chatgpt-codex-connector}"
+BACKSTOP="${WAIT_BACKSTOP_SECS:-1200}"
+INTERVAL="${WAIT_POLL_SECS:-30}"
+
+head="$(gh pr view "$PR" --repo "$REPO" --json headRefOid -q .headRefOid)"
+echo "wait-for-reviews: $REPO#$PR head=${head:0:10} bots=[$BOTS] backstop=${BACKSTOP}s"
+start=$(date +%s)
+
+# classify <bot> <reviews-json> <comments-json> → done | limited | pending
+classify() {
+  local bot="$1" reviews="$2" comments="$3" rev_head cbody
+  rev_head=$(jq -r --arg b "$bot" --arg h "$head" \
+    '[.[] | select((.user.login|ascii_downcase|sub("\\[bot\\]";""))==$b) | select(.commit_id==$h)] | length' \
+    <<<"$reviews" 2>/dev/null || echo 0)
+  cbody=$(jq -r --arg b "$bot" \
+    '[.[] | select((.user.login|ascii_downcase|sub("\\[bot\\]";""))==$b)] | sort_by(.updated_at) | last | .body // ""' \
+    <<<"$comments" 2>/dev/null || echo "")
+  case "$bot" in
+    coderabbitai)
+      grep -qi "rate limited by coderabbit.ai" <<<"$cbody" && { echo "limited"; return; }
+      grep -q "$head" <<<"$cbody" && { echo "done"; return; } ;;
+    chatgpt-codex-connector)
+      grep -qi "usage limits for code reviews" <<<"$cbody" && { echo "limited"; return; }
+      [ "${rev_head:-0}" -gt 0 ] && { echo "done"; return; } ;;
+    greptile-apps)
+      [ "${rev_head:-0}" -gt 0 ] && { echo "done"; return; }
+      grep -q "$head" <<<"$cbody" && { echo "done"; return; } ;;
+    *)
+      [ "${rev_head:-0}" -gt 0 ] && { echo "done"; return; } ;;
+  esac
+  echo "pending"
+}
+
+while :; do
+  reviews="$( (gh api "repos/$REPO/pulls/$PR/reviews" --paginate 2>/dev/null || true) | jq -s 'add // []')"
+  comments="$( (gh api "repos/$REPO/issues/$PR/comments" --paginate 2>/dev/null || true) | jq -s 'add // []')"
+  pending=()
+  for bot in $BOTS; do
+    st=$(classify "$bot" "$reviews" "$comments")
+    printf '  %-26s %s\n' "$bot" "$st"
+    [ "$st" = pending ] && pending+=("$bot")
+  done
+  if [ "${#pending[@]}" -eq 0 ]; then echo "wait-for-reviews: reviews ready (all reviewed or limited)"; exit 0; fi
+  now=$(date +%s); elapsed=$((now - start))
+  if [ "$elapsed" -ge "$BACKSTOP" ]; then
+    echo "wait-for-reviews: backstop ${BACKSTOP}s reached; proceeding. still pending: ${pending[*]}"; exit 0
+  fi
+  sleep "$INTERVAL"
+done
