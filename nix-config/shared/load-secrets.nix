@@ -1,4 +1,4 @@
-_:
+{ pkgs, ... }:
 
 # Cross-platform 1Password CLI secret loading. Imported only on hosts
 # that should auto-load API keys into shell env (Mac, mattfw,
@@ -38,6 +38,12 @@ _:
           # fall back to its own credential discovery and surface a clear
           # error if nothing is configured.
           if command -v op >/dev/null; then
+            # op calls have no built-in timeout; a locked/slow 1Password or a
+            # network stall would otherwise hang non-tty login shells (cron,
+            # systemd, `zsh -lc`) indefinitely. Cap each op call with coreutils
+            # `timeout` from nix — always on the store path, so the cap never
+            # disappears (PATH `timeout`/`gtimeout` may be absent on macOS).
+            typeset -ga _ot=(${pkgs.coreutils}/bin/timeout 8)
             # _op_inject_with_token TOKEN_VAR_NAME LABEL TEMPLATE
             #
             # Runs `op inject` against TEMPLATE with OP_SERVICE_ACCOUNT_TOKEN
@@ -56,7 +62,7 @@ _:
                 return 1
               fi
               # Subshell so OP_SERVICE_ACCOUNT_TOKEN swap is per-call.
-              rendered=$(OP_SERVICE_ACCOUNT_TOKEN=$token printf '%s' "$template" | OP_SERVICE_ACCOUNT_TOKEN=$token op inject 2>/dev/null)
+              rendered=$(OP_SERVICE_ACCOUNT_TOKEN=$token printf '%s' "$template" | OP_SERVICE_ACCOUNT_TOKEN=$token $_ot op inject 2>/dev/null)
               if [[ -n $rendered ]]; then
                 eval "$rendered"
               else
@@ -78,7 +84,7 @@ _:
             }
             claude-sealed() {
               local val
-              if val=$(OP_SERVICE_ACCOUNT_TOKEN=''${OP_TEAM_SERVICE_ACCOUNT_TOKEN:-} op read "op://Local Dev/Claude Code OAuth Token matt sealed/credential" 2>/dev/null) && [[ -n $val ]]; then
+              if val=$(OP_SERVICE_ACCOUNT_TOKEN=''${OP_TEAM_SERVICE_ACCOUNT_TOKEN:-} $_ot op read "op://Local Dev/Claude Code OAuth Token matt sealed/credential" 2>/dev/null) && [[ -n $val ]]; then
                 _set_claude_oauth_token "$val" "Sealed"
               else
                 print -u2 "failed to read Sealed claude token (OP_TEAM_SERVICE_ACCOUNT_TOKEN unset or invalid?)"
@@ -87,7 +93,7 @@ _:
             }
             claude-xavier() {
               local val
-              if val=$(OP_SERVICE_ACCOUNT_TOKEN=''${OP_TEAM_SERVICE_ACCOUNT_TOKEN:-} op read "op://Local Dev/Claude Code OAuth Token xavier sealed/credential" 2>/dev/null) && [[ -n $val ]]; then
+              if val=$(OP_SERVICE_ACCOUNT_TOKEN=''${OP_TEAM_SERVICE_ACCOUNT_TOKEN:-} $_ot op read "op://Local Dev/Claude Code OAuth Token xavier sealed/credential" 2>/dev/null) && [[ -n $val ]]; then
                 _set_claude_oauth_token "$val" "Xavier Sealed"
               else
                 print -u2 "failed to read Xavier Sealed claude token (OP_TEAM_SERVICE_ACCOUNT_TOKEN unset or invalid?)"
@@ -96,7 +102,7 @@ _:
             }
             claude-personal() {
               local val
-              if val=$(op read "op://Dev/Personal Claude Code OAuth Token/credential" 2>/dev/null) && [[ -n $val ]]; then
+              if val=$($_ot op read "op://Dev/Personal Claude Code OAuth Token/credential" 2>/dev/null) && [[ -n $val ]]; then
                 _set_claude_oauth_token "$val" "Personal"
               else
                 print -u2 "failed to read Personal claude token (op locked or signed out?)"
@@ -180,28 +186,26 @@ _:
               esac
             }
 
-            # Auto-invoke at shell startup only when stdout is a tty — a
-            # real interactive terminal session, not a non-interactive
-            # subshell like VS Code's env-resolver (`zsh -l -i -c env`).
-            # Service account auth means no prompts anywhere, but skipping
-            # non-tty contexts still avoids adding ~500ms HTTPS-call
-            # latency to every subshell startup (cron, systemd, env-
-            # resolvers, scripted shells, etc.).
-            # ...and skip the re-run only when the secrets are already in the env
-            # (inherited from a parent that loaded them). Gate on the actual MCP
-            # tokens — one per 1Password account (GITHUB = personal, LINEAR =
-            # team), so a skip means BOTH accounts' secrets are present — NOT a
-            # bare "we tried" marker. A context that inherits no secrets (a
-            # GUI-launched Emdash agent, a stripped env) then still loads them
-            # instead of starting omp with tokenless MCP servers.
-            # Billing safeguard: clear the magic ANTHROPIC_API_KEY on every shell
-            # (outside the skip below) so a nested shell that inherited it from a
-            # pre-rename session can't make OMP/the SDKs prefer the pay-per-token
-            # API over the subscription OAuth. Mirrors windows/profile.ps1.
-            unset ANTHROPIC_API_KEY
-            if [ -t 1 ] && { [ -z "''${LINEAR_API_KEY:-}" ] || [ -z "''${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; }; then
+            # Auto-invoke at shell startup when the MCP tokens aren't already in
+            # the env. Gate on the actual tokens (GITHUB = personal account,
+            # LINEAR = team), so a skip means BOTH accounts' secrets are present,
+            # not a bare "we tried" marker — a context that inherits no secrets
+            # (a GUI-launched Emdash agent, a stripped env) still loads them
+            # instead of starting omp with tokenless MCP servers. Runs in non-tty
+            # login shells too (the `zsh -lc` Emdash spawns): service-account
+            # auth is promptless and sub-second, so there is no tty gate.
+            if [ -z "''${LINEAR_API_KEY:-}" ] || [ -z "''${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; then
               load-secrets
             fi
           fi
+  '';
+
+  # Billing safeguard, all shells: .zshenv runs for every zsh (login,
+  # interactive, and scripted non-login `zsh -c`), so a nested or inherited-env
+  # shell can't keep a stale ANTHROPIC_API_KEY that would make OMP/the SDKs
+  # prefer the pay-per-token API over the subscription OAuth. Mirrors
+  # windows/profile.ps1.
+  programs.zsh.envExtra = ''
+    unset ANTHROPIC_API_KEY
   '';
 }
