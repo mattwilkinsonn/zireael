@@ -7,7 +7,7 @@ description: "Jujutsu (jj) reference: mental model, everyday workflows, revsets,
 
 Use this any time you run a VCS operation in a jj repo (any directory containing `.jj/`). In jj repos, use jj commands exclusively — never reach for git.
 
-**You may commit and manage bookmarks; you never *push* or *submit*.** Pushing/submitting is the *only* forbidden VCS step — Matt runs every `jj-gt submit` / `jj git push` / `git push` himself. Committing, describing, and creating/moving/deleting bookmarks are normal local work: when a change is ready for a PR, create its bookmark *yourself* and hand Matt the exact `jj-gt submit -b <bookmark> --ai` command — never make him create the bookmark. Use a Conventional Commits subject (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …) plus at most two sentences of body.
+**You may commit, manage bookmarks, and push/submit your own feature branches** (over the seal-bot token), then run the review loop to merge-ready (`skill://autonomous-review`). Create the bookmark yourself and submit it — `jj-gt submit -b <bookmark> --ai` (`jj-gt` bridges the jj bookmark stack to Graphite PRs). Hard limits, enforced by the push-guard: never push or force-push `main`, never merge (the human gate), never push/PR/issue outside `mattwilkinsonn/*` + `sealedsecurity/*`. Commit as Matt with a `Co-Authored-By: seal <noreply@sealedsecurity.com>` trailer (`rule://commit-conventions`); use a Conventional Commits subject (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …) plus at most two sentences of body.
 
 ## Mental Model
 
@@ -106,7 +106,7 @@ jj bookmark delete <name>              # remove after a PR merges
 - `bookmark create` tracks the **change ID**, so it stays correct after `jj commit` moves the content to `@-` — no re-set needed.
 - Moving a named bookmark like `main` is always explicit: `jj bookmark set main -r main@origin` (fast-forward) or `-r @-`.
 - **Naming:** `<name>-<issue>-<short-desc>` — in multi-agent work lead with the **codename** as the lane tag (the *one* place a persona name belongs — keep it out of commit messages, PR titles/descriptions, and code), then the issue ref, then a short kebab description: `hudson-sea-930-woodpecker-fleet-conversion`. No issue → `<name>-<short-desc>` (e.g. `cook-compass-scaffold`). Solo work drops the codename: `sea-931-mattmini-adminuser`. No `user/` prefix.
-- **Prepping a change for Matt to submit:** creating the bookmark is *your* job, not his — it's a local op, not a push. Create or point it (`jj bookmark create <name> -r <change>`), then hand Matt only the submit command — `jj-gt submit -b <name> --ai` (drafts the PR title + description). `jj-gt` bridges the jj bookmark stack to Graphite PRs; bare `jj git push` is not Matt's path.
+- **Prepping + submitting a change:** creating the bookmark is your job — `jj bookmark create <name> -r <change>` — then submit it yourself: `jj-gt submit -b <name> --ai` (drafts the PR title + description). `jj-gt` bridges the jj bookmark stack to Graphite PRs.
 
 ## Stacking on in-progress work
 
@@ -157,7 +157,7 @@ jj rebase -b <your-bookmark> -d main@origin
 - **`jj-gt submit -b <your-bookmark>` submits the whole selected stack** — if
   yours is still stacked on another agent's unmerged base, it can re-submit
   their base PR too, so coordinate with the base's owner (or wait for it to
-  land) before handing Matt the submit. If your stack grew past the first
+  land) before you submit. If your stack grew past the first
   commit, move the bookmark to the **finalized tip** first — `jj bookmark set
   <your-bookmark> -r @-` after `jj commit` (`@` is then the empty child; the
   content tip is `@-`), or `-r @` if you snapshotted with `jj describe` —

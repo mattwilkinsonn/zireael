@@ -30,7 +30,7 @@ For Matt-owned repos (`mattwilkinsonn/*`, `sealedsecurity/*`, nix-config, dotfil
 
 ## Version control
 
-- **You may commit** (Conventional Commits subject: `feat(scope):`, `fix(scope):`, `refactor(scope):`, etc. + ≤2 sentences) **and create/move bookmarks** — only *pushing/submitting* is off-limits. **Never push or submit** — Matt always does it himself, every form (`git push`, `jj git push`, `jj-gt submit`, force, any variant). When a change is ready, create the bookmark yourself — name it `<name>-<issue>-<short-desc>`: codename/lane-tag first in multi-agent work, then the issue ref, then a short kebab desc (e.g. `hudson-sea-865-aws-provider`); no issue → `<name>-<short-desc>` (e.g. `cook-compass-scaffold`); no `user/` prefix; solo work drops the codename — then hand Matt only the submit command — `jj-gt submit -b <bookmark> --ai` (the `--ai` drafts the PR title + description on first push) — and stop. In a pure-git repo (no `.jj/`) there's no bookmark or `jj-gt`: commit, then hand Matt the plain `git push` command instead.
+- **Commit as Matt, push as the bot.** Commit + create/move bookmarks freely; author/committer = Matt (per-repo email: `matt@sealedsecurity.com` for `sealedsecurity/*`, `mattwilki17@gmail.com` for `mattwilkinsonn/*`) with a `Co-Authored-By: seal <noreply@sealedsecurity.com>` trailer. You **may push/submit your own feature branches** over the seal-bot token and run the review loop to merge-ready (`skill://autonomous-review`) — `jj-gt submit -b <bookmark> --ai`. Bookmark name `<name>-<issue>-<short-desc>` (codename/lane-tag first in multi-agent work; no issue → `<name>-<short-desc>`; no `user/` prefix; solo work drops the codename). **Hard limits, push-guard-enforced: never push or force-push `main`, never merge (the human gate), never push/PR/issue outside `mattwilkinsonn/*` + `sealedsecurity/*`.** Identity + details: `rule://commit-conventions`.
 - **jj-first.** Use `jj` for every VCS op in any repo with `.jj/` (the `$HOME` dotfiles repo and most repos are colocated jj+git). `git` only for pure-git repos. Never `git stash` (commit instead, or a worktree). Details + revsets + workspace model: `skill://vcs-jj`.
 - Before finishing: run format + lint + tests for the affected area and state they passed. Pattern + per-language gates: `rule://pre-finish-checks`.
 
@@ -52,4 +52,4 @@ Durable instructions live here (`~/.agents/AGENTS.md`, tool-agnostic canonical l
 Available on demand:
 
 - Rules (read `rule://<name>` when the work matches): `red-green-testing`, `planning-evidence`, `pre-finish-checks`, `commit-conventions`, `enumerate-pr-review-surfaces`. Always-applied: `process-safety`.
-- Skills (read `skill://<name>` when relevant): `vcs-jj`, `github-pr-review`, `nix-hosts`, `multi-agent-wave`.
+- Skills (read `skill://<name>` when relevant): `vcs-jj`, `github-pr-review`, `autonomous-review`, `design`, `nix-hosts`, `multi-agent-wave`.

@@ -38,4 +38,4 @@ If formatting a change surfaces churn in files an earlier commit owns, push thos
 
 ## Commit / push posture
 
-You MAY commit the verified change with a Conventional Commits subject (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …). You NEVER push or submit — `git push`, `jj-gt submit`, any variant — Matt does.
+You MAY commit the verified change (Conventional Commits subject) and push/submit your own feature branch over the seal-bot token, then run the review loop (`skill://autonomous-review`). Never push or force-push `main`, never merge (the human gate), never push/PR/issue outside `mattwilkinsonn/*` + `sealedsecurity/*`. Identity + policy: `rule://commit-conventions`.

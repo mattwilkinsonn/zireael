@@ -1,5 +1,5 @@
 ---
-description: "Commit message conventions: Conventional Commits subject, terse body, scope vocabulary from history; agent may commit but never pushes"
+description: "Commit message conventions + identity: Conventional Commits subject, terse body; commit as Matt with a seal co-author trailer; push your own feature branches via the seal-bot token — never main, never merge, allowlisted owners only"
 ---
 
 # Commit Conventions
@@ -25,9 +25,18 @@ Cap the body at ~2 sentences. This applies to big mechanical renames too: a one-
 
 Use inline `code` for identifiers and paths — it renders well on hosted diffs and carries into the PR description.
 
+## Attribution
+
+Commits are authored **and committed as Matt** — this keeps his contribution graph (co-author trailers don't earn squares; only author/committer do). Per-repo email: `matt@sealedsecurity.com` for `sealedsecurity/*`, `mattwilki17@gmail.com` for personal repos (`mattwilkinsonn/*`). Add an agent-attribution trailer: `Co-Authored-By: seal <noreply@sealedsecurity.com>`.
+
 ## Push policy
 
-The agent MAY create commits + create/move bookmarks. The agent NEVER pushes or submits — Matt does, in every form: `git push`, `git push --force`, `jj git push`, `jj-gt submit`, and any variant or subcommand. When a change is ready, create the bookmark and hand Matt the submit command — `jj-gt submit -b <bookmark> --ai` (the `--ai` drafts the PR title + description on first push) — then stop. In a pure-git repo (no `.jj/`), there's no bookmark or `jj-gt`: commit, then hand Matt the plain `git push` command instead.
+The agent commits, creates/moves bookmarks, **and pushes/submits its own feature branches** over the seal-bot token, then runs the review loop to merge-ready (`skill://autonomous-review`). Submit with `jj-gt submit -b <bookmark> --ai` (the `--ai` drafts the PR title + description on first push); in a pure-git repo, `git push -u origin <branch>`.
+
+These stay hard limits, enforced by the push-guard:
+
+- **Never push or force-push `main`; never merge** — merge is the human gate.
+- **Owner allowlist:** push, open PRs, and file issues only on `mattwilkinsonn/*` and `sealedsecurity/*` — never an upstream/OSS repo (e.g. `can1357/*`).
 
 ## Bookmark naming
 
