@@ -58,7 +58,7 @@ service accounts live with the sealed infra modules that consume them.
 | Service account | Used by | Token storage |
 | --- | --- | --- |
 | **macbook-svc** | Mac interactive shell | macOS Keychain entry `OP_SERVICE_ACCOUNT_TOKEN` |
-| **pc-svc** | mattpc-wsl interactive shell + Windows host (mattpc) | `~/.config/op/service-account-token` (mode 0600) + Windows `%USERPROFILE%\.config\op\service-account-token` (icacls-locked) |
+| **pc-svc** | mattpc-wsl interactive shell | `~/.config/op/service-account-token` (mode 0600) |
 | **personal-gha-svc** | Personal-project GitHub Actions workflows | GitHub Actions secret `OP_SERVICE_ACCOUNT_TOKEN` per personal repo |
 
 ### Team-account SA (shared)
@@ -69,7 +69,7 @@ Split per-host later if blast-radius separation becomes useful.
 
 | Service account | Vault scope | Used by | Token storage |
 | --- | --- | --- | --- |
-| **matt-dev-svc** | Local Dev (read) | Every interactive shell on every dev host | macOS Keychain `OP_TEAM_SERVICE_ACCOUNT_TOKEN` / `~/.config/op/team-service-account-token` (Linux + Windows) |
+| **matt-dev-svc** | Local Dev (read) | Every interactive shell on every dev host | macOS Keychain `OP_TEAM_SERVICE_ACCOUNT_TOKEN` / `~/.config/op/team-service-account-token` (Linux) |
 | **sealed-gha-svc** | Local Dev (read) | Sealed repo GitHub Actions workflows | GitHub Actions secret per Sealed repo |
 
 None of these have access to identity vaults (Personal, Employee).
@@ -102,10 +102,8 @@ path simply won't resolve, and vice versa. Defense in depth.
 ### Eager batch loader — `load-secrets`
 
 Lives in `shared/load-secrets.nix` (`programs.zsh.profileExtra` → `.zprofile` on
-NixOS/Mac); the tables below describe the Nix loader. `windows/profile.ps1`
-(PowerShell) loads its own overlapping set; `TAILSCALE_API_KEY`,
-`CODERABBIT_API_KEY`, and `OPENAI_API_KEY` are Nix-only (not exported
-there). Runs at login-shell startup (`.zprofile`); child shells inherit
+NixOS/Mac); the tables below describe the Nix loader. Runs at login-shell
+startup (`.zprofile`); child shells inherit
 the exported keys. Non-interactive and non-login shells (systemd units,
 cron, ssh-running-a-command, a fresh `zsh` not under a login session)
 skip it.
@@ -190,12 +188,10 @@ env). All three helpers set both `CLAUDE_CODE_OAUTH_TOKEN` and
 `ANTHROPIC_OAUTH_TOKEN`.
 
 `claude-default` lives in `shared/load-secrets.nix` and works only on
-zsh/Nix dev hosts; the one-shot helpers live in both
-`shared/load-secrets.nix` and `windows/profile.ps1`. On zsh/Nix use
+zsh/Nix dev hosts; the one-shot helpers live alongside it. Use
 `claude-default` for a sticky preference (most people most of the
-time). PowerShell has no sticky default: use the one-shot helpers to
-flip the current terminal — new shells always start from the Matt
-Sealed token.
+time); use the one-shot helpers when you just need to flip a single
+terminal.
 
 ### One-shot activation — `graphiteAuth`
 

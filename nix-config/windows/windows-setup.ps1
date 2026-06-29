@@ -6,12 +6,8 @@
 #   3. Applies the WinGet DSC configuration
 #   4. Copies windows/.wslconfig to %USERPROFILE%\.wslconfig
 #   5. Wires the AHK Mac-keyboard script into Startup
-#   6. Wires the PowerShell profile dot-source for load-secrets /
-#      claude-sealed / claude-personal helpers
-#   7. Prompts for both 1Password service-account tokens (personal + team)
-#      and writes them to ~/.config/op/{service-account-token,team-service-account-token}
-#      with current-user-only ACLs
-#   8. Prints manual-install reminders for non-winget apps
+#   6. Wires the PowerShell profile dot-source into the per-host $PROFILE
+#   7. Prints manual-install reminders for non-winget apps
 #
 # Scope: gaming-focused install + NixOS-WSL2 dev environment. Linux dev
 # work happens inside the WSL distro (see nixos/mattpc-wsl/).
@@ -191,65 +187,6 @@ else {
     Add-Content -Path $ps7ProfilePath -Value $dotSource -Encoding utf8
     Write-Host "Wired dot-source into $ps7ProfilePath"
 }
-
-# --- 1Password service-account tokens -----------------------------------------
-# Tokens used by load-secrets in profile.ps1 to drive `op inject` without
-# any interactive auth. ACL-locked to the current user only -- the files
-# already live under %USERPROFILE% which is user-scoped, but inheritance
-# from parent dirs can leak extra principals (Administrators / SYSTEM),
-# so strip inheritance and re-grant only the running user.
-#
-# Two accounts, two tokens. Personal SA reads op://Dev + op://Server;
-# team SA reads op://Local Dev (sealedsecurity.1password.com).
-Section 'Adding 1Password service-account tokens'
-
-function Set-OpToken {
-    param(
-        [Parameter(Mandatory)][string]$Path,
-        [Parameter(Mandatory)][string]$Label,
-        [Parameter(Mandatory)][string]$Scope,
-        [Parameter(Mandatory)][string]$Url
-    )
-    $dir = Split-Path $Path
-    if (Test-Path $Path) {
-        Write-Host "$Label token already present at $Path - leaving it alone"
-        return
-    }
-    Write-Host ''
-    Write-Host "$Label account: $Url"
-    Write-Host "Scope: $Scope"
-    Write-Host '(Token starts with "ops_". Leave blank to skip.)'
-    $token = (Read-Host "$Label token").Trim()
-    if (-not $token) {
-        Write-Warning "Skipped. Add manually later to: $Path"
-        return
-    }
-    if ($token -notmatch '^ops_') {
-        throw "$Label token doesn't start with 'ops_' - that doesn't look right."
-    }
-    if (-not (Test-Path $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    }
-    # -NoNewline: op reads the file's full contents as the token, so a
-    # trailing newline ends up in the env var and breaks auth.
-    Set-Content -Path $Path -Value $token -Encoding ascii -NoNewline
-    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    icacls $Path /inheritance:r | Out-Null
-    icacls $Path /grant ("{0}:F" -f $user) | Out-Null
-    Write-Host "Wrote $Label token to $Path (ACLs: $user only)"
-}
-
-Set-OpToken `
-    -Path (Join-Path $env:USERPROFILE '.config\op\service-account-token') `
-    -Label 'Personal' `
-    -Scope 'read access to personal Dev + Server vaults' `
-    -Url 'https://my.1password.com/developer-tools/serviceaccounts'
-
-Set-OpToken `
-    -Path (Join-Path $env:USERPROFILE '.config\op\team-service-account-token') `
-    -Label 'Team' `
-    -Scope 'read access to Local Dev vault on sealedsecurity.1password.com' `
-    -Url 'https://sealedsecurity.1password.com/developer-tools/serviceaccounts'
 
 # --- Manual-install reminders ------------------------------------------------
 Section 'Manual installs (not winget-manageable)'
