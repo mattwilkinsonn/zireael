@@ -144,7 +144,6 @@
               # OAuth. Rename back only if a tool genuinely needs a raw sk-ant key.
               personal_template='export TESTING_ANTHROPIC_API_KEY="{{ op://Dev/Anthropic API Key/credential }}"
     export OPENROUTER_API_KEY="{{ op://Dev/OpenRouter API Key/credential }}"
-    export GITHUB_PERSONAL_ACCESS_TOKEN="{{ op://Dev/GitHub Personal Access Token/token }}"
     export NEON_API_KEY="{{ op://Dev/Neon API Key/credential }}"
     export PULUMI_ACCESS_TOKEN="{{ op://Dev/Personal Pulumi Access Token/token }}"'
               _op_inject_with_token OP_SERVICE_ACCOUNT_TOKEN Personal "$personal_template"
@@ -166,7 +165,8 @@
     export OPENAI_API_KEY="{{ op://Local Dev/OpenAI API Key mattdev/credential }}"
     export TAILSCALE_API_KEY="{{ op://Local Dev/Tailscale API Key/credential }}"
     export CLOUDFLARE_API_TOKEN="{{ op://Local Dev/Cloudflare API Token/credential }}"
-    export POSTHOG_API_KEY="{{ op://Local Dev/PostHog API Key/credential }}"'
+    export POSTHOG_API_KEY="{{ op://Local Dev/PostHog API Key/credential }}"
+    export GITHUB_PERSONAL_ACCESS_TOKEN="{{ op://Local Dev/Seal Bot GitHub Personal Access Token/token }}"'
               _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN Team "$team_template"
 
               # Choose which Claude OAuth token to load by default.
@@ -188,14 +188,14 @@
             }
 
             # Auto-invoke at shell startup when the MCP tokens aren't already in
-            # the env. Gate on the actual tokens (GITHUB = personal account,
+            # the env. Gate on the actual tokens (OPENROUTER = personal account,
             # LINEAR = team), so a skip means BOTH accounts' secrets are present,
             # not a bare "we tried" marker — a context that inherits no secrets
             # (a GUI-launched Emdash agent, a stripped env) still loads them
             # instead of starting omp with tokenless MCP servers. Runs in non-tty
             # login shells too (the `zsh -lc` Emdash spawns): service-account
             # auth is promptless and sub-second, so there is no tty gate.
-            if [ -z "''${LINEAR_API_KEY:-}" ] || [ -z "''${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; then
+            if [ -z "''${LINEAR_API_KEY:-}" ] || [ -z "''${OPENROUTER_API_KEY:-}" ]; then
               load-secrets
             fi
           fi
