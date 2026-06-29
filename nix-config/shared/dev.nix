@@ -1,5 +1,6 @@
 {
   lib,
+  config,
   pkgs,
   inputs,
   ...
@@ -125,11 +126,13 @@ in
       agents.omp # Oh My Pi CLI (numtide/llm-agents.nix)
       # Emdash's ADE provider registry detects the `pi` binary (upstream
       # @earendil-works/pi); we run the oh-my-pi fork (`omp`). This shim
-      # puts `pi` on PATH so Emdash launches omp. Basic launch + worktree
-      # flow work; pi-specific Emdash hooks (Resume) may not, since omp has
-      # diverged far from upstream pi — the clean fix is a first-class
-      # `omp` provider upstream in Emdash (generalaction/emdash).
-      (writeShellScriptBin "pi" ''exec ${agents.omp}/bin/omp "$@"'')
+      # puts `pi` on PATH pointing at the dogfood `omp` (~/.local/bin/omp,
+      # defined below), so Emdash launches the same local build as plain `omp`
+      # rather than the nixpkgs `agents.omp`. Basic launch + worktree flow work;
+      # pi-specific Emdash hooks (Resume) may not, since omp has diverged far
+      # from upstream pi — the clean fix is a first-class `omp` provider upstream
+      # in Emdash (generalaction/emdash).
+      (writeShellScriptBin "pi" ''exec "$HOME/.local/bin/omp" "$@"'')
 
       # jj-ws — workspace helper for the multi-agent wave (creates/forgets
       # jj workspaces under <repo>.ws/). Pairs with the `wave` zellij layout.
@@ -442,6 +445,44 @@ in
   home.file.".bunfig.toml".text = ''
     [install]
     minimumReleaseAge = 7200
+  '';
+
+  # Dogfood the local oh-my-pi build (in-flight fixes merged on upstream main)
+  # as the default `omp`. Out-of-store symlink so rebuilding the binary in the
+  # workspace takes effect with no nix-switch; ~/.local/bin precedes the nixpkgs
+  # `agents.omp` on PATH, so this shadows it — plain `omp` and the `pi` shim
+  # (which Emdash launches) both run the dogfood build. A host that hasn't built
+  # oh-my-pi.ws/omp-dev gets a dangling `omp` until it does — intentional; clone
+  # + build the workspace. Since this build carries the in-flight jj-statusline
+  # / Zellij-title fixes, the local workaround extensions (jj-status,
+  # zellij-status) are dropped — restore them only if we stop dogfooding before
+  # oh-my-pi #3582/#3583/#3587 merge.
+  home.file.".local/bin/omp".source =
+    config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/repos/oh-my-pi.ws/omp-dev/packages/coding-agent/dist/omp";
+
+  # bun: oh-my-pi's compiled binary asserts Bun >= 1.3.14 at startup, but
+  # nixpkgs ships only 1.3.13 (checked unstable + master). Fetch the pinned
+  # release into ~/.bun/bin — which precedes the nix profile on PATH, so it
+  # shadows pkgs.bun for the omp-dev build. Direct release download rather than
+  # bun.sh/install, which appends PATH lines to the store-symlinked shell rc.
+  # Remove once nixpkgs carries >= 1.3.14; bump BUN_VERSION as omp needs newer.
+  home.activation.installBun = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    BUN_VERSION="1.3.14"
+    target="${if pkgs.stdenv.isDarwin then "bun-darwin-aarch64" else "bun-linux-x64"}"
+    current="$("$HOME/.bun/bin/bun" --version 2>/dev/null || true)"
+    # Install only if missing or older; never downgrade a newer Bun.
+    if [ "$current" != "$(printf '%s\n%s\n' "$current" "$BUN_VERSION" | ${pkgs.coreutils}/bin/sort -V | tail -n1)" ]; then
+      echo "Installing bun $BUN_VERSION to ~/.bun/bin (nixpkgs ships ${pkgs.bun.version})..."
+      tmp="$(mktemp -d)"
+      ${pkgs.curl}/bin/curl -fsSL \
+        "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/$target.zip" \
+        -o "$tmp/bun.zip"
+      ${pkgs.unzip}/bin/unzip -q "$tmp/bun.zip" -d "$tmp"
+      mkdir -p "$HOME/.bun/bin"
+      cp "$tmp/$target/bun" "$HOME/.bun/bin/bun"
+      chmod 755 "$HOME/.bun/bin/bun"
+      rm -rf "$tmp"
+    fi
   '';
 
   # Graphite CLI auth — `gt auth --token <token>` writes
