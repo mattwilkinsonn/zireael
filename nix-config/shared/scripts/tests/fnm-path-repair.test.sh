@@ -11,7 +11,7 @@ tmp_root="$(mktemp -d)"
 tmp="$tmp_root/fnm[glob]"
 trap 'rm -rf "$tmp_root"' EXIT
 
-mkdir -p "$tmp/bin" "$tmp/current/bin" "$tmp/stale/bin" "$tmp/target"
+mkdir -p "$tmp/bin" "$tmp/current/bin" "$tmp/stale/bin" "$tmp/project/bin" "$tmp/target"
 touch "$tmp/target/package.json"
 
 cat >"$tmp/bin/fnm" <<'FNM'
@@ -54,9 +54,11 @@ export FNM_MULTISHELL_PATH="$TMP/current"
 _direnv_hook() {
 	local -a restored_path
 	local entry
-	restored_path=("$TMP/stale/bin")
+	restored_path=("$TMP/bin" "$TMP/project/bin")
 	for entry in "${path[@]}"; do
 		[[ "$entry" == "$TMP/current/bin" ]] && continue
+		[[ "$entry" == "$TMP/bin" ]] && continue
+		[[ "$entry" == "$TMP/project/bin" ]] && continue
 		restored_path+=("$entry")
 	done
 	path=("${restored_path[@]}")
@@ -68,6 +70,7 @@ source "$FNM_INIT"
 cd "$TMP/target"
 print -r -- "PATH=$PATH"
 print -r -- "CURRENT_BIN=$TMP/current/bin"
+print -r -- "PROJECT_BIN=$TMP/project/bin"
 ZSH
 
 status=0
@@ -95,12 +98,22 @@ esac
 
 current_bin="$(printf '%s\n' "$out" | while IFS= read -r line; do case "$line" in CURRENT_BIN=*) printf '%s' "${line#CURRENT_BIN=}" ;; esac done)"
 path_line="$(printf '%s\n' "$out" | while IFS= read -r line; do case "$line" in PATH=*) printf '%s' "${line#PATH=}" ;; esac done)"
+project_bin="$(printf '%s\n' "$out" | while IFS= read -r line; do case "$line" in PROJECT_BIN=*) printf '%s' "${line#PROJECT_BIN=}" ;; esac done)"
 current_count=0
 old_ifs=$IFS
 IFS=:
+seen_project=0
 for entry in $path_line; do
+	if [ "$entry" = "$project_bin" ]; then
+		seen_project=1
+	fi
 	if [ "$entry" = "$current_bin" ]; then
 		current_count=$((current_count + 1))
+		if [ "$seen_project" -eq 0 ]; then
+			IFS=$old_ifs
+			printf 'FAIL fnm multishell bin moved ahead of project PATH entry\n%s\n' "$out"
+			exit 1
+		fi
 	fi
 done
 IFS=$old_ifs

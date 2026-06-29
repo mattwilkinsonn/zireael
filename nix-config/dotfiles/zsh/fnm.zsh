@@ -15,11 +15,27 @@ if command -v fnm >/dev/null; then
 		[[ -d "$fnm_bin" ]] || return 0
 		local -a repaired_path
 		local entry
-		repaired_path=("$fnm_bin")
+		local inserted=0
 		for entry in "${path[@]}"; do
-			[[ "$entry" == "$fnm_bin" ]] && continue
+			if [[ "$entry" == "$fnm_bin" ]]; then
+				if (( ! inserted )); then
+					repaired_path+=("$entry")
+					inserted=1
+				fi
+				continue
+			fi
+			if [[ "$entry" == */fnm_multishells/*/bin ]]; then
+				if (( ! inserted )); then
+					repaired_path+=("$fnm_bin")
+					inserted=1
+				fi
+				continue
+			fi
 			repaired_path+=("$entry")
 		done
+		if (( ! inserted )); then
+			repaired_path+=("$fnm_bin")
+		fi
 		path=("${repaired_path[@]}")
 		export PATH
 	}
