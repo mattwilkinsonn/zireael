@@ -165,7 +165,8 @@
     export CODERABBIT_API_KEY="{{ op://Local Dev/CodeRabbit API Key/credential }}"
     export OPENAI_API_KEY="{{ op://Local Dev/OpenAI API Key mattdev/credential }}"
     export TAILSCALE_API_KEY="{{ op://Local Dev/Tailscale API Key/credential }}"
-    export CLOUDFLARE_API_TOKEN="{{ op://Local Dev/Cloudflare API Token/credential }}"'
+    export CLOUDFLARE_API_TOKEN="{{ op://Local Dev/Cloudflare API Token/credential }}"
+    export POSTHOG_API_KEY="{{ op://Local Dev/PostHog API Key/credential }}"'
               _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN Team "$team_template"
 
               # Choose which Claude OAuth token to load by default.
