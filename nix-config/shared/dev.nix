@@ -176,11 +176,7 @@ in
     [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
     export RUSTC_WRAPPER=sccache
 
-    # fnm — initialise per-shell, NOT via _evalcache: `fnm env` mints a fresh
-    # multishell symlink and exports its path on each call, so caching pins
-    # every shell to the first one and `fnm use` / --use-on-cd then leak
-    # across panes.
-    command -v fnm >/dev/null && eval "$(fnm env --use-on-cd --shell zsh)"
+    ${builtins.readFile ../dotfiles/zsh/fnm.zsh}
   '';
 
   # rustup default toolchain: set stable as default on first install.
