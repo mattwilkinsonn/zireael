@@ -28,3 +28,7 @@ Use inline `code` for identifiers and paths — it renders well on hosted diffs 
 ## Push policy
 
 The agent MAY create commits + create/move bookmarks. The agent NEVER pushes or submits — Matt does, in every form: `git push`, `git push --force`, `jj git push`, `jj-gt submit`, and any variant or subcommand. When a change is ready, create the bookmark and hand Matt the submit command — `jj-gt submit -b <bookmark> --ai` (the `--ai` drafts the PR title + description on first push) — then stop. In a pure-git repo (no `.jj/`), there's no bookmark or `jj-gt`: commit, then hand Matt the plain `git push` command instead.
+
+## Bookmark naming
+
+`<name>-<issue>-<short-desc>` — codename/lane-tag first in multi-agent work (the **one** place a persona name belongs — never in the subject/body, PR content, or code), then the issue ref, then a short kebab description (e.g. `hudson-sea-865-aws-provider`). No issue → `<name>-<short-desc>` (e.g. `cook-compass-scaffold`). No `user/` prefix; solo work drops the codename.
