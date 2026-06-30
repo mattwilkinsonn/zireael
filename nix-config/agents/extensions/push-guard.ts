@@ -37,25 +37,55 @@ const PUSH_MAIN = /:(?:refs\/heads\/)?main(?![\w-])|\brefs\/heads\/main(?![\w-])
 function namedOwners(cmd: string): string[] {
 	const owners = new Set<string>();
 	for (const m of cmd.matchAll(/github\.com[/:]([\w.-]+)\/[\w.-]+/g)) owners.add(m[1].toLowerCase());
-	for (const m of cmd.matchAll(/(?:-R|--repo)[=\s]+([\w.-]+)\/[\w.-]+/g)) owners.add(m[1].toLowerCase());
+	for (const m of cmd.matchAll(/(?:-R|--repo)[=\s]+["']?(?:[\w.-]+\/)?([\w.-]+)\/[\w.-]+/g)) owners.add(m[1].toLowerCase());
 	return [...owners];
 }
 
-// A `gh` command that *creates* an issue or PR. A bare `gh issue create` /
-// `gh pr create` with no allowlisted `-R`/URL files on whatever repo the cwd
-// resolves to — an OSS upstream included (the spam-bot vector). Require an
-// explicit allowlisted target. Command-aware (`gh` is the actual command, not a
-// word in a message) so `git commit -m "… gh issue create …"` doesn't trip it.
+// A `gh` invocation, possibly behind a benign wrapper (`env VAR=x gh …`,
+// `timeout 30 gh …`): the args after `gh`, or null when `gh` isn't the command
+// (so `git commit -m "… gh issue create …"` — gh only inside a message — is
+// ignored).
+const GH_WRAPPERS = new Set(["env", "timeout", "nice", "ionice", "stdbuf", "nohup", "setsid", "sudo", "doas", "command", "exec", "time"]);
+function ghArgs(seg: string): string[] | null {
+	const toks = seg.trim().split(/\s+/).filter(Boolean);
+	let i = 0;
+	while (i < toks.length) {
+		if (/^[A-Za-z_]\w*=/.test(toks[i])) {
+			i++; // VAR=val assignment
+		} else if (GH_WRAPPERS.has(toks[i].replace(/.*\//, ""))) {
+			i++; // the wrapper, then its own flags / a duration / -n NUM
+			while (i < toks.length && (/^-/.test(toks[i]) || /^\d+[smhd]?$/.test(toks[i]) || /^[A-Za-z_]\w*=/.test(toks[i]))) i++;
+		} else {
+			break;
+		}
+	}
+	return i < toks.length && /(?:^|\/)gh$/.test(toks[i]) ? toks.slice(i + 1) : null;
+}
+
+// The owner from a real `-R`/`--repo <[HOST/]OWNER/REPO>` selector (quotes and a
+// host prefix tolerated), lowercased — NOT a URL that happens to sit in a
+// `--body`/`--title` value.
+function repoFlagOwner(seg: string): string | null {
+	const m = seg.match(/(?:-R|--repo)[=\s]+["']?(?:[\w.-]+\/)?([\w.-]+)\/[\w.-]+/);
+	return m ? m[1].toLowerCase() : null;
+}
+
+// A `gh` command that *creates* an issue or PR — `gh issue create`, `gh pr
+// create`, or the `gh issue new` alias. A bare one with no allowlisted `-R`
+// files on whatever repo the cwd resolves to, an OSS upstream included (the
+// spam-bot vector), so require an explicit allowlisted `-R`. The verb must be
+// the token right after the noun, so `gh issue list --label create` and `gh pr
+// comment 123 --body create` (create as a flag value) are not treated as one.
 function ghCreateWithoutAllowedOwner(cmd: string): boolean {
 	for (const seg of cmd.split(/[\n;|&]+/)) {
-		const toks = seg.trim().split(/\s+/).filter(Boolean);
-		let i = 0;
-		while (i < toks.length && /^[A-Za-z_]\w*=/.test(toks[i])) i++; // skip env prefix
-		if (i >= toks.length || !/(?:^|\/)gh$/.test(toks[i])) continue; // gh isn't the command
-		const rest = toks.slice(i + 1);
-		if (!rest.includes("create") || !(rest.includes("issue") || rest.includes("pr"))) continue;
-		// An allowlisted -R/URL makes it safe; no owner (or a disallowed one) blocks.
-		if (namedOwners(seg).some((o) => ALLOWED_OWNERS[o] === true)) continue;
+		const args = ghArgs(seg);
+		if (!args) continue;
+		const noun = args.findIndex((a) => a === "issue" || a === "pr");
+		if (noun === -1) continue;
+		const verb = args[noun + 1];
+		if (verb !== "create" && verb !== "new") continue;
+		const owner = repoFlagOwner(seg);
+		if (owner !== null && ALLOWED_OWNERS[owner] === true) continue; // explicit allowlisted target
 		return true;
 	}
 	return false;
