@@ -74,7 +74,7 @@ The `Command` enum (`cli.rs:37-275`) declares:
 | --- | --- | --- |
 | `-b/--bookmark` | `cli.rs:282-288` | Operate on this bookmark (repeatable). |
 | `-r/--revision` | `cli.rs:291-292` | Bookmarks pointing at these commits. |
-| `-c/--change` | `cli.rs:296-297` | Commits (creates a bookmark per change). |
+| `-c/--change` | `cli.rs:296-297` | Bookmarks pointing at these commits — selected like `-r` (`select.rs` queries `bookmarks() & (<revset>)`); an *unbookmarked* change matches nothing and errors, it does not create a bookmark. |
 | `--all` | `cli.rs:304-305` | Every bookmark across every stack (`bookmarks() & trunk..`), minus trunk + `gtmq_*`. |
 | `--tracked` | `cli.rs:308-309` | Every locally-tracked bookmark. |
 | `--allow-new` | `cli.rs:312-313` | Allow bookmarks with no remote counterpart. |
@@ -104,7 +104,7 @@ onto `gt submit` via `gt::build_submit_argv`:
 | `--rerequest-review` | `cli.rs:389-390` | Adds `--rerequest-review`. |
 | `--no-always` | `cli.rs:400-401` | Suppresses default `--always`. |
 | `-f/--force` | `cli.rs:404-405` | Adds `--force` (overrides force-with-lease). |
-| `--dry-run` | `cli.rs:408-409` | Adds `--dry-run`; jj-gt also skips its own mutations. |
+| `--dry-run` | `cli.rs:408-409` | Adds `--dry-run` and skips jj-gt's own later mutations — but `submit` still runs `jj git export` first unless `--no-export` (`lib.rs:424-428`), so refs can move. |
 | `-C/--confirm` | `cli.rs:412-413` | Adds `--confirm`. |
 | `--no-links` | `cli.rs:421-422` | Skip the issue-reference / co-author hoist. |
 | `--gt-arg` | `cli.rs:425-426` | Append a verbatim arg to `gt submit` (repeatable). |
