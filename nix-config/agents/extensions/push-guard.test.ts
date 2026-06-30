@@ -43,6 +43,28 @@ test("blocks pushes / writes to non-allowlisted owners", () => {
 	expect(bash("gh pr -R can1357/oh-my-pi create")?.block).toBe(true);
 });
 
+test("blocks a bare gh issue/pr create with no allowlisted target", () => {
+	expect(bash("gh issue create --title bug --body repro")?.block).toBe(true);
+	expect(bash("gh pr create --fill")?.block).toBe(true);
+	expect(bash("cd /tmp/upstream && gh issue create -t spam")?.block).toBe(true);
+	expect(bash("gh issue new --title bug")?.block).toBe(true); // `new` is a create alias
+	expect(bash("env GH_TOKEN=x gh issue create -t bug")?.block).toBe(true); // behind a wrapper
+	expect(bash("timeout 30 gh pr create --fill")?.block).toBe(true); // behind a wrapper
+	expect(bash("gh issue create --body https://github.com/mattwilkinsonn/zireael")?.block).toBe(true); // URL in body is not a target
+});
+
+test("allows gh create with an allowlisted -R, and non-create reads", () => {
+	expect(bash("gh issue create -R mattwilkinsonn/zireael -t bug")).toBeNull();
+	expect(bash("gh pr create -R sealedsecurity/sealed --fill")).toBeNull();
+	expect(bash('gh pr create -R "sealedsecurity/sealed" --fill')).toBeNull(); // quoted target
+	expect(bash("gh issue create --repo github.com/mattwilkinsonn/zireael -t bug")).toBeNull(); // host-qualified
+	expect(bash("gh issue list --label create")).toBeNull(); // "create" is a flag value, not the verb
+	expect(bash("gh pr comment 123 --body create")).toBeNull();
+	expect(bash("gh issue list")).toBeNull();
+	expect(bash('git commit -m "note: block bare gh issue create"')).toBeNull(); // gh only in a message
+	expect(bash('jj describe -m "gh pr create guard"')).toBeNull();
+});
+
 test("allows pushes / writes to allowlisted owners", () => {
 	expect(bash("git push https://github.com/mattwilkinsonn/zireael my-branch")).toBeNull();
 	expect(bash("gh pr create -R sealedsecurity/sealed")).toBeNull();
