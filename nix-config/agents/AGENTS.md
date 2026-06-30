@@ -44,6 +44,7 @@ Repos with an `.envrc` provide their tooling — `moon`, `biome`, language toolc
 - **Multi-line content** (code blocks, multi-line commands, configs) goes to a file (`~/notes` for markdown, the repo for code) so Matt can copy cleanly. Short one-liners are fine inline; avoid long `&&` chains.
 - **Markdown** follows markdownlint: blank lines around headings/lists/code fences/tables, language on fences, leading+trailing table pipes, compact table spacing.
 - **Never hand-create symlinks.** (The one exception is nix `mkOutOfStoreSymlink`, which already manages the privatefiles → `$HOME` links.)
+- **IRC reaches only same-session subagents.** The `irc` tool can message subtask agents you spawned within this session; it **cannot** reach agents in other sessions (separate runs/panes) — those sends fail (`Unknown or terminated agent`). Coordinate cross-session work through Matt or shared files (`local://`, the repo), never `irc`.
 
 ## Correcting mistakes
 
