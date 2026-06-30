@@ -30,9 +30,12 @@ const GH_WRITE_CMD =
 // A `gh api` write to a `repos/<owner>/<repo>` endpoint must name an allowlisted
 // owner; `gh api` resolves a bare/`{owner}`/cwd path from GH_REPO or the cwd, so
 // an unparsed owner is fail-closed. An explicit `-X GET`/`--method GET` is a read.
+// Detection keys off the parsed command token (`ghArgs`), so a `gh api` quoted in
+// a commit message isn't a false positive; `includes` catches any flag order. A
+// `bash -c '…'` wrapper is a known gap, shared with the other tokenized guards.
 function ghApiWriteBlocked(cmd: string): boolean {
 	for (const seg of cmd.split(/[\n;|&]+/)) {
-		if (!/\bgh\b[^\n]*\bapi\b/.test(seg)) continue;
+		if (!ghArgs(seg)?.includes("api")) continue; // a real `gh api` command (any flag order), not text in a message
 		if (/(?:^|\s)(?:-X|--method)[=\s]+GET\b/i.test(seg)) continue; // explicit read
 		const write = /(?:^|\s)(?:-X|--method)[=\s]+(?:POST|PUT|PATCH|DELETE)\b|(?:^|\s)(?:-f|-F|--field|--raw-field|--input)\b/i.test(seg);
 		if (!write) continue;

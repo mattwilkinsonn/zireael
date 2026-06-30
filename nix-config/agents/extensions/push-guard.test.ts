@@ -139,3 +139,14 @@ test("gh api writes: fail-closed on an unparsed owner, exempt explicit GET", () 
 	expect(bash("gh api -X GET repos/can1357/oh-my-pi/issues -f per_page=100")).toBeNull(); // explicit read
 	expect(bash("gh api repos/mattwilkinsonn/zireael/issues -f title=x")).toBeNull(); // allowlisted write
 });
+
+test("does not fire inside a commit message that quotes a gh api write", () => {
+	expect(bash('git commit -m "note: use gh api repos/can1357/oh-my-pi/issues -f title=x"')).toBeNull();
+	expect(bash('git commit -m "fix: gh api -X POST repos/can1357/foo/bar"')).toBeNull();
+	expect(bash("gh api repos/can1357/oh-my-pi/issues -f title=x")?.block).toBe(true); // a real one still blocks
+});
+
+test("blocks gh api with a global flag before the subcommand", () => {
+	expect(bash("gh --hostname example.com api repos/can1357/oh-my-pi/issues -f title=x")?.block).toBe(true);
+	expect(bash("gh -R can1357/oh-my-pi api repos/can1357/foo -f x=y")?.block).toBe(true);
+});
