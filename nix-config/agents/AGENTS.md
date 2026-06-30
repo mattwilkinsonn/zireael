@@ -34,6 +34,10 @@ For Matt-owned repos (`mattwilkinsonn/*`, `sealedsecurity/*`, nix-config, dotfil
 - **jj-first.** Use `jj` for every VCS op in any repo with `.jj/` (the `$HOME` dotfiles repo and most repos are colocated jj+git). `git` only for pure-git repos. Never `git stash` (commit instead, or a worktree). Details + revsets + workspace model: `skill://vcs-jj`.
 - Before finishing: run format + lint + tests for the affected area and state they passed. Pattern + per-language gates: `rule://pre-finish-checks`.
 
+## Dev shells (direnv/devenv)
+
+Repos with an `.envrc` provide their tooling — `moon`, `biome`, language toolchains, project bins, and env like `GIT_DIR` for jj secondary workspaces — through a direnv/devenv dev shell that the headless agent bash does **not** auto-load. Run any command that needs that tooling via `direnv exec <repo-dir> <cmd>`, or you hit `command not found` (or silently get a stale system tool). This applies in **every** such repo, not just jj workspaces — e.g. a pre-push gate that shells out to `moon ci`. *Interim: drop this once OMP loads an allowed `.envrc` into the bash session itself.*
+
 ## Operating rules
 
 - **Never end a turn on a future-tense action promise** ("I'll now…", "Starting…"). Either call the tools in the same turn or omit the preamble — that closing sentence correlates with emitting `end_turn` before the action happens.
