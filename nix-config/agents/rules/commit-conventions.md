@@ -31,12 +31,19 @@ Commits are authored **and committed as Matt** — this keeps his contribution g
 
 ## Push policy
 
-The agent commits, creates/moves bookmarks, **and pushes/submits its own feature branches** over the seal-bot token, then runs the review loop to merge-ready (`skill://autonomous-review`). Submit with `jj-gt submit -b <bookmark> --ai` (the `--ai` drafts the PR title + description on first push); in a pure-git repo, `git push -u origin <branch>`.
+The agent commits, creates/moves bookmarks, **and pushes/submits its own feature branches** over the seal-bot token, then runs the review loop to merge-ready (`skill://autonomous-review`). Submit with `jj-gt submit -b <bookmark>` (**no `--ai`** — you author the PR title + description; see below); in a pure-git repo, `git push -u origin <branch>`.
 
 These stay hard limits, enforced by the push-guard:
 
 - **Never push or force-push `main`; never merge** — merge is the human gate.
 - **Owner allowlist:** push, open PRs, and file issues only on `mattwilkinsonn/*` and `sealedsecurity/*` — never an upstream/OSS repo (e.g. `can1357/*`).
+
+## PR title + description
+
+You write the PR title and description yourself — **never `--ai`**. Graphite's `--ai` regenerates the body non-deterministically every submit, clobbering your prose and dropping issue links; without it, `jj-gt submit` leaves the description under your control.
+
+- Write it like a good commit body — what changed and why — and **update it as review-loop commits land** so it stays accurate. Set/update via `gh pr edit <n> --body …` or the GitHub MCP `update_pull_request`.
+- Don't hand-write the `Co-Authored-By:` trailer or `Closes/Refs` links — `jj-gt` hoists them from your commit messages into a managed block, rendered last so GitHub records co-authorship on squash-merge. Keep the `Co-Authored-By: seal <…>` trailer in your **commits** (per Attribution); the hoist does the rest (a hand-written trailer is preserved, not duplicated).
 
 ## Bookmark naming
 
