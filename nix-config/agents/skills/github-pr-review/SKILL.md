@@ -9,6 +9,8 @@ Review feedback on a PR lives on **four independent surfaces**. Checking one or 
 
 Use the **GitHub MCP** (`pull_request_read`) as the primary tool — structured output, one call per surface, no shell-quoting or `--jq` plumbing. The `gh` CLI is fallback only (see the last section).
 
+When you own a PR end-to-end — push, fix, drive to merge-ready — run this triage inside the loop in `skill://autonomous-review`; the discipline below is unchanged, the loop just adds the autonomy to act on bot-only findings without round-tripping the human.
+
 ## The four surfaces
 
 | # | Surface | What lives there | `pull_request_read` method |
@@ -59,7 +61,7 @@ Note every reply/resolve in the turn summary (thread + the commit or issue behin
 
 ## Where review-fix commits go
 
-When you do address feedback (with Matt's go-ahead), land the fix as a **new commit** and move the PR's bookmark up over it — so the fix rides the **same PR the comments are on**, updating it and its threads in place.
+When you do address feedback (autonomously for bot-only findings, or with Matt's go-ahead otherwise — `skill://autonomous-review`), land the fix as a **new commit** and move the PR's bookmark up over it — so the fix rides the **same PR the comments are on**, updating it and its threads in place.
 
 - **Always a new commit. Never amend or squash a pushed PR's commits.** The auto-reviewers (Greptile, CodeRabbit, cubic, Codex) often don't re-trigger on a rewritten (amended/squashed) commit — a fresh commit on top reliably re-triggers them. Extra commits don't pollute history: every repo squash-merges into `main`.
 - **Don't spin the fix onto a new bookmark** — that opens a *separate* PR disconnected from the review, and the original threads never see it.

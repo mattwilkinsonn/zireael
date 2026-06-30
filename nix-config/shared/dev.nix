@@ -138,6 +138,12 @@ in
       # jj workspaces under <repo>.ws/). Pairs with the `wave` zellij layout.
       (writeShellScriptBin "jj-ws" (builtins.readFile ../dotfiles/scripts/jj-ws))
 
+      # wait-for-reviews — the autonomous PR-review loop's wait primitive
+      # (skill://autonomous-review): polls a PR until its review bots have
+      # reviewed the head (or are rate/usage-limited, or a backstop elapses).
+      # Bash; gh + jq resolve from the dev set above.
+      (writeShellScriptBin "wait-for-reviews" (builtins.readFile ../dotfiles/scripts/wait-for-reviews))
+
       # hk — jj/git hook runner (jdx/hk), pinned via the `hk` flake input to
       # match the `hk.pkl` schema at the repo root. Built from source by nix so
       # the binary and schema can't drift (cargo-installed hk silently did).
