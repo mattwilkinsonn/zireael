@@ -36,7 +36,7 @@ For Matt-owned repos (`mattwilkinsonn/*`, `sealedsecurity/*`, nix-config, dotfil
 
 ## Dev shells (direnv/devenv)
 
-Repos with an `.envrc` provide their tooling — `moon`, `biome`, language toolchains, project bins, and env like `GIT_DIR` for jj secondary workspaces — through a direnv/devenv dev shell that the headless agent bash does **not** auto-load. Run any command that needs that tooling via `direnv exec <repo-dir> <cmd>`, or you hit `command not found` (or silently get a stale system tool). This applies in **every** such repo, not just jj workspaces — e.g. a pre-push gate that shells out to `moon ci`. *Interim: drop this once OMP loads an allowed `.envrc` into the bash session itself.*
+Repos with an `.envrc` provide their tooling — `moon`, `biome`, language toolchains, project bins, and env like `GIT_DIR` for jj secondary workspaces — through a direnv/devenv dev shell that the headless agent bash does **not** auto-load. Run any command that needs that tooling via `direnv exec <repo-dir> <cmd>`, or you hit `command not found` (or silently get a stale system tool). A fresh or just-edited `.envrc` is blocked until authorized — run `direnv allow <repo-dir>` once first, or `direnv exec` refuses to load it. This applies in **every** such repo, not just jj workspaces — e.g. a pre-push gate that shells out to `moon ci`. *Interim: drop this once OMP loads an allowed `.envrc` into the bash session itself.*
 
 ## Operating rules
 
