@@ -20,18 +20,34 @@ const ALLOWED_OWNERS: Record<string, true> = {
 };
 const PUSH =
 	/\bgit(?:\s+-\S+(?:\s+[^-]\S*)?)*\s+push\b|\bjj(?:\s+-\S+(?:\s+[^-]\S*)?)*\s+git\s+push\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*(?:submit|ss?)\b/;
-// Merge — the human gate, blocked for every repo.
-const MERGE = /\bgh\b[^\n;|&]*\bmerge\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*merge\b/;
+// Merge — the human gate, blocked for every repo. Also a `jj-gt`/`gt submit`
+// with `--merge-when-ready`/`-m`, which hands Graphite the merge after checks.
+const MERGE = /\bgh\b[^\n;|&]*\bmerge\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*merge\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*(?:submit|ss?)\b[^\n;|&]*(?:--merge-when-ready\b|\s-m\b)/;
 // A `gh` mutation: a write verb anywhere in the `gh` segment (so flags between
 // the noun and the verb — `gh pr -R owner/repo create` — don't slip past).
 const GH_WRITE_CMD =
 	/\bgh\b[^\n;|&]*\b(?:create|edit|comment|close|delete|review|reopen|ready|lock|unlock|develop|transfer|rename|sync|fork)\b/;
+// A `gh api` write to a `repos/<owner>/<repo>` endpoint must name an allowlisted
+// owner; `gh api` resolves a bare/`{owner}`/cwd path from GH_REPO or the cwd, so
+// an unparsed owner is fail-closed. An explicit `-X GET`/`--method GET` is a read.
+function ghApiWriteBlocked(cmd: string): boolean {
+	for (const seg of cmd.split(/[\n;|&]+/)) {
+		if (!/\bgh\b[^\n]*\bapi\b/.test(seg)) continue;
+		if (/(?:^|\s)(?:-X|--method)[=\s]+GET\b/i.test(seg)) continue; // explicit read
+		const write = /(?:^|\s)(?:-X|--method)[=\s]+(?:POST|PUT|PATCH|DELETE)\b|(?:^|\s)(?:-f|-F|--field|--raw-field|--input)\b/i.test(seg);
+		if (!write) continue;
+		const m = seg.match(/\brepos\/([^/\s]+)\//);
+		if (m && ALLOWED_OWNERS[m[1].toLowerCase()] !== true) return true;
+	}
+	return false;
+}
 // Pushing to a remote literally named `upstream` — the OSS-upstream vector a
 // URL-owner check can't see (`git push upstream` carries no URL/owner).
 const PUSH_UPSTREAM = /\bpush\b(?:\s+-\S+)*\s+upstream\b/;
-// `main` as an explicit push target — `origin main`, `-b main`, `:main`. Scoped
-// so it doesn't fire on a feature branch that merely contains "main".
-const PUSH_MAIN = /:(?:refs\/heads\/)?main(?![\w-])|\brefs\/heads\/main(?![\w-])|(?:^|\s)(?:-b|--bookmark|--branch)\s+main(?![\w-])|\borigin\s+(?:-\S+\s+)*main(?![\w-])/;
+// `main` as a push target — `<remote> main`, `-b main`, `:main`, `HEAD:main`, on
+// ANY remote. The bare-`main` arm is anchored to `push` so a later
+// `git checkout main` in a compound command isn't a false positive.
+const PUSH_MAIN = /:(?:refs\/heads\/)?main(?![\w-])|\brefs\/heads\/main(?![\w-])|(?:^|\s)(?:-b|--bookmark|--branch)\s+main(?![\w-])|\bpush\b(?:\s+-\S+)*\s+[\w.-]+\s+(?:-\S+\s+)*main(?![\w-])/;
 
 // Explicit GitHub owners named in a command: full URLs + `gh -R owner/repo`.
 function namedOwners(cmd: string): string[] {
@@ -50,9 +66,17 @@ function ghArgs(seg: string): string[] | null {
 	const toks = seg.trim().split(/\s+/).filter(Boolean);
 	let i = 0;
 	while (i < toks.length) {
+		const base = toks[i].replace(/.*\//, "");
 		if (/^[A-Za-z_]\w*=/.test(toks[i])) {
 			i++; // VAR=val assignment
-		} else if (GH_WRAPPERS.has(toks[i].replace(/.*\//, ""))) {
+		} else if (base === "direnv") {
+			i++; // direnv
+			if (toks[i] === "exec") {
+				i++; // exec
+				if (i < toks.length && !/^-/.test(toks[i])) i++; // the DIR positional
+			}
+			while (i < toks.length && /^-/.test(toks[i])) i++; // direnv's own flags
+		} else if (GH_WRAPPERS.has(base)) {
 			i++; // the wrapper, then its own flags / a duration / -n NUM
 			while (i < toks.length && (/^-/.test(toks[i]) || /^\d+[smhd]?$/.test(toks[i]) || /^[A-Za-z_]\w*=/.test(toks[i]))) i++;
 		} else {
@@ -66,8 +90,14 @@ function ghArgs(seg: string): string[] | null {
 // host prefix tolerated), lowercased — NOT a URL that happens to sit in a
 // `--body`/`--title` value.
 function repoFlagOwner(seg: string): string | null {
-	const m = seg.match(/(?:-R|--repo)[=\s]+["']?(?:[\w.-]+\/)?([\w.-]+)\/[\w.-]+/);
-	return m ? m[1].toLowerCase() : null;
+	for (const tok of seg.split(/\s+/).map((t, i, a) => [t, a[i + 1]] as const)) {
+		const eq = tok[0].match(/^(?:-R|--repo)=(.+)$/);
+		const val = eq ? eq[1] : tok[0] === "-R" || tok[0] === "--repo" ? tok[1] : undefined;
+		if (val === undefined) continue;
+		const o = val.replace(/^["']/, "").match(/^(?:[\w.-]+\/)?([\w.-]+)\/[\w.-]+/);
+		if (o) return o[1].toLowerCase();
+	}
+	return null;
 }
 
 // A `gh` command that *creates* an issue or PR — `gh issue create`, `gh pr
@@ -158,6 +188,17 @@ export function evaluate(toolName: string, input: Record<string, unknown>): Bloc
 					`Write to ${bad.join(", ")}/* blocked: outside the owner allowlist ` +
 					"(mattwilkinsonn, sealedsecurity). Never push / open a PR / file an issue on an " +
 					"upstream or OSS repo. See rule://commit-conventions.",
+			};
+		}
+
+		if (ghApiWriteBlocked(cmd)) {
+			return {
+				block: true,
+				reason:
+					"GitHub `gh api` write blocked: a write to a `repos/<owner>/<repo>` endpoint must " +
+					"name an allowlisted owner (mattwilkinsonn, sealedsecurity) — fail-closed on a " +
+					"placeholder or cwd-resolved owner. Use an allowlisted endpoint or the GitHub MCP. " +
+					"See rule://commit-conventions.",
 			};
 		}
 

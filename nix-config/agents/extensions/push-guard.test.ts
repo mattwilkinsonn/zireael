@@ -88,3 +88,54 @@ test("still blocks broad process kills, allows targeted ones", () => {
 	expect(bash("kill -- -1")?.block).toBe(true);
 	expect(bash("kill -9 12345")).toBeNull();
 });
+
+test("blocks push to main on any remote, not just origin", () => {
+	expect(bash("git push fork main")?.block).toBe(true);
+	expect(bash("git push -f myremote main")?.block).toBe(true);
+	expect(bash("git push fork main-feature")).toBeNull(); // a feature branch, not main
+});
+
+test("blocks jj-gt submit --merge-when-ready / -m (bypasses the merge gate)", () => {
+	expect(bash("jj-gt submit -b foo --merge-when-ready")?.block).toBe(true);
+	expect(bash("jj-gt submit -b foo -m")?.block).toBe(true);
+	expect(bash("gt submit --merge-when-ready")?.block).toBe(true);
+	expect(bash("jj-gt submit -b foo")).toBeNull(); // a normal submit is fine
+	expect(bash("jj-gt submit -b foo --no-hooks")).toBeNull();
+});
+
+test("blocks gh api writes to non-allowlisted owners, allows reads + allowlisted", () => {
+	expect(bash("gh api repos/can1357/oh-my-pi/issues -f title=x")?.block).toBe(true);
+	expect(bash("gh api -X POST repos/can1357/oh-my-pi/pulls")?.block).toBe(true);
+	expect(bash("gh api repos/can1357/oh-my-pi/issues")).toBeNull(); // GET read is fine
+	expect(bash("gh api repos/mattwilkinsonn/zireael/issues -f title=x")).toBeNull(); // allowlisted
+});
+
+test("sees gh through a direnv exec wrapper", () => {
+	expect(bash("direnv exec /home/x gh issue create -t bug")?.block).toBe(true); // bare create
+	expect(bash("direnv exec /repo gh pr create -R can1357/oh-my-pi")?.block).toBe(true);
+	expect(bash("direnv exec /repo gh pr view -R can1357/oh-my-pi 42")).toBeNull(); // read is fine
+	expect(bash("direnv exec /repo gh issue create -R mattwilkinsonn/zireael -t bug")).toBeNull();
+});
+
+test("a --repo inside a flag value is not a real target", () => {
+	expect(bash('gh issue create --body "--repo mattwilkinsonn/zireael"')?.block).toBe(true);
+	expect(bash("gh issue create --repo mattwilkinsonn/zireael -t bug")).toBeNull(); // a real -R
+});
+
+test("does not false-positive on a later checkout main in a compound command", () => {
+	expect(bash("git push origin feature && git checkout main")).toBeNull();
+	expect(bash("git push origin feature && echo main")).toBeNull();
+	expect(bash("git push fork main && echo done")?.block).toBe(true); // still blocks a real main push
+});
+
+test("blocks merge-when-ready on the gt ss / s submit aliases", () => {
+	expect(bash("gt ss -m")?.block).toBe(true);
+	expect(bash("gt ss --merge-when-ready")?.block).toBe(true);
+	expect(bash("gt s --merge-when-ready")?.block).toBe(true);
+});
+
+test("gh api writes: fail-closed on an unparsed owner, exempt explicit GET", () => {
+	expect(bash("gh api repos/{owner}/{repo}/issues -f title=x")?.block).toBe(true); // placeholder owner
+	expect(bash("gh api -X GET repos/can1357/oh-my-pi/issues -f per_page=100")).toBeNull(); // explicit read
+	expect(bash("gh api repos/mattwilkinsonn/zireael/issues -f title=x")).toBeNull(); // allowlisted write
+});
