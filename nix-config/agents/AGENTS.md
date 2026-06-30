@@ -34,12 +34,17 @@ For Matt-owned repos (`mattwilkinsonn/*`, `sealedsecurity/*`, nix-config, dotfil
 - **jj-first.** Use `jj` for every VCS op in any repo with `.jj/` (the `$HOME` dotfiles repo and most repos are colocated jj+git). `git` only for pure-git repos. Never `git stash` (commit instead, or a worktree). Details + revsets + workspace model: `skill://vcs-jj`.
 - Before finishing: run format + lint + tests for the affected area and state they passed. Pattern + per-language gates: `rule://pre-finish-checks`.
 
+## Dev shells (direnv/devenv)
+
+Repos with an `.envrc` provide their tooling — `moon`, `biome`, language toolchains, project bins, and env like `GIT_DIR` for jj secondary workspaces — through a direnv/devenv dev shell that the headless agent bash does **not** auto-load. Run any command that needs that tooling via `direnv exec <repo-dir> <cmd>`, or you hit `command not found` (or silently get a stale system tool). A fresh or just-edited `.envrc` is blocked until authorized — run `direnv allow <repo-dir>` once first, or `direnv exec` refuses to load it. This applies in **every** such repo, not just jj workspaces — e.g. a pre-push gate that shells out to `moon ci`. *Interim: drop this once OMP loads an allowed `.envrc` into the bash session itself.*
+
 ## Operating rules
 
 - **Never end a turn on a future-tense action promise** ("I'll now…", "Starting…"). Either call the tools in the same turn or omit the preamble — that closing sentence correlates with emitting `end_turn` before the action happens.
 - **Multi-line content** (code blocks, multi-line commands, configs) goes to a file (`~/notes` for markdown, the repo for code) so Matt can copy cleanly. Short one-liners are fine inline; avoid long `&&` chains.
 - **Markdown** follows markdownlint: blank lines around headings/lists/code fences/tables, language on fences, leading+trailing table pipes, compact table spacing.
 - **Never hand-create symlinks.** (The one exception is nix `mkOutOfStoreSymlink`, which already manages the privatefiles → `$HOME` links.)
+- **IRC reaches only same-session subagents.** The `irc` tool can message subtask agents you spawned within this session; it **cannot** reach agents in other sessions (separate runs/panes) — those sends fail (`Unknown or terminated agent`). Coordinate cross-session work through Matt or shared files (`local://`, the repo), never `irc`.
 
 ## Correcting mistakes
 
