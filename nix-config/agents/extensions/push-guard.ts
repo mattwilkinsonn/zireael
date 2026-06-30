@@ -41,6 +41,26 @@ function namedOwners(cmd: string): string[] {
 	return [...owners];
 }
 
+// A `gh` command that *creates* an issue or PR. A bare `gh issue create` /
+// `gh pr create` with no allowlisted `-R`/URL files on whatever repo the cwd
+// resolves to — an OSS upstream included (the spam-bot vector). Require an
+// explicit allowlisted target. Command-aware (`gh` is the actual command, not a
+// word in a message) so `git commit -m "… gh issue create …"` doesn't trip it.
+function ghCreateWithoutAllowedOwner(cmd: string): boolean {
+	for (const seg of cmd.split(/[\n;|&]+/)) {
+		const toks = seg.trim().split(/\s+/).filter(Boolean);
+		let i = 0;
+		while (i < toks.length && /^[A-Za-z_]\w*=/.test(toks[i])) i++; // skip env prefix
+		if (i >= toks.length || !/(?:^|\/)gh$/.test(toks[i])) continue; // gh isn't the command
+		const rest = toks.slice(i + 1);
+		if (!rest.includes("create") || !(rest.includes("issue") || rest.includes("pr"))) continue;
+		// An allowlisted -R/URL makes it safe; no owner (or a disallowed one) blocks.
+		if (namedOwners(seg).some((o) => ALLOWED_OWNERS[o] === true)) continue;
+		return true;
+	}
+	return false;
+}
+
 // pkill / killall are always pattern-based -> broad. For `kill`, skip the
 // leading signal spec (-9, -KILL, -s NAME, -n NUM, ...) and block when a
 // remaining TARGET is negative (-1 / -<pgid> = a process group / everything).
@@ -108,6 +128,17 @@ export function evaluate(toolName: string, input: Record<string, unknown>): Bloc
 					`Write to ${bad.join(", ")}/* blocked: outside the owner allowlist ` +
 					"(mattwilkinsonn, sealedsecurity). Never push / open a PR / file an issue on an " +
 					"upstream or OSS repo. See rule://commit-conventions.",
+			};
+		}
+
+		if (ghCreateWithoutAllowedOwner(cmd)) {
+			return {
+				block: true,
+				reason:
+					"GitHub issue/PR create blocked: pass an allowlisted `-R <owner>/<repo>` " +
+					"(mattwilkinsonn, sealedsecurity). A bare `gh issue create` / `gh pr create` files " +
+					"on whatever repo the cwd resolves to — an OSS upstream included. " +
+					"See rule://commit-conventions.",
 			};
 		}
 

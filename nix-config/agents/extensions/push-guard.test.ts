@@ -43,6 +43,19 @@ test("blocks pushes / writes to non-allowlisted owners", () => {
 	expect(bash("gh pr -R can1357/oh-my-pi create")?.block).toBe(true);
 });
 
+test("blocks a bare gh issue/pr create with no allowlisted target", () => {
+	expect(bash("gh issue create --title bug --body repro")?.block).toBe(true);
+	expect(bash("gh pr create --fill")?.block).toBe(true);
+	expect(bash("cd /tmp/upstream && gh issue create -t spam")?.block).toBe(true);
+	// an explicit allowlisted target is fine
+	expect(bash("gh issue create -R mattwilkinsonn/zireael -t bug")).toBeNull();
+	expect(bash("gh pr create -R sealedsecurity/sealed --fill")).toBeNull();
+	// not a create, or gh only mentioned in a message → allowed
+	expect(bash("gh issue list")).toBeNull();
+	expect(bash('git commit -m "note: block bare gh issue create"')).toBeNull();
+	expect(bash('jj describe -m "gh pr create guard"')).toBeNull();
+});
+
 test("allows pushes / writes to allowlisted owners", () => {
 	expect(bash("git push https://github.com/mattwilkinsonn/zireael my-branch")).toBeNull();
 	expect(bash("gh pr create -R sealedsecurity/sealed")).toBeNull();
