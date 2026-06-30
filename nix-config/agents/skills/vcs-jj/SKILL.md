@@ -96,6 +96,8 @@ jj restore --from @- file.txt          # restore one file from the parent
 
 Bookmarks are named pointers (jj's equivalent of a git branch). They do **not** auto-advance the way the working copy does.
 
+**Always put your change on a bookmark.** An unbookmarked change is invisible in the human's jjui and most review tooling — bookmark as soon as the change has an identity (right after the first `jj describe`), not only at submit time.
+
 ```bash
 jj bookmark create <name> -r @         # create, tracking @'s change ID
 jj bookmark list                       # list (after commit, the bookmark points at @-)
