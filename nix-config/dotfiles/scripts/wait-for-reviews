@@ -31,6 +31,7 @@
 #
 # Env: WAIT_BOTS (space list), WAIT_BACKSTOP_SECS (1200), WAIT_GRACE_SECS (300),
 #      WAIT_POLL_SECS (30).
+# shellcheck shell=bash
 set -euo pipefail
 PR="${1:?usage: wait-for-reviews <pr> [owner/repo]   (env: WAIT_BOTS WAIT_GRACE_SECS WAIT_BACKSTOP_SECS WAIT_POLL_SECS)}"
 REPO="${2:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
@@ -39,7 +40,9 @@ BACKSTOP="${WAIT_BACKSTOP_SECS:-1200}"
 GRACE="${WAIT_GRACE_SECS:-300}"
 INTERVAL="${WAIT_POLL_SECS:-30}"
 
-head="$(gh pr view "$PR" --repo "$REPO" --json headRefOid -q .headRefOid)"
+# head SHA via the adaptive router (gh-route picks REST or GraphQL by headroom),
+# so the launch's one head-ref read no longer always hits GraphQL.
+head="$(gh-route head-sha "$PR" "$REPO")"
 echo "wait-for-reviews: $REPO#$PR head=${head:0:10} bots=[$BOTS] grace=${GRACE}s backstop=${BACKSTOP}s"
 start=$(date +%s)
 
@@ -76,8 +79,11 @@ classify() {
 }
 
 while :; do
-  reviews="$( (gh api "repos/$REPO/pulls/$PR/reviews" --paginate 2>/dev/null || true) | jq -s 'add // []')"
-  comments="$( (gh api "repos/$REPO/issues/$PR/comments" --paginate 2>/dev/null || true) | jq -s 'add // []')"
+  # Route the poll reads through gh-route so the wait loop balances buckets too:
+  # gh-route emits the REST shape the classifier expects regardless of which API
+  # served it, and falls back to an empty array on error (bucket drained mid-loop).
+  reviews="$(gh-route reviews "$PR" "$REPO" 2>/dev/null || echo '[]')"
+  comments="$(gh-route comments "$PR" "$REPO" 2>/dev/null || echo '[]')"
   now=$(date +%s)
   elapsed=$((now - start))
   blocking=()

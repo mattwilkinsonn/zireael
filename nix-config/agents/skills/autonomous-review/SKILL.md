@@ -38,7 +38,10 @@ rules) lives in `skill://github-pr-review` — this skill adds the **loop** and 
    on allowlisted-owner repos only (see Boundaries).
 2. **Wait for the bots — always as a background task.** Launch `wait-for-reviews <pr>` through `bash` with **`async: true`** (never a blocking/foreground call) and a generous `timeout` (~1800s), then **yield** — do other work or end the turn; the harness wakes you with the result when it returns. **Don't busy-poll it** (no `job`-poll loop). It returns when every bot has reviewed the head, is rate/usage-limited, or reviewed an earlier commit and didn't re-trigger within the grace window; a backstop is the final fallback. No webhook/cron needed.
 3. **Triage** all four surfaces per `skill://github-pr-review`; enumerate every
-   reviewer (CodeRabbit / Greptile / cubic / Codex + any human).
+   reviewer (CodeRabbit / Greptile / cubic / Codex + any human). Under wave
+   load, pull the routable surfaces (review bodies, comments, check-runs) via
+   `gh-route` so triage doesn't pile onto the shared GraphQL bucket; the MCP
+   stays for inline-thread state + resolves (`github-pr-review` explains which).
 4. **Act:**
    - **Auto-fix + auto-resolve** clear, **bot-only** findings you can resolve
      without a judgment call (about half are mechanical — rename, guard, dep

@@ -154,6 +154,13 @@ in
       # Bash; gh + jq resolve from the dev set above.
       (writeShellScriptBin "wait-for-reviews" (builtins.readFile ../dotfiles/scripts/wait-for-reviews))
 
+      # gh-route — GitHub API bucket router (SEA-1083): sends each PR read to the
+      # REST or GraphQL bucket with more headroom so a fleet of agents sharing one
+      # token drains both 5000/hr buckets evenly instead of exhausting GraphQL
+      # while REST idles. Emits the REST JSON shape either way; wait-for-reviews
+      # and the review skills read through it. Bash; gh + jq resolve from the set.
+      (writeShellScriptBin "gh-route" (builtins.readFile ../dotfiles/scripts/gh-route))
+
       # hk — jj/git hook runner (jdx/hk), pinned via the `hk` flake input to
       # match the `hk.pkl` schema at the repo root. Built from source by nix so
       # the binary and schema can't drift (cargo-installed hk silently did).
