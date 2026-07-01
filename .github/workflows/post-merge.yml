@@ -1,29 +1,15 @@
 name: post-merge
 
-# Cheap post-merge sanity checks on `push: main`. The full PR-time
-# matrix already ran against the PR head, but a squash-merge creates
-# a new commit on main with a new SHA — we don't have a dedup-against-
-# PR mechanism (would need GitHub API calls per commit). The pragmatic
-# answer: run the cheap subset only (lints + smoke checks), let the
-# nightly catch heavier drift at 24h cadence.
+# Post-merge sanity check on `push: main`. A squash-merge creates a new
+# commit on main with a new SHA, so this re-runs the moon gate scoped to
+# the merge diff to confirm the squashed commit is actually green (the PR
+# ran against the PR head, not this SHA).
 #
-# What runs here:
-#
-#   - fmt + clippy on every Rust package (~1min warm-cache)
-#   - biome + tsc on akiflow-cli (skips `bun test` — that's the
-#     slow part)
-#   - markdownlint on every .md
-#   - brew style on Formula/*.rb (~5s on macos)
-#
-# What does NOT run here (relies on the PR's check set + nightly):
-#
-#   - `cargo nextest run` across both Rust crates × two OSes
-#   - `bun test` for akiflow-cli (~290 tests, 5min p95)
-#
-# Rationale: post-merge CI catches "main is broken now" within a
-# minute, the nightly catches "main was broken yesterday by an
-# upstream change" within 24h. The expensive PR-time gate isn't
-# duplicated.
+# `moon ci` here is affected-scoped to the pushed range (before..after),
+# so it runs only what the merge touched — not the whole suite. The
+# darwin flake-eval self-skips on Linux (os:macos); the nightly's macOS
+# leg covers it at 24h cadence, which is sufficient for a post-merge
+# smoke check.
 
 "on":
   push:
@@ -31,75 +17,29 @@ name: post-merge
 
 permissions:
   contents: read
-  id-token: write  # Determinate Nix in nix-config-lints needs OIDC
-
-env:
-  CARGO_TERM_COLOR: always
+  id-token: write # Determinate Nix (devenv) needs OIDC
 
 jobs:
-  rust-lints:
-    name: Rust lints (post-merge)
+  moon-ci:
+    name: moon ci (post-merge)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
+    env:
+      # The pushed range: the previous main tip .. the new (squash-merge)
+      # tip. moon scopes affected tasks to this diff.
+      MOON_BASE: ${{ github.event.before }}
+      MOON_HEAD: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v6
-      - name: Install Rust toolchain
-        run: |
-          rustup show active-toolchain || rustup toolchain install stable
-          rustup component add rustfmt clippy
-      - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "post-merge-rust-lints"
-          save-if: "true"
-      - name: cargo fmt --check
-        run: cargo fmt --all -- --check
-      - name: cargo clippy
-        # Single workspace-wide clippy invocation. Both jj-hooks
-        # and jj-gt are members; this lints them in one pass.
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-  akiflow-cli-lints:
-    name: akiflow-cli lints (post-merge)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: tools/akiflow-cli
-    steps:
-      - uses: actions/checkout@v6
-      - uses: oven-sh/setup-bun@v2
+          fetch-depth: 0 # moon affected-detection needs the range history
+      - uses: DeterminateSystems/determinate-nix-action@v3
+      - name: Cache proto toolchains
+        uses: actions/cache@v4
         with:
-          bun-version: "1.3"
-      - name: bun install
-        run: bun install --frozen-lockfile
-      - name: biome check
-        run: bunx biome check .
-      - name: tsc --noEmit
-        run: bunx tsc --noEmit
-
-  docs:
-    name: docs (post-merge)
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v6
-      - run: npm install -g markdownlint-cli2
-      - run: markdownlint-cli2 "**/*.md"
-
-  tap:
-    name: tap (post-merge)
-    runs-on: macos-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-      - run: brew style Formula/*.rb
-
-  # nix-config lints only — flake-eval is heavy (each Determinate Nix
-  # install is ~3 min × 6 hosts = ~18 min runner-minutes) and the
-  # nightly already runs the full eval matrix. Post-merge gets the
-  # cheap subset (lints) so a broken-on-main config surfaces within
-  # ~5 min; the nightly catches eval regressions within 24h.
-  nix-config-lints:
-    name: nix-config lints (post-merge)
-    uses: ./.github/workflows/ci-base-nix.yml
-    secrets: inherit
+          path: ~/.proto
+          key: proto-${{ runner.os }}-${{ hashFiles('.prototools') }}
+      - name: Install devenv
+        run: nix profile install --accept-flake-config nixpkgs#devenv
+      - name: moon ci
+        run: devenv shell -- moon ci

@@ -438,9 +438,8 @@ muscle memory.
 ## Development
 
 ```bash
-just install-deps   # install pre-commit, prek, lefthook, hk, markdownlint-cli2, actionlint
-just test           # check-deps + cargo nextest
-just ci             # fmt-check + clippy + test
+direnv allow              # one-time: devenv shell provides the hook-runner stack (pre-commit, prek, lefthook, hk, pkl) + rust/moon
+moon run jj-hooks:ci      # fmt + clippy + nextest
 ```
 
 The test suite includes integration tests that build real jj+git repos in

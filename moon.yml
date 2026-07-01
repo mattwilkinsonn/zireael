@@ -1,9 +1,10 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
 #
-# Root meta project (source '.'). Owns the repo-wide checks that aren't tied to
-# one tool: markdown lint (every *.md) and workflow lint (actionlint). Commands
-# match the old gate (ci-docs + hk's actionlint step). System tasks exec the
-# devenv PATH toolchain.
+# Root meta project (source '.'). Owns the repo-wide checks not tied to one
+# tool: markdown lint, workflow lint, and the root-level nix files (devenv.nix)
+# that the nix-config project doesn't cover. Plus the dev/release scripts that
+# replaced the retired Justfile (release, install-debug — runInCI:false, never
+# part of the gate). System tasks exec the devenv PATH toolchain.
 layer: 'library'
 language: 'bash'
 
@@ -14,7 +15,29 @@ tasks:
   actionlint:
     command: 'actionlint'
     inputs: ['/.github/workflows/*.yml', '/.github/workflows/*.yaml']
+  # Root-level *.nix (devenv.nix). maxdepth 1 so it doesn't recurse into
+  # nix-config/ (its own project gates those) or .devenv/ (the nix store).
+  nixfmt:
+    script: "find . -maxdepth 1 -name '*.nix' -print0 | xargs -0 nixfmt --check"
+    inputs: ['/*.nix']
+  deadnix:
+    script: "find . -maxdepth 1 -name '*.nix' -print0 | xargs -0 deadnix --fail"
+    inputs: ['/*.nix']
   ci:
-    deps: ['markdownlint', 'actionlint']
+    deps: ['markdownlint', 'actionlint', 'nixfmt', 'deadnix']
     options:
+      cache: false
+
+  # ── Dev + release entrypoints (replaced the Justfile). Never gated. ──
+  # `moon run root:release -- v0.3.0` cuts a release; install-debug builds
+  # the tools to ~/.cargo/bin. Args pass through after `--`.
+  release:
+    command: 'bash scripts/release.sh'
+    options:
+      runInCI: false
+      cache: false
+  install-debug:
+    command: 'bash scripts/install-debug.sh'
+    options:
+      runInCI: false
       cache: false

@@ -33,7 +33,7 @@ gh api repos/mattwilkinsonn/zireael/rulesets/<id> -X DELETE
     are disabled. Keeps `main`'s history linear by construction.
   - **Code-owner review required** (paired with zero-approval
     count: see below for the single-author-friendly logic).
-  - All per-tool CI checks pass (or skip — `skipped` counts).
+  - The `moon CI` rollup check passes (or skips — `skipped` counts).
   - Repo Admin bypass (`actor_id: 5`).
 
 ### Single-author code-owner gating
@@ -100,11 +100,11 @@ allow bypass via PRs (the default for most rules).
 ## Required-status-checks names
 
 The `required_status_checks[].context` strings must match the
-**job display name** GitHub renders in PR check listings. For
-reusable-workflow calls (jj-hooks.yml + jj-gt.yml calling
-ci-base-rust.yml), the rendered name is the called job's `name:`
-field, not the caller's job-id. See `docs/specs/platform/ci.md` for the full
-mapping.
+**job display name** GitHub renders in PR check listings. The gate is the
+single `moon CI` rollup — the `ci` job in `.github/workflows/ci.yml`, which
+runs `if: always()` and folds every `moon ci` leg into one stable context,
+so adding a moon task or project needs no ruleset edit. See
+`docs/specs/platform/ci.md` for the full model.
 
 ## Two-step rollout for new required checks
 

@@ -29,7 +29,7 @@ const main = defineCommand({
 		name: "af",
 		description: "Akiflow CLI - Task management and automation",
 		// Version comes from package.json so `af --version` matches the
-		// release the binary was built from. The `just release` recipe
+		// release the binary was built from. The `scripts/release.sh` release flow
 		// bumps `tools/akiflow-cli/package.json:version` in lockstep
 		// with the workspace Cargo.toml + Formula/*.rb files, and bun's
 		// `--compile` bundles the json import into the binary at build

@@ -1,6 +1,6 @@
 name: release
 
-# Triggered by `git push origin v*` from the `just release` recipe
+# Triggered by `git push origin v*` from `scripts/release.sh`
 # (or manually via `jj git push --tag v0.3.0`).
 #
 # Builds release artifacts for every monorepo tool, attaches them

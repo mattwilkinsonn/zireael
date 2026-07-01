@@ -28,6 +28,11 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
   stage-hook ref bounds in v1.45.0). `jj-hp push` always uses the diff
   range — the bookmark's ref bounds are its identity.
 
+### Changed — build + CI
+
+- Unified the local + CI gate on `moon ci` (moon + proto + devenv), replacing `just`, `hk`'s per-tool step list, and the per-tool GitHub workflows. `.prototools` pins bun/node/moon; `devenv.nix` provides the toolchain; `direnv allow` is the whole dev bootstrap.
+- Retired the `Justfile`; `release` and `install-debug` moved to `scripts/` (`moon run root:release` / `root:install-debug`).
+
 ### Fixed — jj-hooks
 
 - Parallel `jj-gt submit` hook runs no longer fail intermittently with

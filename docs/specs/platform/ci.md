@@ -1,374 +1,201 @@
 # CI matrix
 
-zireael's CI lives in seven GitHub Actions workflows + one reusable
-workflow. This page is the at-a-glance map: which workflow runs
-when, on what runner, gated by which filter.
+zireael's gate is **`moon ci`** — one command that runs every affected
+`runInCI` moon task, identical locally (the `hk` pre-push hook) and in CI
+(`.github/workflows/ci.yml`). Toolchains are pinned by `proto`
+(`.prototools`) + `rust-toolchain.toml` and provided by a `devenv`
+dev-shell (`devenv.nix`); moon runs *system* tasks against that PATH (no
+`.moon/toolchain.yml`). This page maps which workflow runs when, on what
+runner.
 
 ## Quick reference
 
-| Workflow | File | Jobs | Triggers | Path filter | Runner |
-| --- | --- | --- | --- | --- | --- |
-| `jj-hooks` | `jj-hooks.yml` | jj-hooks CI (Lints + Test ×2 OSes) | PR | `jj-hooks.yml` | GitHub ubuntu / macos |
-| `jj-gt` | `jj-gt.yml` | jj-gt CI (Lints + Test ×2 OSes) | PR | `jj-gt.yml` | GitHub ubuntu / macos |
-| `akiflow-cli` | `akiflow-cli.yml` | akiflow-cli CI | PR | `akiflow-cli.yml` | GitHub ubuntu |
-| `tap` | `tap.yml` | tap CI | PR | `tap.yml` | GitHub macos (needs `brew style`) |
-| `docs` | `docs.yml` | docs CI | PR | `docs.yml` | GitHub ubuntu |
-| `post-merge` | `post-merge.yml` | Rust lints + akiflow lints + docs + tap (cheap subset) | push: main | none | GitHub ubuntu / macos |
-| `nightly` | `nightly.yml` | (full set, no filter) | cron + dispatch | none | GitHub ubuntu / macos |
-| `release` | `release.yml` | matrix builds + publish + tap bump + crates publish | push: tags `v*` | none | GitHub (per-target) |
-| _(reusable)_ | `ci-base-rust.yml` | Lints + Test matrix | `workflow_call:` from `jj-hooks.yml` + `jj-gt.yml` + `nightly.yml` | n/a | callee inherits |
+| Workflow | File | Runs | Triggers | Runner |
+| --- | --- | --- | --- | --- |
+| `ci` | `ci.yml` | `moon ci` (affected) + a darwin-eval leg | PR | ubuntu + macos |
+| `post-merge` | `post-merge.yml` | `moon ci` scoped to the merge diff | push: main | ubuntu |
+| `nightly` | `nightly.yml` | `moon run :ci` (full) + darwin eval + tap-install smoke | cron + dispatch | ubuntu + macos |
+| `release` | `release.yml` | matrix builds + publish + tap bump + crates publish | push: tags `v*` | per-target |
+| `flake-update-daily` | `flake-update-daily.yml` | `nix flake update llm-agents` → PR | cron + dispatch | ubuntu |
+| `flake-update-weekly` | `flake-update-weekly.yml` | `nix flake update` (all) → PR | cron + dispatch | ubuntu |
+
+## The moon gate
+
+`moon ci` resolves the affected `runInCI` tasks (scoped to the diff via
+`MOON_BASE`/`MOON_HEAD`) and runs them with moon's cache. One command
+covers every project:
+
+| Project | Source | `ci` task deps |
+| --- | --- | --- |
+| `jj-hooks` | `tools/jj-hooks` | `fmt` + `clippy` + `test` (cargo) |
+| `jj-gt` | `tools/jj-gt` | `fmt` + `clippy` + `test` (cargo; `dependsOn: jj-hooks`) |
+| `akiflow-cli` | `tools/akiflow-cli` | `lint` (biome) + `typecheck` (tsc) + `test` (bun) |
+| `nix-config` | `nix-config` | nixfmt + deadnix + statix + nil + shellcheck + shfmt + taplo + `flake-eval-mattpc-wsl` + `flake-eval-darwin` |
+| `tap` | `Formula` | `brew-style` (guarded when brew absent) |
+| `root` | `.` | `markdownlint` + `actionlint` |
+
+Non-gate tasks are `runInCI: false`: `jj-gt:test-live` (needs
+`JJ_GT_LIVE_*` creds), `root:release`, `root:install-debug`.
+
+The darwin flake-eval carries `options.os: macos` (nix-darwin attrs don't
+evaluate off-macOS), so it self-skips on Linux and runs on the macOS leg.
+
+### Toolchain
+
+- `.prototools` pins `bun`, `node`, `moon` (the single version source).
+- `rust-toolchain.toml` pins the exact Rust channel; `devenv.nix` builds
+  it via fenix.
+- `devenv.nix` provides proto, the Rust toolchain, every linter
+  (nixfmt/deadnix/statix/nil/shellcheck/shfmt/taplo/actionlint/markdownlint),
+  `hk`, `jj`, and the hook-framework backends jj-hooks' tests drive
+  (pre-commit/prek/lefthook/pkl). `.envrc` enters it via `use devenv`.
 
 ## CI model
 
-PR-only validation. Direct pushes to `main` don't fire any of the
-PR workflows by design — the assumption is changes land via PRs
-once branch-protection's required-status-checks gate is wired up.
+PR-validated via `moon ci`. Direct pushes to `main` land via squash-merge
+(branch protection); `post-merge.yml` re-runs the affected gate on the new
+`main` SHA to confirm the squashed commit is green. The nightly cron
+catches drift from environmental changes (toolchain auto-updates, registry
+cache invalidation) that don't show as a diff.
 
-The nightly cron catches drift from environmental changes (toolchain
-auto-updates, registry cache invalidation, third-party API shape
-changes — anything that doesn't show up as a diff in this repo).
+### Graphite skip
 
-Exceptions:
-
-- `release.yml` keeps `push: tags v*` — it publishes binaries.
-- `nightly.yml` keeps `schedule:` + `workflow_dispatch:` — the
-  daily backstop.
-
-### Graphite merge queue
-
-zireael lives on a personal GitHub account, which doesn't support
-Graphite's merge queue. The `withgraphite/graphite-ci-action`
-optimize_ci step in each workflow is a no-op without
-`GRAPHITE_TOKEN` set; it's wired up so the migration to an org
-account (or Graphite extending MQ to personal repos) is a single
-secret-add, not a workflow edit.
+The `withgraphite/graphite-ci-action` optimize_ci step is a no-op without
+`GRAPHITE_TOKEN`; it's wired so migrating to an org account (or Graphite
+extending MQ to personal repos) is a single secret-add.
 
 ### Fixup pushes
 
-`concurrency: cancel-in-progress: false` on PR workflows means a
-fixup-push to a PR branch doesn't cancel the in-flight run for
-the previous SHA — both finish to completion. Cost is ~1 wasted
-CI run per fixup; cheaper than chasing cancelled checks against
-required-status-checks gates.
+`concurrency: cancel-in-progress: false` on `ci.yml` — a fixup-push
+doesn't cancel the in-flight run; both finish. ~1 wasted run per fixup,
+cheaper than chasing cancelled required-checks.
 
 ## Runner choice
 
-Zireael isn't large enough to justify Blacksmith. All workflows
-run on GitHub-hosted runners.
+GitHub-hosted runners throughout.
 
 | Surface | Runner |
 | --- | --- |
-| Linux ARM (release, nightly) | `ubuntu-24.04-arm` |
-| Linux x64 (everything else Linux) | `ubuntu-latest` |
-| macOS ARM (release, nightly, tap lint) | `macos-latest` |
+| Linux x64 (`moon ci`, post-merge, nightly full) | `ubuntu-latest` |
+| macOS (darwin flake-eval, tap, nightly macOS leg) | `macos-latest` |
+| Linux ARM (release) | `ubuntu-24.04-arm` |
 
-Per-target release matrix:
+Per-target release matrix: `aarch64-apple-darwin` → `macos-latest`;
+`x86_64-unknown-linux-gnu` → `ubuntu-latest`; `aarch64-unknown-linux-gnu`
+→ `ubuntu-24.04-arm`. No `x86_64-apple-darwin` target — nothing shipped
+here runs on Intel macs.
 
-| Target | Runner |
-| --- | --- |
-| `aarch64-apple-darwin` | `macos-latest` |
-| `x86_64-unknown-linux-gnu` | `ubuntu-latest` |
-| `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` |
+## Affected detection
 
-No `x86_64-apple-darwin` target — none of the binaries shipped from
-this repo run on Intel macs. Add `macos-26-intel` to release.yml's
-matrix if that changes.
+moon scopes `ci` to the diff via `MOON_BASE`/`MOON_HEAD`:
 
-## Path filters
+- **`ci.yml` (PR):** base = PR base SHA, head = PR head SHA.
+- **`post-merge.yml` (push: main):** base = `github.event.before`, head =
+  the new SHA — the merge range.
+- **`nightly.yml`:** no base — `moon run :ci` runs every project's `ci`
+  unconditionally (a fresh runner has no moon cache, so everything
+  re-runs, which is the point: catch upstream drift).
 
-Single source of truth per filter, in `.github/path-filters/<name>.yml`.
-Two consumers per filter:
-
-1. The corresponding workflow (`dorny/paths-filter` reads the
-   file directly).
-2. Local `just ci` (the `_filter-touched <name>` recipe in
-   `Justfile` parses the file with awk and compares to
-   `jj diff --from main@origin`).
-
-Drift between remote and local CI is structurally impossible —
-both consumers read the same file.
-
-| Filter | File | Consumers | Fires |
-| --- | --- | --- | --- |
-| `jj-hooks` | `jj-hooks.yml` | `jj-hooks.yml`, `just ci-jj-hooks` (via `_filter-touched`) | jj-hooks CI |
-| `jj-gt` | `jj-gt.yml` | `jj-gt.yml`, `just ci-jj-gt` | jj-gt CI (filter includes `tools/jj-hooks/**` since jj-gt path-depends on it) |
-| `akiflow-cli` | `akiflow-cli.yml` | `akiflow-cli.yml`, `just ci-akiflow-cli` | akiflow-cli CI |
-| `tap` | `tap.yml` | `tap.yml`, `just ci-tap` | tap CI |
-| `docs` | `docs.yml` | `docs.yml`, `just ci-docs` | docs CI |
-
-### Filter parsing limits
-
-The Justfile's `_filter-touched` recipe parses filter files with
-awk and supports only:
-
-- `path/**` (recursive directory match)
-- `exact/file/path` (exact match)
-
-`dorny/paths-filter` supports full glob syntax. If a filter file
-ever uses a more exotic pattern (`tools/**/Cargo.toml`, character
-classes, alternation), the Justfile recipe needs an expanded parser
-to match. Today every filter file stays within the simple
-`path/**` + exact-file subset.
+The one remaining path filter (`.github/path-filters/nix-config.yml`)
+gates only the **macOS darwin-eval leg** in `ci.yml`, so a non-nix PR
+never spawns a (costly) macOS runner.
 
 ## Trigger flow per event
 
-### Feature-branch push (no PR open yet)
+### Feature-branch push (no PR)
 
-Nothing fires. CI doesn't validate feature-branch pushes in
-isolation. The local `just ci` covers fmt + clippy + tests
-before the push leaves the developer's machine; the path-filtered
-remote workflows fire when the PR opens.
+Nothing fires. The local `hk` pre-push hook runs `moon ci` before the push
+leaves the machine.
 
 ### `pull_request`
 
-Always runs (per workflow that fires):
-
 - **Optimize CI** (Graphite no-op without token)
-- **Detect &lt;Thing&gt; Changes** (paths-filter probe)
-
-Runs if path filter matches:
-
-- **jj-hooks CI** (if `jj-hooks` matches) — calls ci-base-rust.yml:
-  - **Lints (jj-hooks)** — fmt-check + clippy
-  - **Test (jj-hooks, ubuntu-latest)** — cargo nextest
-  - **Test (jj-hooks, macos-latest)** — cargo nextest
-- **jj-gt CI** (if `jj-gt` matches) — same shape as jj-hooks CI
-- **akiflow-cli CI** (if `akiflow-cli` matches) — bun install +
-  biome + tsc + bun test
-- **tap CI** (if `tap` matches) — brew style on the formulae
-- **docs CI** (if `docs` matches) — markdownlint-cli2
-
-A doc-only PR fires only the `docs` workflow — every other
-workflow's `changes` job reports `changed=false` and the `ci` job
-skips (`skipped` counts as passing for required-status-checks).
+- **Detect nix-config Changes** (paths-filter probe for the darwin leg)
+- **moon ci (linux)** — the full affected gate (darwin eval self-skips)
+- **moon ci (darwin eval)** — macOS, only if nix-config changed
+- **moon CI** — the rollup, the single required status check
 
 ### `schedule` (nightly backstop)
 
-06:00 UTC daily, plus `workflow_dispatch` for manual reruns.
-Ignores path filters and runs every tool's full check set:
-
-- **jj-hooks (nightly)** — full Rust matrix
-- **jj-gt (nightly)** — full Rust matrix
-- **akiflow-cli (nightly)** — bun lint + typecheck + test
-- **tap (nightly)** — brew style
-- **docs (nightly)** — markdownlint
-
-`workflow_dispatch` runs the same set.
+06:00 UTC daily + `workflow_dispatch`. Skipped when `main` hasn't advanced
+since the last nightly. Runs `moon run :ci` (full, all projects) on Linux;
+the darwin eval and `tap:ci` on macOS; and the tap-install smoke test
+(`brew install`/`test` each published formula). A `report` job posts the
+aggregate status to the HEAD commit.
 
 ### `push: main`
 
-Post-merge sanity checks via `post-merge.yml` — the cheap subset
-of the PR-time gate, no path filter, runs unconditionally on
-every push to main. Catches "main is broken now" within ~1 minute
-without re-running the expensive bits already covered by the PR.
-
-What runs:
-
-- **Rust lints (post-merge)** — `cargo fmt --check` +
-  `cargo clippy --workspace --all-targets` (~1m warm cache).
-- **akiflow-cli lints (post-merge)** — `bun install` + `bunx
-  biome check` + `bunx tsc --noEmit` (~30s).
-- **docs (post-merge)** — `markdownlint-cli2 "**/*.md"` (instant).
-- **tap (post-merge)** — `brew style Formula/*.rb` (~5s).
-
-What does NOT run on push: main (relies on the PR check set +
-nightly backstop):
-
-- `cargo nextest run` across both Rust crates × two OSes.
-- `bun test` for akiflow-cli (~290 tests; ~2-3s warm cache, 5min
-  timeout for cold-cache CI runners on slow days).
-
-**Dedup against PRs:** GitHub doesn't natively dedup
-"this commit was just merged from a green PR" — a squash-merge
-creates a new commit on main with a new SHA, so the PR's checks
-don't transfer. You'd need custom workflow logic that queries
-the API for "find the closed PR for this SHA, check its CI
-results" — ~50 LoC, not worth the complexity for zireael's
-scale. The pragmatic answer: the cheap subset on push:main
-catches the obvious breakages (a fmt regression slipped in via
-admin bypass, a markdown lint regression in a doc commit) at
-trivial cost.
-
-Other push:main triggers (not CI):
-
-- `release.yml` — `push: tags v*` triggers the release matrix,
-  tap-bump, and crates publish.
+`post-merge.yml` runs `moon ci` scoped to the merge range. Non-blocking;
+confirms the squashed `main` SHA is green.
 
 ### `push: tags v*`
 
-Runs the release matrix:
-
-- jj-hooks + jj-gt binaries built per-target (Rust matrix)
-- akiflow-cli `af` binary built per-target (bun compile matrix)
-- One GitHub Release attached with every tarball + .sha256
-- Tap formulae auto-bumped + committed back to main (skipped on prereleases)
-- `cargo publish jj-hooks` then `cargo publish jj-gt` (skipped on prereleases)
-
-Prerelease tags (`v0.3.0-rc.1`) skip the tap-bump + cargo-publish
-jobs so the version number isn't burned on crates.io or the tap.
+`release.yml`: per-target binary builds (Rust matrix + bun compile),
+one GitHub Release with every tarball + `.sha256`, tap-formula auto-bump
+committed back to `main`, then `cargo publish jj-hooks` → `jj-gt`.
+Prerelease tags (`v0.3.0-rc.1`) skip the tap-bump + cargo-publish jobs.
 
 ## Required status checks
 
-Branch protection enforces the following checks pass (or skip —
-`skipped` counts as passing). Wired via the GitHub Ruleset JSON
-at `.github/rulesets/main-protection.json`. Apply with
-`gh api repos/mattwilkinsonn/zireael/rulesets -X POST --input
+Branch protection (GitHub Ruleset JSON at
+`.github/rulesets/main-protection.json`) requires the single **`moon CI`**
+rollup context (the `ci` job in `ci.yml`, `if: always()`, treating
+`success`/`skipped` as pass). Apply with
+`gh api repos/mattwilkinsonn/zireael/rulesets/<id> -X PUT --input
 .github/rulesets/main-protection.json`.
 
-| Required check | Workflow | Notes |
-| --- | --- | --- |
-| `jj-hooks CI` | jj-hooks.yml | Rollup gate over `jj-hooks (matrix) / *` |
-| `jj-gt CI` | jj-gt.yml | Rollup gate over `jj-gt (matrix) / *` |
-| `nix-config CI` | nix-config.yml | Rollup gate over lints + every per-host `flake eval (*)` |
-| `akiflow-cli CI` | akiflow-cli.yml | Inline single-job |
-| `tap CI` | tap.yml | Inline single-job |
-| `docs CI` | docs.yml | Inline single-job |
+The ruleset also enforces: squash-merge only; code-owner review required
+(paired with `required_approving_review_count: 0` so a single-author repo
+isn't locked out); linear history; no force-push; no branch deletion;
+conversation resolution required.
 
-In addition to status checks, the ruleset enforces:
+GitHub keys required-status-checks on the **job display name**. When you
+rename the rollup job, follow the two-step rollout: land the workflow
+change first (the new name appears in PR checks), then after it reports a
+conclusion on one PR, update the ruleset — reverse order locks merging
+(the required check exists but no commit has reported it).
 
-- **Squash-merge only.** `rebase` and `merge` (merge commit) are
-  disabled. PRs land as a single squashed commit on `main`,
-  keeping history linear by construction.
-- **Code-owner review required** — see `.github/CODEOWNERS` for
-  the assignment table. Paired with `required_approving_review_count: 0`
-  so a single-author repo isn't locked out today; the file is in
-  place for when collaborators arrive and the approval count
-  bumps to 1.
-- Linear history, no force-push, no branch deletion, conversation
-  resolution required.
+## Local gate
 
-Doc-only PRs see most status checks reported as `skipped` (path
-filter didn't match) and merge fine — the gate passes when every
-check reports a conclusion, regardless of whether it actually ran.
+`hk`'s pre-push hook is a one-line shell over `moon ci` (`hk.pkl`),
+installed on devenv shell entry (`hk install`, idempotent). It runs the
+same affected gate as CI. Bypass with `HK=0 git push` or
+`git push --no-verify`.
 
-GitHub's ruleset keys required-status-checks on the **job display
-name** (the value after `name:` in the job, or the rendered name
-of a matrix expansion). When you add a new job or rename one,
-two-step rollout:
-
-1. Land the workflow change first (job appears in PR checks).
-2. After it's reported a conclusion on at least one PR, add it
-   to the ruleset's required-status-checks list.
-
-Reverse order locks the queue: the new check is required but no
-PR has reported on it yet, so nothing merges until the workflow
-lands separately.
-
-### Rollup gates for reusable workflows
-
-When a workflow's main job delegates to a reusable
-(`uses: ./.github/workflows/foo.yml`), GitHub publishes the
-_reusable's children_ as check contexts — prefixed with the
-caller-job's display name — but does NOT publish the caller-job
-itself as a standalone context.
-
-That breaks the required-check gate two different ways:
-
-- **Path-filter match (work fires):** the published checks are
-  `<workflow> CI / <child job>` (e.g. `jj-gt CI / Lints (jj-gt)`),
-  with a workflow-name prefix. Requiring `jj-gt CI` matches nothing.
-- **Path-filter mismatch (work skipped):** the caller-job's `if:`
-  is false, so the reusable never dispatches and its children
-  never report. A required check listing those child names would
-  block doc-only PRs forever.
-
-The fix is a **rollup gate**: a small job in each affected workflow
-named exactly what the ruleset references (`jj-hooks CI`,
-`jj-gt CI`, `nix-config CI`), with `if: always()` so it ALWAYS
-fires, that walks `needs.<job>.result` and treats `success` /
-`skipped` as pass and `failure` / `cancelled` as fail.
-
-The dispatch job (the one that actually `uses:` the reusable) gets
-renamed and given a `name: <tool> (matrix)` so its children
-appear as `<tool> (matrix) / <child>` on the PR page — readable as
-nested checks, but not the ones branch protection gates on.
-
-See `jj-hooks.yml`, `jj-gt.yml`, and `nix-config.yml` for the
-exact shape. Inline single-job workflows (`akiflow-cli.yml`,
-`tap.yml`, `docs.yml`) don't need this pattern — they publish their
-own job's name as the check context directly.
-
-## Local `just ci`
-
-`just ci` mirrors the same gating locally:
-
-- Reads `.github/path-filters/<name>.yml` via `_filter-touched`.
-- For each filter whose pattern matches the working-copy diff
-  (`jj diff --from main@origin --to @`), runs the corresponding
-  `just ci-<tool>` recipe.
-- `just ci-all` ignores the filter and runs every tool — useful
-  for belt-and-braces before pushing.
-
-Per-tool recipes:
-
-| Recipe | Commands |
-| --- | --- |
-| `ci-jj-hooks` | `cargo fmt -p jj-hooks --check` + clippy + nextest |
-| `ci-jj-gt` | same shape; live tests excluded (`-E 'not test(gh_live)...'`) |
-| `ci-jj-gt-live` | live integration tests; needs `JJ_GT_LIVE_*` env |
-| `ci-akiflow-cli` | bun install + biome + tsc + bun test (5min timeout, ~2-3s warm cache) |
-| `ci-tap` | `brew style Formula/*.rb` (degrades to warn on Linux) |
-| `ci-docs` | `markdownlint-cli2 "**/*.md"` |
-
-Drift between local and remote is structurally minimised by:
-
-- Same path-filter files consumed by both.
-- Same lint / test invocations (the recipes wrap the same `cargo
-  fmt` / `bunx biome check` etc. that the remote workflows run).
-- Same config files: `clippy.toml`, `biome.json`,
-  `.markdownlint-cli2.jsonc`, `hk.pkl`, all in the repo root or
-  tool dir.
-
-The remaining gap is environment: a contributor running an older
-toolchain, no `markdownlint-cli2` on PATH, etc. The
-`install-deps` recipe at repo root tries to backfill that for
-mattfw / mattpc-wsl / Darwin via per-tool delegated install
-recipes.
+Dev bootstrap is `direnv allow` — the devenv shell provides the whole
+toolchain; there is no separate install step.
 
 ## Fail-fast policy and timeouts
 
-Every test step has a `timeout-minutes` cap so a hung test
-doesn't burn an hour of runner time. `--no-fail-fast` on
-`cargo nextest` so one failure doesn't mask the rest.
+Every job has a `timeout-minutes` cap. `cargo nextest` uses
+`--no-fail-fast` so one failure doesn't mask the rest.
 
-Current values:
+| File | Job | Cap |
+| --- | --- | --- |
+| `ci.yml` | moon ci (linux) | 30m |
+| `ci.yml` | moon ci (darwin eval) | 30m |
+| `post-merge.yml` | moon ci | 30m |
+| `nightly.yml` | moon run :ci / darwin+tap | 45m |
+| `nightly.yml` | validate-tap | 15m |
+| `release.yml` | per-target build | 30m |
 
-| File | Surface | Step | Job |
-| --- | --- | --- | --- |
-| `ci-base-rust.yml` | Lints | (sub-second) | 10m |
-| `ci-base-rust.yml` | Test (per package, per OS) | (default) | 20m |
-| `akiflow-cli.yml` | bun test | 3m | 5m |
-| `tap.yml` | brew style | (instant) | 5m |
-| `docs.yml` | markdownlint | (instant) | 3m |
-| `release.yml` | per-target build | (build dominates) | 30m |
-| `release.yml` | publish jobs | (instant) | 5–10m |
-| `nightly.yml` | each tool's full run | (uses ci-base-rust caps) | 20m |
-
-`release.yml`'s `strategy.fail-fast: false` lets the Linux x64 and
-Linux ARM builds complete even if macOS fails (or vice versa) so
-you see every target's failure mode in one run.
+`release.yml`'s `strategy.fail-fast: false` lets each target's failure
+surface in one run.
 
 ## Maintenance notes
 
-- **Adding a new tool** — see the
-  [phase A → phase B → phase C](../zireael-migration-plan.md) flow
-  for the canonical layout. The new tool needs:
-  1. Path filter at `.github/path-filters/<tool>.yml`
-  2. Workflow at `.github/workflows/<tool>.yml` (consume
-     `ci-base-rust.yml` if Rust, inline otherwise). If you use a
-     reusable workflow, also add the rollup gate pattern (see
-     "Rollup gates for reusable workflows" above) so branch
-     protection has a stable check context to gate on.
-  3. Path entry in `.github/workflows/release.yml`'s matrix +
-     the bump-formulae.py script
-  4. `hk.pkl` step gated on the new file glob
-  5. `Justfile` recipe + entry in `just ci`'s auto-detect chain
-  6. Update the required-status-checks list in the ruleset JSON
-     (after at least one PR has run the new workflow)
-- **Renaming a job** — the required-status-check string changes
-  too. Follow the two-step rollout (above) to avoid locking the
-  queue.
-- **Bumping an action version** — generally safe; verify with
-  actionlint before merging. The big breaking points are
-  `upload-artifact@v5+` (unique artifact names per run) and
-  `download-artifact@v8+` (merge-on-default).
+- **Adding a new project** — create its `<dir>/moon.yml` (system tasks +
+  a `ci` aggregate), register it in `.moon/workspace.yml`. `moon ci` picks
+  it up automatically; no workflow, path-filter, or ruleset edit needed
+  (the single `moon CI` rollup already gates it).
+- **Adding a gate check** — add a task to the relevant `moon.yml` (with a
+  `runInCI` default of true) and wire it into that project's `ci` deps.
+  Local + CI pick it up with no workflow change.
+- **A new release target** — add it to `release.yml`'s matrix + the
+  `bump-formulae.py` script.
+- **Bumping bun/node/moon** — edit `.prototools` (proto re-installs on the
+  next shell entry / CI run). Bumping Rust — edit `rust-toolchain.toml`
+  and the fenix `sha256` in `devenv.nix`.
+- **Bumping an action version** — verify with actionlint. Breaking points:
+  `upload-artifact@v5+` (unique names per run), `download-artifact@v8+`
+  (merge-on-default).
