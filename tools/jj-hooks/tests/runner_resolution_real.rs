@@ -209,12 +209,21 @@ fn resolver_layer2_real_pre_commit_via_install_shim() {
     // We probe at test time: try `python -mpre_commit --version`
     // against the host's python3. If that works, run the real
     // test; otherwise skip with a clear message.
+    //
+    // The probe must strip PYTHONPATH: the real push below runs the
+    // interpreter under `env_clear()`, so `pre_commit` has to be
+    // importable from python3's own sys.path — not via an ambient
+    // PYTHONPATH. A Nix devenv shell exports a PYTHONPATH pointing at
+    // pre-commit's site-packages, which would make the probe pass while
+    // the env_clear'd real run fails; removing it here keeps the probe
+    // an honest predictor (skip, not fail, when the module isn't real).
     if skip_if_missing("python3") {
         return;
     }
     let python3 = TestRepo::find_on_parent_path("python3").unwrap();
     let probe = std::process::Command::new(&python3)
         .args(["-mpre_commit", "--version"])
+        .env_remove("PYTHONPATH")
         .output()
         .unwrap();
     if !probe.status.success() {
