@@ -13,9 +13,41 @@
 # `system` role and accepts `developer`. Send `developer` for that one model
 # so requests don't 400 — scoped to litellm/codex only; every other gateway
 # model keeps default chat-completions shaping.
+#
+# Claude via the gateway rides the openai-completions wire, so LiteLLM
+# discovery marks it reasoning-capable but can't synthesize the effort ladder
+# the thinking selector is gated on — so no selector shows. Declare it per
+# Claude model below: `thinking.mode: effort` surfaces the minimal..xhigh
+# selector and `compat` sends `reasoning_effort` (openai format), which the
+# gateway maps to Claude's thinking budget. The selector defaults to off — a
+# level is opt-in per session — so this adds the control without default spend.
 providers:
   litellm:
     modelOverrides:
       codex:
         compat:
           supportsDeveloperRole: true
+      claude-opus:
+        thinking:
+          mode: effort
+          efforts: [minimal, low, medium, high, xhigh]
+          defaultLevel: medium
+        compat:
+          supportsReasoningEffort: true
+          thinkingFormat: openai
+      claude-sonnet:
+        thinking:
+          mode: effort
+          efforts: [minimal, low, medium, high, xhigh]
+          defaultLevel: medium
+        compat:
+          supportsReasoningEffort: true
+          thinkingFormat: openai
+      claude-haiku:
+        thinking:
+          mode: effort
+          efforts: [minimal, low, medium, high, xhigh]
+          defaultLevel: medium
+        compat:
+          supportsReasoningEffort: true
+          thinkingFormat: openai
