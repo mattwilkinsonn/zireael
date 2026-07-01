@@ -49,7 +49,7 @@ gt submit --no-interactive                           # push + open the PR
 ```
 
 - **`gt sync`** pulls the latest `main`, rebases your open branches onto it, and prompts to delete merged/closed branches (`--no-restack` skips the rebase, `-f` skips prompts). Run it at the start of a change.
-- **`gt create [name]`** creates a new branch stacked on the current branch and commits staged changes. `--update` (`-u`) stages tracked changes first; `--all` (`-a`) also stages untracked files. `-m` is repeatable — pass the subject, body, and `Co-Authored-By: seal <…>` trailer as separate `-m` values (each becomes a paragraph).
+- **`gt create [name]`** creates a new branch stacked on the current branch and commits staged changes. `--update` (`-u`) stages tracked changes first; `--all` (`-a`) also stages untracked files. `-m` is repeatable — pass the subject, body, and `Co-Authored-By: seal <…>` trailer as separate `-m` values (each becomes a paragraph). **Stage before you create** — a `gt create` with nothing staged makes an *empty* branch, so use `-u` / `-a` (or a prior `git add`).
 - **`gt submit`** force-pushes (with lease) your branch and opens/updates its PR. In `--no-interactive` mode it skips the metadata prompt and creates the PR in **draft**; author the title/description yourself and mark it ready:
 
 ```sh
@@ -127,7 +127,10 @@ gt submit --no-interactive                           # opens your PR on top; the
 ## Troubleshooting
 
 - **Corrupted stack metadata** (a branch shows the wrong parent): `gt track --parent <parent>` re-points it, then `gt restack` rebuilds the chain.
+- **`ERROR: Cannot perform this operation on untracked branch`** (a branch `gt` isn't tracking — common right after a clone or a raw `git checkout -b`): adopt it with `gt track -p main` (or `gt track --parent <parent>` mid-stack), then continue; `gt restack` if the parent has moved.
 - **Undo a `gt` mutation:** `gt undo` reverts the most recent Graphite operation.
 - **A pushed branch won't submit** (trunk out of sync): `gt sync` first, then `gt submit`.
 - **Conflicts during restack/sync:** `gt` drops you into a git rebase — fix the files, `git add`, `git rebase --continue`, then re-run the `gt` command.
+- **`gt restack` / `gt sync` are repo-wide, not stack-scoped** — they rebase *every* tracked branch that needs it and can surface conflicts in branches unrelated to your work. In a single-branch clone that rarely bites; if an unrelated branch conflicts, resolve it or rebase just yours with `git rebase <parent>`, then re-run.
+- **Rebase interrupted mid-conflict** (e.g. the session reset): run `git status` — the unmerged files may already be resolved (no conflict markers), in which case `git add <files>` and `git rebase --continue`, then re-run the `gt` command. Deeper recovery: `skill://session-recovery`.
 - **Matt reviews with jj.** He points `jj` at the clones read-only; you never run `jj` in your clone — all your VCS is `git` + `gt`.
