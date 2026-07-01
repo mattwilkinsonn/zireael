@@ -17,7 +17,7 @@
   };
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
     # Base channel for the dev hosts via shared/unstable-wholesale.nix —
     # the Mac + WSL dev boxes pull every package through this.
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixos-unstable";
