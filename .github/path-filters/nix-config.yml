@@ -1,20 +1,11 @@
-# Path filter for the nix-config linter chain (top-level gate).
-# Consumed by:
-# - `.github/workflows/nix-config.yml`'s `lints` job (remote CI, via
-#   dorny/paths-filter) — gates whether the linter sub-workflow runs
-#   at all on a PR.
-# - `just ci` locally (via the root Justfile's `_filter-touched` helper)
+# Path filter for the nix-config change gate.
+# Consumed by `.github/workflows/ci.yml` (dorny/paths-filter) to decide
+# whether the macOS darwin-flake-eval leg runs — a non-nix PR skips the
+# (costly) macOS runner. The full moon gate on Linux runs regardless.
 #
-# Per-host gating for flake-eval lives in nix-config-hosts.yml; this
-# file is the broader "anything nix-related touched" check.
-#
-# Liberal on purpose. False positives (running linters/eval when
-# strictly not needed) are cheap; false negatives ship regressions.
+# Liberal on purpose. False positives (spawning the macOS leg when
+# strictly not needed) are cheap; false negatives ship a darwin regression.
 nix-config:
   - 'nix-config/**'
-  - 'hk.pkl'
-  - '.github/workflows/nix-config.yml'
-  - '.github/workflows/ci-base-nix.yml'
+  - '.github/workflows/ci.yml'
   - '.github/path-filters/nix-config.yml'
-  - '.github/path-filters/nix-config-hosts.yml'
-

@@ -2,8 +2,8 @@ name: ci
 
 # The unified moon gate. One workflow runs `moon ci` (every affected
 # runInCI moon task) inside the devenv shell — the same command the hk
-# pre-push hook runs locally. Replaces the per-tool workflows once the
-# `main` ruleset is re-pointed at the `moon CI` rollup below.
+# pre-push hook runs locally. The single gate for PRs — the `main` ruleset
+# requires the `moon CI` rollup below.
 #
 # proto (from devenv) installs the pinned bun/node/moon on shell entry;
 # moon then execs the devenv PATH toolchain (system tasks). The darwin

@@ -1,8 +1,0 @@
-# Path filter for markdown documentation. Lint-only — doesn't gate
-# any test job. Matches every .md file in the repo plus the
-# markdownlint config itself so a config edit re-runs the lint.
-docs:
-  - '**/*.md'
-  - '.markdownlint-cli2.jsonc'
-  - '.github/workflows/docs.yml'
-  - '.github/path-filters/docs.yml'

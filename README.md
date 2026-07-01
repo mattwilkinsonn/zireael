@@ -106,26 +106,16 @@ Matts-MacBook-Pro).
 ## Development
 
 ```bash
-just install-deps   # one-time: installs rust toolchain, hk, jj, gh, gt, bun, ...
-just ci             # auto-detect which tools' paths the working-copy diff touches
-                    # and run only those tools' CI suites. Mirrors the per-tool
-                    # GitHub workflow exactly — same recipes, same checks.
-just ci-all         # unconditional: every tool's full suite.
+direnv allow        # one-time: enters the devenv shell (rust, bun, node, moon, hk, jj, linters)
+moon ci             # run every affected task (the same gate CI + the pre-push hook run)
+moon run <p>:ci     # one project's checks (p = jj-hooks | jj-gt | akiflow-cli | nix-config | tap | root)
 ```
 
-CI shape:
+CI shape: one workflow ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs `moon ci` in the devenv shell on every PR.
 
-+ Per-tool workflows path-filtered (`jj-hooks.yml`, `jj-gt.yml`,
-  `akiflow-cli.yml`, `tap.yml`, `nix-config.yml`).
-+ `ci-base-rust.yml` + `ci-base-nix.yml` are reusable workflow templates.
-+ Per-host `nix eval` jobs gated on per-host path filters in
-  [`.github/path-filters/nix-config-hosts.yml`](./.github/path-filters/nix-config-hosts.yml)
-  — an edit to one host's files only triggers that host's eval, not the
-  whole 7-host matrix. Nightly runs the full matrix unconditionally to
-  catch upstream flake-input drift.
-
-Per-tool recipes are delegated to each tool's own `Justfile`. See
-[`tools/<name>/README.md`](./tools/) for tool-specific details.
++ A macOS leg runs only the darwin flake-eval, gated on nix-config changes.
++ [`nightly.yml`](./.github/workflows/nightly.yml) runs the full matrix daily; [`post-merge.yml`](./.github/workflows/post-merge.yml) re-runs the affected gate on `main`.
++ Toolchains are pinned in [`.prototools`](./.prototools) (bun/node/moon) + [`rust-toolchain.toml`](./rust-toolchain.toml) and provided by [`devenv.nix`](./devenv.nix).
 
 ## Docs
 

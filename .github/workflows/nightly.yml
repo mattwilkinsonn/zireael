@@ -1,22 +1,21 @@
 name: nightly
 
-# Daily cron that ignores path filters and runs the full matrix.
-# Catches drift caused by upstream tool auto-updates (hk, pkl, jj
-# versions, brew formulae, npm registry, etc.) — anything that
-# wouldn't be triggered by a code change in this repo.
+# Daily cron that runs the full moon gate unconditionally (ignores
+# affected detection) plus the tap install smoke-test. Catches drift from
+# upstream auto-updates (the devenv/nixpkgs linters, brew formulae, npm
+# registry) that a code-change PR wouldn't trigger.
 #
-# Skipped when `main` hasn't advanced since the last nightly (no point
-# re-running the same commit). The `report` job posts the aggregate
-# result back to the HEAD commit so it appears in the commit's checks.
+# Skipped when `main` hasn't advanced since the last nightly. The `report`
+# job posts the aggregate result back to the HEAD commit.
 
 "on":
   schedule:
-    - cron: "0 6 * * *"  # 06:00 UTC daily
+    - cron: "0 6 * * *" # 06:00 UTC daily
   workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write  # Determinate Nix in nix-config flake-eval jobs needs OIDC
+  id-token: write # Determinate Nix (devenv + flake-eval) needs OIDC
 
 jobs:
   # Gate: only run the suite if main moved since the last nightly.
@@ -52,105 +51,43 @@ jobs:
             echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
-  jj-hooks:
-    name: jj-hooks (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    uses: ./.github/workflows/ci-base-rust.yml
-    with:
-      package: jj-hooks
-      install_deps: true
-    secrets: inherit
-
-  jj-gt:
-    name: jj-gt (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    uses: ./.github/workflows/ci-base-rust.yml
-    with:
-      package: jj-gt
-      install_deps: true
-    secrets: inherit
-
-  akiflow-cli:
-    name: akiflow-cli (nightly)
+  # Full moon gate on Linux: every project's `ci` task, unconditionally
+  # (`moon run :ci` runs the task in all projects; no affected filtering).
+  # A fresh runner has no moon cache, so every task re-runs — which is the
+  # point (catches upstream toolchain drift). The darwin flake-eval
+  # self-skips here (os:macos); the macOS leg below runs it.
+  moon-ci:
+    name: moon ci (linux, full)
     needs: changes
     if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: tools/akiflow-cli
-    steps:
-      - uses: actions/checkout@v6
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3"
-      - run: bun install --frozen-lockfile
-      - run: bunx biome check .
-      - run: bunx tsc --noEmit
-      - run: bun test
-
-  tap:
-    name: tap (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: macos-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v6
-      - run: brew style Formula/*.rb
-
-  # Linters run regardless of host changes — different content domain
-  # than the per-host flake-eval. Reuses ci-base-nix.yml so the
-  # commands match what nix-config.yml runs on PRs.
-  nix-config-lints:
-    name: nix-config lints (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    uses: ./.github/workflows/ci-base-nix.yml
-    secrets: inherit
-
-  # Full-matrix flake-eval on nightly — bypasses the per-host path
-  # filters that gate nix-config.yml. Catches drift from flake input
-  # updates (nixpkgs-unstable's daily churn) that wouldn't fire a
-  # path-filter on a PR. Defined inline (not via ci-base-nix.yml)
-  # because nightly's "always run every host" shape differs from
-  # nix-config.yml's per-host gating.
-  #
-  # Only the personal hosts (mattpc-wsl + Matts-MacBook-Pro) — the
-  # sealedsecurity fleet moved to the sealed repo's infra/nix flake and
-  # is evaluated by sealed's own nightly.
-  flake-eval-mattpc-wsl-nightly:
-    name: flake eval mattpc-wsl (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/determinate-nix-action@v3
-      - working-directory: nix-config
-        run: nix eval --raw '.#nixosConfigurations.mattpc-wsl.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+      - name: Install devenv
+        run: nix profile install --accept-flake-config nixpkgs#devenv
+      - name: moon run :ci
+        run: devenv shell -- moon run ':ci'
 
-  flake-eval-darwin-nightly:
-    name: flake eval Matts-MacBook-Pro (nightly)
+  # macOS leg: the darwin host's flake-eval (nix-darwin is macOS-only) +
+  # tap brew-style (brew is present on macOS runners).
+  moon-ci-darwin:
+    name: moon ci (darwin eval + tap)
     needs: changes
     if: needs.changes.outputs.run == 'true'
     runs-on: macos-latest
-    timeout-minutes: 30
-    permissions:
-      id-token: write
-      contents: read
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - uses: DeterminateSystems/determinate-nix-action@v3
-      - working-directory: nix-config
-        run: nix eval --raw '.#darwinConfigurations.Matts-MacBook-Pro.config.system.build.toplevel.outPath' --no-warn-dirty --accept-flake-config >/dev/null
+      - name: Install devenv
+        run: nix profile install --accept-flake-config nixpkgs#devenv
+      - name: moon run darwin eval + tap
+        run: devenv shell -- moon run nix-config:flake-eval-darwin tap:ci
 
+  # End-to-end tap install smoke test (not a moon task — it exercises the
+  # published Homebrew formulae, not the repo build).
   validate-tap:
     name: validate tap install (nightly, ${{ matrix.os }})
     needs: changes
@@ -178,32 +115,15 @@ jobs:
             echo "::endgroup::"
           done
 
-  docs:
-    name: docs (nightly)
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v6
-      - run: npm install -g markdownlint-cli2
-      - run: markdownlint-cli2 "**/*.md"
-
   # Post the aggregate nightly result to the HEAD commit so it shows in
   # the commit's checks dropdown (scheduled runs don't auto-attach).
   report:
     name: report status
     needs:
       - changes
-      - jj-hooks
-      - jj-gt
-      - akiflow-cli
-      - tap
+      - moon-ci
+      - moon-ci-darwin
       - validate-tap
-      - docs
-      - nix-config-lints
-      - flake-eval-mattpc-wsl-nightly
-      - flake-eval-darwin-nightly
     if: always() && needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     permissions:

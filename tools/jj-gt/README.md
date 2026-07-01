@@ -412,7 +412,7 @@ suite is partitioned into three tiers:
 ### One-time setup for the live GitHub tests
 
 ```bash
-just setup-live-fixture
+./scripts/setup-live-test-fixture.sh   # run from tools/jj-gt/
 ```
 
 This creates `<your-gh-user>/jj-gt-live-tests` on github, pushes a
@@ -422,11 +422,10 @@ query against. Idempotent — re-running on an existing setup is a no-op.
 Once the fixture exists:
 
 ```bash
-just test-live-gh       # gh pr list smoke
-just test-live-submit   # full jj-gt submit end-to-end; creates + closes 2 PRs per run
+moon run jj-gt:test-live   # gh_live + gt_submit_live end-to-end; creates + closes PRs per run
 ```
 
-Both recipes set the required env vars (`JJ_GT_LIVE_GH=1`,
+The task sets the required env vars (`JJ_GT_LIVE_GH=1`,
 `JJ_GT_LIVE_SUBMIT=1`, `JJ_GT_LIVE_REPO`, `JJ_GT_LIVE_REPO_URL`)
 automatically; override on the command line if you want to point
 them at a different fixture repo.
