@@ -36,6 +36,12 @@
       url = "github:nix-community/NixOS-WSL/main";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Declarative disk partitioning for the bare-metal host (mattpc). Follows
+    # nixpkgs-unstable so it matches the dev hosts' wholesale-unstable pkgs.
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs-unstable";
+    };
     llm-agents.url = "github:numtide/llm-agents.nix";
     hk = {
       url = "github:jdx/hk/v1.48.0";
@@ -121,6 +127,47 @@
                 ./shared/privatefiles-symlinks.nix
                 ./shared/agent-config.nix
                 ./nixos/mattpc-wsl/home.nix
+              ];
+            };
+          }
+        ];
+      };
+
+      # mattpc — the SAME physical gaming PC as mattpc-wsl (i9-14900KS + RTX
+      # 4080 + 64 GB DDR5), but as a BARE-METAL NixOS host: primary daily
+      # driver, dual-booting Windows (kept on its own SSD for games only).
+      # NixOS takes Disk 0 (the 2 TB NVMe that previously held the WSL vhdx);
+      # Windows stays on Disk 1, untouched. See nixos/mattpc/INSTALL.md.
+      nixosConfigurations."mattpc" = inputs.nixpkgs-unstable.lib.nixosSystem {
+        system = "x86_64-linux";
+        specialArgs = {
+          inherit inputs;
+          system = "x86_64-linux";
+        };
+        modules = [
+          inputs.disko.nixosModules.disko
+          ./shared/unstable-wholesale.nix
+          ./nixos/common.nix
+          ./nixos/mattpc/hardware-configuration.nix
+          ./nixos/mattpc/disko.nix
+          ./nixos/mattpc/system.nix
+          home-manager-unstable.nixosModules.home-manager
+          hmModule
+          {
+            home-manager.extraSpecialArgs = {
+              inherit inputs;
+            };
+            home-manager.users.mattw = {
+              imports = [
+                ./shared/home.nix
+                ./shared/linux.nix
+                ./shared/dev.nix
+                ./shared/sccache-dev.nix
+                ./shared/linux-build-deps.nix
+                ./shared/load-secrets.nix
+                ./shared/privatefiles-symlinks.nix
+                ./shared/agent-config.nix
+                ./nixos/mattpc/home.nix
               ];
             };
           }
