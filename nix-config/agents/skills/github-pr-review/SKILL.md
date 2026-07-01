@@ -23,6 +23,16 @@ large tool set and many are **behind tool-search** — if the tool you need isn'
 already active, run `search_tool_bm25` (e.g. `"github pull request review"`) to
 activate it first.
 
+**Bucket balance.** `pull_request_read` runs on GitHub's **GraphQL** API; under
+wave load a shared token exhausts the GraphQL bucket while the REST bucket sits
+idle. For the routable read surfaces (b review bodies, c top-level comments, d
+check-runs, plus the head SHA and open-PR list) prefer **`gh-route`** — a CLI
+router that sends each read to whichever bucket (REST or GraphQL) has more
+headroom and emits the same shape either way (see Fallback below). Reserve the
+GraphQL-only MCP for what only it can do: **surface (a)** inline-thread state
+(`is_resolved` / `is_outdated`) and the thread node IDs that
+`pull_request_review_write` needs to resolve/reply — REST exposes neither.
+
 ## The four surfaces
 
 | # | Surface | What lives there | `mcp__litellm_github_pull_request_read` method |
@@ -86,3 +96,21 @@ Reserve the CLI for when the MCP can't express something (rare). Prefer higher-l
 - Inline threads + review bodies: a review-comments extension (e.g. `gh-pr-review`) or the review-comments REST/GraphQL endpoints. These usually don't support `--jq`; pipe to external `jq`.
 - `gh pr view <N> --json comments` (top-level), `gh pr checks <N>` (CI).
 - `gh api` only when nothing higher-level works, paired with a note on why.
+
+### `gh-route` — the bucket-balanced read path
+
+`gh-route <cmd> <pr> [owner/repo]` routes a read to the REST or GraphQL bucket
+with more headroom and prints the **REST JSON shape** regardless — a drop-in for
+the equivalent `gh api` call that keeps GraphQL from draining while REST idles.
+It also backs off (sleeping toward the nearest reset) when both buckets run low.
+
+- `gh-route reviews <pr>` — review bodies (surface b), REST-shaped array.
+- `gh-route comments <pr>` — top-level issue-comments (surface c).
+- `gh-route review-comments <pr>` — inline review-comment **content** (surface a
+  bodies), but **not** thread state / IDs — those are GraphQL-only, so pull
+  surface (a)'s `is_resolved` / thread IDs from `pull_request_read`
+  `get_review_comments` (MCP), then resolve/reply via `pull_request_review_write`.
+- `gh-route check-runs <ref>` — CI check-runs (surface d) for a commit.
+- `gh-route head-sha <pr>` / `gh-route pr-list` — head SHA / open-PR list.
+- `gh-route pick` — prints `rest` or `graphql`, the current lower-pressure bucket,
+  when you're choosing by hand between this and an MCP GraphQL read.

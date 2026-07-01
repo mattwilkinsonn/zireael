@@ -1,0 +1,255 @@
+# gh-route <cmd> [args] — route a GitHub read to the API bucket (REST `core` vs
+# GraphQL) with more headroom, so a fleet of agents sharing one token drains both
+# 5000/hr buckets evenly instead of exhausting GraphQL while REST sits idle.
+#
+# Every read emits the GitHub REST JSON shape regardless of which bucket served
+# it, so callers are bucket-agnostic (a drop-in for `gh api repos/O/R/...`).
+# `pick` exposes the routing decision on its own, for an agent choosing between
+# this tool (REST) and the github MCP (GraphQL) for an interactive read.
+#
+# Commands:
+#   pick                              → `rest` | `graphql` (higher fractional headroom)
+#   remaining <rest|graphql>          → that bucket's remaining request count
+#   head-sha        <pr>  [owner/repo] → PR head SHA (bare string)
+#   reviews         <pr>  [owner/repo] → REST-shaped review array
+#   comments        <pr>  [owner/repo] → REST-shaped issue-comment array
+#   review-comments <pr>  [owner/repo] → REST-shaped inline review-comment array
+#   check-runs      <ref> [owner/repo] → REST-shaped {check_runs:[...]} for a ref
+#   pr-list               [owner/repo] → REST-shaped open-PR array
+#
+# Routing: reads live remaining/limit for both buckets (`gh api rate_limit`,
+# which counts against neither bucket, cached GH_ROUTE_CACHE_TTL=15s in a per-uid
+# tmp file shared across agents) and sends each read to the bucket with the higher
+# remaining/limit fraction — so it flips either way and never merely relocates the
+# wall onto REST. If both buckets sit below GH_ROUTE_FLOOR, it waits for the
+# nearest reset (capped at GH_ROUTE_MAX_WAIT) rather than spinning against an
+# exhausted API, per GitHub's rate-limit guidance.
+#
+# Shape note: emits the fields consumers use (login / commit_id / state / body /
+# timestamps / path / line / conclusion), normalized across both APIs. Inline
+# thread state (`is_resolved` / `is_outdated`) and thread node IDs live only on
+# GraphQL and are NOT part of this shape — resolve/reply stay on the github MCP.
+# The GraphQL branch caps list fields at 100 (unpaginated); the REST branch
+# `--paginate`s, so prefer REST for a PR with >100 reviews/comments.
+#
+# Env: GH_ROUTE_FLOOR (200), GH_ROUTE_CACHE_TTL (15), GH_ROUTE_MAX_WAIT (300),
+#      GH_ROUTE_CACHE (per-uid tmp path). gh + jq resolve from the dev set.
+# shellcheck shell=bash
+# GraphQL query strings and jq programs use `$var` that must stay literal (they
+# are GraphQL variables / jq bindings, not shell expansions), so disable SC2016.
+# shellcheck disable=SC2016
+set -euo pipefail
+
+FLOOR="${GH_ROUTE_FLOOR:-200}"
+CACHE_TTL="${GH_ROUTE_CACHE_TTL:-15}"
+MAX_WAIT="${GH_ROUTE_MAX_WAIT:-300}"
+CACHE_FILE="${GH_ROUTE_CACHE:-${TMPDIR:-/tmp}/gh-route-rl.$(id -u).json}"
+
+_now() { date +%s; }
+
+# Cached rate_limit JSON. The rate_limit endpoint counts against no bucket, so
+# caching is purely a latency + shared-view optimization. Timestamp is stored
+# inside the JSON (portable across GNU/BSD stat) and the write is atomic (tmp +
+# mv) so concurrent agents never read a half-written file.
+_rate_limit() {
+	local now cached_at=0 tmp
+	now="$(_now)"
+	if [ -s "$CACHE_FILE" ]; then
+		cached_at="$(jq -r '._fetched_at // 0' "$CACHE_FILE" 2>/dev/null || echo 0)"
+	fi
+	if [ $((now - cached_at)) -ge "$CACHE_TTL" ]; then
+		tmp="$(mktemp "${CACHE_FILE}.XXXXXX")"
+		if gh api rate_limit 2>/dev/null | jq --argjson t "$now" '. + {_fetched_at: $t}' >"$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+			mv -f "$tmp" "$CACHE_FILE"
+		else
+			rm -f "$tmp"
+		fi
+	fi
+	cat "$CACHE_FILE" 2>/dev/null || echo '{}'
+}
+
+# `rest` | `graphql` — the bucket with the higher remaining/limit fraction. Ties
+# and a REST lead both resolve to REST (the idle, query-cost-free bucket).
+pick() {
+	_rate_limit | jq -r '
+		def frac($x): if (($x.limit) // 0) > 0 then ($x.remaining * 1000 / $x.limit) else 0 end;
+		if frac(.resources.graphql) > frac(.resources.core) then "graphql" else "rest" end
+	'
+}
+
+remaining() {
+	local key
+	key="$([ "${1:-}" = graphql ] && echo graphql || echo core)"
+	_rate_limit | jq -r --arg k "$key" '.resources[$k].remaining // 0'
+}
+
+# Block until a bucket clears FLOOR, or MAX_WAIT elapses (then proceed and let
+# the call surface any 403). Sleeps to the nearest reset when both are drained.
+_await_headroom() {
+	local waited=0 rl rest_r gql_r now reset_min sleep_s
+	while :; do
+		rl="$(_rate_limit)"
+		rest_r="$(jq -r '.resources.core.remaining // 0' <<<"$rl")"
+		gql_r="$(jq -r '.resources.graphql.remaining // 0' <<<"$rl")"
+		if [ "$rest_r" -gt "$FLOOR" ] || [ "$gql_r" -gt "$FLOOR" ]; then
+			return 0
+		fi
+		now="$(_now)"
+		reset_min="$(jq -r --argjson n "$now" '
+			[.resources.core.reset, .resources.graphql.reset]
+			| map(select(. != null and . > $n)) | (min // ($n + 60))
+		' <<<"$rl")"
+		sleep_s=$((reset_min - now + 1))
+		[ "$sleep_s" -lt 1 ] && sleep_s=1
+		[ "$sleep_s" -gt "$MAX_WAIT" ] && sleep_s="$MAX_WAIT"
+		if [ $((waited + sleep_s)) -gt "$MAX_WAIT" ]; then
+			return 0
+		fi
+		echo "gh-route: both buckets < $FLOOR (rest=$rest_r gql=$gql_r); waiting ${sleep_s}s for reset" >&2
+		sleep "$sleep_s"
+		waited=$((waited + sleep_s))
+		rm -f "$CACHE_FILE" # force a fresh read after the reset
+	done
+}
+
+# owner/repo — explicit arg wins; else `gh repo view` (GraphQL — callers should
+# pass owner/repo to avoid spending a GraphQL call just to resolve the repo).
+_repo() {
+	if [ -n "${1:-}" ]; then
+		printf '%s' "$1"
+	else
+		gh api repos/"$(gh repo view --json nameWithOwner -q .nameWithOwner)" --jq .full_name 2>/dev/null ||
+			gh repo view --json nameWithOwner -q .nameWithOwner
+	fi
+}
+
+cmd_head_sha() {
+	local pr="$1" repo owner name
+	repo="$(_repo "${2:-}")"
+	owner="${repo%%/*}"
+	name="${repo##*/}"
+	_await_headroom
+	if [ "$(pick)" = graphql ]; then
+		gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){headRefOid}}}' \
+			-F o="$owner" -F n="$name" -F p="$pr" --jq '.data.repository.pullRequest.headRefOid'
+	else
+		gh api "repos/$repo/pulls/$pr" --jq '.head.sha'
+	fi
+}
+
+cmd_reviews() {
+	local pr="$1" repo owner name
+	repo="$(_repo "${2:-}")"
+	owner="${repo%%/*}"
+	name="${repo##*/}"
+	_await_headroom
+	if [ "$(pick)" = graphql ]; then
+		gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){reviews(first:100){nodes{author{login __typename} state submittedAt commit{oid} body}}}}}' \
+			-F o="$owner" -F n="$name" -F p="$pr" --jq '
+			def login: (.author.login // "") + (if .author.__typename == "Bot" then "[bot]" else "" end);
+			[.data.repository.pullRequest.reviews.nodes[]
+			| {user: {login: login}, state: .state, submitted_at: .submittedAt, commit_id: .commit.oid, body: .body}]'
+	else
+		gh api --paginate "repos/$repo/pulls/$pr/reviews" |
+			jq -sc 'add // [] | [.[] | {user: {login: .user.login}, state: .state, submitted_at: .submitted_at, commit_id: .commit_id, body: .body}]'
+	fi
+}
+
+cmd_comments() {
+	local pr="$1" repo owner name
+	repo="$(_repo "${2:-}")"
+	owner="${repo%%/*}"
+	name="${repo##*/}"
+	_await_headroom
+	if [ "$(pick)" = graphql ]; then
+		gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){comments(first:100){nodes{author{login __typename} body createdAt updatedAt}}}}}' \
+			-F o="$owner" -F n="$name" -F p="$pr" --jq '
+			def login: (.author.login // "") + (if .author.__typename == "Bot" then "[bot]" else "" end);
+			[.data.repository.pullRequest.comments.nodes[]
+			| {user: {login: login}, body: .body, created_at: .createdAt, updated_at: .updatedAt}]'
+	else
+		gh api --paginate "repos/$repo/issues/$pr/comments" |
+			jq -sc 'add // [] | [.[] | {user: {login: .user.login}, body: .body, created_at: .created_at, updated_at: .updated_at}]'
+	fi
+}
+
+cmd_review_comments() {
+	local pr="$1" repo owner name
+	repo="$(_repo "${2:-}")"
+	owner="${repo%%/*}"
+	name="${repo##*/}"
+	_await_headroom
+	if [ "$(pick)" = graphql ]; then
+		gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){reviewThreads(first:100){nodes{comments(first:100){nodes{author{login __typename} body path line commit{oid} originalCommit{oid}}}}}}}}' \
+			-F o="$owner" -F n="$name" -F p="$pr" --jq '
+			def login: (.author.login // "") + (if .author.__typename == "Bot" then "[bot]" else "" end);
+			[.data.repository.pullRequest.reviewThreads.nodes[].comments.nodes[]
+			| {user: {login: login}, body: .body, path: .path, line: .line, commit_id: (.commit.oid // .originalCommit.oid)}]'
+	else
+		gh api --paginate "repos/$repo/pulls/$pr/comments" |
+			jq -sc 'add // [] | [.[] | {user: {login: .user.login}, body: .body, path: .path, line: .line, commit_id: .commit_id}]'
+	fi
+}
+
+cmd_check_runs() {
+	local ref="$1" repo owner name
+	repo="$(_repo "${2:-}")"
+	owner="${repo%%/*}"
+	name="${repo##*/}"
+	_await_headroom
+	if [ "$(pick)" = graphql ]; then
+		gh api graphql -f query='query($o:String!,$n:String!,$r:String!){repository(owner:$o,name:$n){object(expression:$r){... on Commit{checkSuites(first:20){nodes{checkRuns(first:100){nodes{name status conclusion}}}}}}}}' \
+			-F o="$owner" -F n="$name" -F r="$ref" --jq '
+			{check_runs: [.data.repository.object.checkSuites.nodes[].checkRuns.nodes[]
+			| {name: .name, status: (.status | ascii_downcase), conclusion: (if .conclusion then (.conclusion | ascii_downcase) else null end)}]}'
+	else
+		gh api --paginate "repos/$repo/commits/$ref/check-runs" |
+			jq -sc '{check_runs: (map(.check_runs) | add // []) | [.[] | {name: .name, status: .status, conclusion: .conclusion}]}'
+	fi
+}
+
+cmd_pr_list() {
+	local repo owner name
+	repo="$(_repo "${1:-}")"
+	owner="${repo%%/*}"
+	name="${repo##*/}"
+	_await_headroom
+	if [ "$(pick)" = graphql ]; then
+		gh api graphql -f query='query($o:String!,$n:String!){repository(owner:$o,name:$n){pullRequests(states:OPEN,first:100){nodes{number title state headRefOid author{login __typename}}}}}' \
+			-F o="$owner" -F n="$name" --jq '
+			def login: (.author.login // "") + (if .author.__typename == "Bot" then "[bot]" else "" end);
+			[.data.repository.pullRequests.nodes[]
+			| {number: .number, title: .title, state: (.state | ascii_downcase), head: {sha: .headRefOid}, user: {login: login}}]'
+	else
+		gh api --paginate "repos/$repo/pulls?state=open" |
+			jq -sc 'add // [] | [.[] | {number: .number, title: .title, state: .state, head: {sha: .head.sha}, user: {login: .user.login}}]'
+	fi
+}
+
+main() {
+	local cmd="${1:-}"
+	[ "$#" -gt 0 ] && shift
+	case "$cmd" in
+	pick) pick ;;
+	remaining) remaining "${1:?usage: gh-route remaining <rest|graphql>}" ;;
+	head-sha) cmd_head_sha "${1:?usage: gh-route head-sha <pr> [owner/repo]}" "${2:-}" ;;
+	reviews) cmd_reviews "${1:?usage: gh-route reviews <pr> [owner/repo]}" "${2:-}" ;;
+	comments) cmd_comments "${1:?usage: gh-route comments <pr> [owner/repo]}" "${2:-}" ;;
+	review-comments) cmd_review_comments "${1:?usage: gh-route review-comments <pr> [owner/repo]}" "${2:-}" ;;
+	check-runs) cmd_check_runs "${1:?usage: gh-route check-runs <ref> [owner/repo]}" "${2:-}" ;;
+	pr-list) cmd_pr_list "${1:-}" ;;
+	"" | -h | --help)
+		sed -n '1,40p' "$0" | sed 's/^# \{0,1\}//;s/^#$//'
+		[ "$cmd" = "" ] && exit 2 || exit 0
+		;;
+	*)
+		echo "gh-route: unknown command '$cmd' (try: pick remaining head-sha reviews comments review-comments check-runs pr-list)" >&2
+		exit 2
+		;;
+	esac
+}
+
+# Run only when executed, not when sourced (so tests can source + call functions).
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+	main "$@"
+fi
