@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# jj-gt — a Rust workspace member that path-depends on jj-hooks, so it dependsOn
+# jj-hooks (a jj-hooks change marks jj-gt affected). System tasks exec the cargo
+# toolchain from the devenv shell; commands match the old gate (fmt-pkg /
+# clippy-pkg / nextest-jj-gt). The network `gh_live` / `gt_submit_live` tests
+# are split into a runInCI:false `test-live` task (they need JJ_GT_LIVE_* creds).
+layer: 'library'
+language: 'rust'
+dependsOn: ['jj-hooks']
+
+tasks:
+  fmt:
+    command: 'cargo fmt -p jj-gt -- --check'
+    inputs: ['src/**/*.rs', 'tests/**/*.rs', 'Cargo.toml', '/rustfmt.toml']
+    options:
+      cache: false
+  clippy:
+    command: 'cargo clippy -p jj-gt --all-targets -- -D warnings'
+    inputs: ['src/**/*', 'tests/**/*', 'Cargo.toml', '/Cargo.toml', '/Cargo.lock']
+    options:
+      cache: false
+  test:
+    # Excludes the live (network) tests; see test-live for those.
+    command: "cargo nextest run -p jj-gt --no-fail-fast --no-tests=warn -E 'not (test(gh_live) | test(gt_submit_live))'"
+    inputs: ['src/**/*', 'tests/**/*', 'Cargo.toml', '/Cargo.toml', '/Cargo.lock']
+    options:
+      cache: false
+  test-live:
+    # gh_live + gt_submit_live. Requires JJ_GT_LIVE_* env; never in the gate.
+    command: "cargo nextest run -p jj-gt --no-fail-fast -E 'test(gh_live) | test(gt_submit_live)'"
+    env:
+      JJ_GT_LIVE_GH: '1'
+      JJ_GT_LIVE_SUBMIT: '1'
+    options:
+      cache: false
+      runInCI: false
+  ci:
+    deps: ['fmt', 'clippy', 'test']
+    options:
+      cache: false

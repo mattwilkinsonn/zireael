@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# Homebrew tap formulae. brew style over every formula; matches the old gate
+# (ci-tap), including the guard that skips when brew isn't on PATH (brew isn't
+# provided by the devenv shell — it's a macOS/linuxbrew host tool).
+layer: 'library'
+language: 'bash'
+
+tasks:
+  brew-style:
+    script: |
+      if ! command -v brew >/dev/null 2>&1; then
+        echo "warn: brew not on PATH; skipping tap lint." >&2
+        exit 0
+      fi
+      brew style ./*.rb
+    inputs: ['*.rb']
+    options:
+      cache: false
+  ci:
+    deps: ['brew-style']
+    options:
+      cache: false

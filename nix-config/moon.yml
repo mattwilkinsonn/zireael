@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# NixOS + nix-darwin host configs. Tasks port the nix-config gate from the old
+# Justfile/hk to moon, run as system tasks against the devenv nix toolchain.
+# Commands match what the gate ran before (ci-nix-config), translated to run
+# with the project cwd (nix-config/).
+layer: 'library'
+language: 'bash'
+
+fileGroups:
+  nix: ['**/*.nix']
+  shell: ['**/*.sh']
+  toml: ['**/*.toml']
+
+tasks:
+  # ── Tier 1: linters (fast). Scoped to the file type via inputs. ──
+  nixfmt:
+    script: "find . -name '*.nix' -print0 | xargs -0 nixfmt --check"
+    inputs: ['@group(nix)']
+  deadnix:
+    command: 'deadnix --fail .'
+    inputs: ['@group(nix)']
+  statix:
+    command: 'statix check'
+    inputs: ['@group(nix)', 'statix.toml']
+  # nil (Nix LSP) in check mode — catches parse/eval errors before flake-eval.
+  nil:
+    script: "find . -name '*.nix' -print0 | xargs -0 nil diagnostics"
+    inputs: ['@group(nix)']
+  shellcheck:
+    script: "find . -name '*.sh' -print0 | xargs -0 shellcheck --external-sources"
+    inputs: ['@group(shell)']
+  shfmt:
+    script: "find . -name '*.sh' -print0 | xargs -0 shfmt -d -i 0 -s"
+    inputs: ['@group(shell)']
+  taplo:
+    script: "find . -name '*.toml' -print0 | xargs -0 taplo fmt --check"
+    inputs: ['@group(toml)']
+    env:
+      RUST_LOG: 'error'
+
+  # ── Tier 2: flake eval (slow). One task per host so a broken config is one
+  # failed line. NO file scoping beyond the whole nix tree + flake.lock: a
+  # shared module change can break any host without touching that host's file.
+  # The darwin host evaluates only on macOS (nix-darwin attrs aren't available
+  # cross-platform) — os:macos skips it on Linux (local WSL + the Linux CI leg);
+  # Matt's Mac pre-push and the macOS CI leg exercise it.
+  flake-eval-mattpc-wsl:
+    command: 'nix eval --raw .#nixosConfigurations.mattpc-wsl.config.system.build.toplevel.outPath --no-warn-dirty --accept-flake-config'
+    inputs: ['@group(nix)', 'flake.lock']
+  flake-eval-darwin:
+    command: 'nix eval --raw .#darwinConfigurations.Matts-MacBook-Pro.config.system.build.toplevel.outPath --no-warn-dirty --accept-flake-config'
+    inputs: ['@group(nix)', 'flake.lock']
+    options:
+      os: 'macos'
+
+  ci:
+    deps:
+      - 'nixfmt'
+      - 'deadnix'
+      - 'statix'
+      - 'nil'
+      - 'shellcheck'
+      - 'shfmt'
+      - 'taplo'
+      - 'flake-eval-mattpc-wsl'
+      - 'flake-eval-darwin'
+    options:
+      cache: false

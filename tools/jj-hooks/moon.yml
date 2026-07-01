@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# jj-hooks (+ jj-hp) — a Rust workspace member. System tasks exec the cargo
+# toolchain the devenv shell provides; commands match what the gate ran before
+# (fmt-pkg / clippy-pkg / nextest-jj-hooks). Integration tests drive real hook
+# frameworks (pre-commit / prek / lefthook / hk / pkl), all on the devenv PATH.
+layer: 'library'
+language: 'rust'
+
+tasks:
+  fmt:
+    command: 'cargo fmt -p jj-hooks -- --check'
+    inputs: ['src/**/*.rs', 'tests/**/*.rs', 'Cargo.toml', '/rustfmt.toml']
+    options:
+      cache: false
+  clippy:
+    command: 'cargo clippy -p jj-hooks --all-targets -- -D warnings'
+    inputs: ['src/**/*', 'tests/**/*', 'Cargo.toml', '/Cargo.toml', '/Cargo.lock']
+    options:
+      cache: false
+  test:
+    command: 'cargo nextest run -p jj-hooks --no-fail-fast'
+    inputs: ['src/**/*', 'tests/**/*', 'Cargo.toml', '/Cargo.toml', '/Cargo.lock']
+    options:
+      cache: false
+  ci:
+    deps: ['fmt', 'clippy', 'test']
+    options:
+      cache: false
