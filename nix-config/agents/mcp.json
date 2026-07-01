@@ -1,27 +1,12 @@
 {
 	"$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json",
 	"mcpServers": {
-		"linear": {
+		"litellm": {
 			"type": "http",
-			"url": "https://mcp.linear.app/mcp",
+			"url": "${LITELLM_MCP_URL}",
 			"headers": {
-				"Authorization": "Bearer ${LINEAR_API_KEY}"
+				"x-litellm-api-key": "Bearer ${LITELLM_API_KEY}"
 			}
-		},
-		"github": {
-			"type": "http",
-			"url": "https://api.githubcopilot.com/mcp/",
-			"headers": {
-				"Authorization": "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
-			}
-		},
-		"context7": {
-			"type": "http",
-			"url": "https://mcp.context7.com/mcp"
-		},
-		"cloudflare": {
-			"type": "http",
-			"url": "https://mcp.cloudflare.com/mcp"
 		}
 	}
 }

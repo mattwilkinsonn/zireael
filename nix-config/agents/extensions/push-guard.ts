@@ -150,12 +150,17 @@ function hasBroadKill(cmd: string): boolean {
 // runs on the remote, not the session's own runtime).
 const CMD_TOOLS: Record<string, true> = { bash: true, ssh: true, recipe: true };
 const LOCAL_TOOLS: Record<string, true> = { bash: true, recipe: true };
-const GH_MCP = /^mcp__github_/;
-// GitHub MCP write operations — verbs anchored to the `mcp__github_` prefix so
-// the shared `pull_request_` infix doesn't misclassify reads. Everything else
-// (pull_request_read, get_*) is a read, allowed on any repo incl. an upstream
-// PR you're triaging.
-const GH_MCP_WRITE = /^mcp__github_(?:create|update|delete|add|fork|push|dispatch|request|merge)_|_write\b/;
+// GitHub MCP tools arrive either directly (`mcp__github_<op>`) or aggregated
+// through the mattfw LiteLLM MCP gateway, where they surface as
+// `mcp__litellm_github_<op>`: LiteLLM prefixes each upstream tool with its
+// server name (`github-<op>`) and OMP sanitizes the hyphen to `_`. Match both
+// prefixes so the owner allowlist + merge gate hold on either routing path.
+const GH_MCP = /^mcp__(?:litellm_)?github_/;
+// GitHub MCP write operations — verbs anchored to the `github_` prefix (after an
+// optional `litellm_`) so the shared `pull_request_` infix doesn't misclassify
+// reads. Everything else (pull_request_read, get_*) is a read, allowed on any
+// repo incl. an upstream PR you're triaging.
+const GH_MCP_WRITE = /^mcp__(?:litellm_)?github_(?:create|update|delete|add|fork|push|dispatch|request|merge)_|_write\b/;
 
 // Pure decision: a block, or null to allow. Unit-tested in push-guard.test.ts.
 export function evaluate(toolName: string, input: Record<string, unknown>): Block | null {

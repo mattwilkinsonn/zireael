@@ -83,6 +83,19 @@ test("github MCP: merge is always blocked", () => {
 	expect(mcp("mcp__github_merge_pull_request", { owner: "sealedsecurity", repo: "sealed" })?.block).toBe(true);
 });
 
+test("github MCP through the litellm gateway: same owner allowlist + merge gate", () => {
+	// Aggregated through the mattfw LiteLLM MCP gateway, github tools surface as
+	// `mcp__litellm_github_<op>` — OMP sanitizes litellm's `github-<op>` prefix
+	// (hyphen → underscore) onto its own `mcp__litellm_` server prefix.
+	expect(mcp("mcp__litellm_github_create_pull_request", { owner: "can1357", repo: "oh-my-pi" })?.block).toBe(true);
+	expect(mcp("mcp__litellm_github_create_pull_request", { owner: "mattwilkinsonn", repo: "zireael" })).toBeNull();
+	expect(mcp("mcp__litellm_github_pull_request_read", { owner: "can1357", repo: "oh-my-pi" })).toBeNull();
+	expect(mcp("mcp__litellm_github_create_pull_request", {})?.block).toBe(true); // missing owner → fail closed
+	expect(mcp("mcp__litellm_github_merge_pull_request", { owner: "sealedsecurity", repo: "sealed" })?.block).toBe(true);
+	// A non-github server behind the same gateway is not the github guard's concern.
+	expect(mcp("mcp__litellm_linear_create_issue", { teamId: "x" })).toBeNull();
+});
+
 test("still blocks broad process kills, allows targeted ones", () => {
 	expect(bash("pkill -f node")?.block).toBe(true);
 	expect(bash("kill -- -1")?.block).toBe(true);

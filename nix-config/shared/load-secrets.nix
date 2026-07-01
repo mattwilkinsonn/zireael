@@ -186,6 +186,31 @@
                 export SCCACHE_MULTILEVEL_WRITE_ERROR_POLICY=l0
               fi
 
+              # LiteLLM gateway (mattfw): endpoint + key for OMP's `litellm`
+              # model provider, plus the MCP gateway URL for OMP's aggregated
+              # `litellm` MCP server. Separate op inject so a missing item can't
+              # block the team batch above; all stay empty until the gateway is
+              # live.
+              local litellm_template
+              litellm_template='export LITELLM_BASE_URL="{{ op://Local Dev/LiteLLM Gateway/endpoint }}"
+    export LITELLM_API_KEY="{{ op://Local Dev/LiteLLM Gateway/credential }}"'
+              # Clear any stale LITELLM_* inherited from a prior shell BEFORE the
+              # inject: _op_inject_with_token skips (does not clear) its exports on
+              # failure, so a renamed/removed 1P item would otherwise leave the old
+              # endpoint/key live and OMP would auto-discover a dead gateway.
+              unset LITELLM_BASE_URL LITELLM_API_KEY LITELLM_MCP_URL
+              _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN LiteLLM "$litellm_template"
+              # Derive the MCP gateway URL only after a successful inject sets both
+              # halves: LiteLLM serves the aggregated MCP endpoint at `<host>/mcp`,
+              # a sibling of the `/v1` chat path. Require the key too so a partial
+              # inject can't leave a half-configured provider live.
+              if [[ -n "''${LITELLM_BASE_URL:-}" && -n "''${LITELLM_API_KEY:-}" ]]; then
+                local litellm_mcp_base="''${LITELLM_BASE_URL%/}"
+                export LITELLM_MCP_URL="''${litellm_mcp_base%/v1}/mcp"
+              else
+                unset LITELLM_BASE_URL LITELLM_API_KEY LITELLM_MCP_URL
+              fi
+
               # Choose which Claude OAuth token to load by default.
               # Marker at ~/.config/claude-code/default-account holds
               # `personal`, `sealed`, or `xavier`; missing/unknown
