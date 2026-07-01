@@ -74,5 +74,16 @@ in
     if command -v hk >/dev/null 2>&1; then
       hk install >/dev/null 2>&1 || echo "devenv: hk install failed; run 'hk install' to enable the pre-push gate"
     fi
+    # Warm the pkl package cache for jj-hooks' hk integration tests: their
+    # fixtures `amends` the hk pkl package from GitHub at test time, so a
+    # transient GitHub 502 flakes the suite (all N tests race their own fetch).
+    # Pre-fetch once here (a no-op once cached) so the tests read from
+    # ~/.pkl/cache. Best-effort with retry; never blocks shell entry.
+    for _ in 1 2 3; do
+      ${pkgs.pkl}/bin/pkl download-package \
+        "package://github.com/jdx/hk/releases/download/v1.45.0/hk@1.45.0" \
+        >/dev/null 2>&1 && break
+      sleep 2
+    done || echo "devenv: pkl hk-package warm failed; jj-hooks hk tests may fetch at runtime"
   '';
 }
