@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# Root meta project (source '.'). Owns the repo-wide checks that aren't tied to
+# one tool: markdown lint (every *.md) and workflow lint (actionlint). Commands
+# match the old gate (ci-docs + hk's actionlint step). System tasks exec the
+# devenv PATH toolchain.
+layer: 'library'
+language: 'bash'
+
+tasks:
+  markdownlint:
+    command: 'markdownlint-cli2 "**/*.md"'
+    inputs: ['**/*.md', '/.markdownlint-cli2.jsonc']
+  actionlint:
+    command: 'actionlint'
+    inputs: ['/.github/workflows/*.yml', '/.github/workflows/*.yaml']
+  ci:
+    deps: ['markdownlint', 'actionlint']
+    options:
+      cache: false
