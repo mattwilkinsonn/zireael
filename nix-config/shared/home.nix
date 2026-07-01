@@ -216,6 +216,20 @@ in
       credential."https://github.com".helper = "!gh auth git-credential";
       credential."https://gist.github.com".helper = "!gh auth git-credential";
     };
+    # Per-repo author email by remote owner. The global default above is
+    # personal; a sealedsecurity/* repo must commit as matt@sealedsecurity.com
+    # (the contribution graph + attribution track author/committer, not the
+    # co-author trailer). `hasconfig:remote.*.url` keys on the origin URL, not
+    # the on-disk path — so it covers canonical clones in ~/repos AND agent
+    # clones under ~/agents/workspaces/<codename>/ (owner isn't in that path,
+    # so a `gitdir:` condition would miss them). Add an SSH variant if a
+    # sealed remote is ever git@github.com:sealedsecurity/*.
+    includes = [
+      {
+        condition = "hasconfig:remote.*.url:https://github.com/sealedsecurity/**";
+        contents.user.email = "matt@sealedsecurity.com";
+      }
+    ];
   };
 
   # Delta (git diff viewer)
