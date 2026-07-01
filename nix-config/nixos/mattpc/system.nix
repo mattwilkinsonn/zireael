@@ -7,36 +7,44 @@
 {
   networking.hostName = "mattpc";
 
-  # ── Bootloader: systemd-boot + firmware-level Windows selection ─────
+  # ── Bootloader: systemd-boot + a chainloaded Windows entry ──────────
   # NixOS owns Disk 0's ESP; systemd-boot is the default (boots NixOS).
-  # Windows has its own UEFI boot entry (Windows Boot Manager on Disk 1's
-  # ESP), created by the Windows install — the firmware sees both disks'
-  # entries.
+  # Windows' bootloader lives on Disk 1's 200 MB ESP — a *different* disk,
+  # and systemd-boot can't load a binary from another ESP directly. So we
+  # ship edk2-uefi-shell and register a "Windows" entry that chainloads
+  # Disk 1's Windows Boot Manager, giving one unified boot menu.
   #
-  # SSH boot-select (the requirement): a one-shot reboot into Windows uses
-  # the UEFI `BootNext` variable via efibootmgr — firmware-level, so it
-  # works across disks with no chainloader:
+  # SSH boot-select (the requirement): default stays NixOS; a one-shot
+  # reboot into Windows that auto-returns afterward:
   #
-  #     sudo efibootmgr                          # list; note Windows' Boot####
-  #     sudo efibootmgr -n <nnnn> && sudo reboot # boot Windows ONCE, then
-  #                                              # auto-return to NixOS
+  #     bootctl list                              # confirm the "Windows" entry
+  #     sudo bootctl set-oneshot windows && sudo reboot
   #
-  # BootNext is consumed by the firmware on the next boot only, so the
-  # default (systemd-boot → NixOS) is restored automatically afterward —
-  # exactly the "game, then back to NixOS" flow. `canTouchEfiVariables`
-  # lets efibootmgr write the variable. (Windows appears in the firmware
-  # boot menu, not the systemd-boot menu — cross-disk entries can't show
-  # there without an edk2 chainloader, which this nixpkgs pin predates;
-  # the SSH switch above is the controllable path and needs no chainloader.)
+  # set-oneshot applies to the next boot only, so after the gaming session
+  # the default (NixOS) is restored automatically — the "game, then back to
+  # NixOS" flow.
+  #
+  # AT INSTALL: efiDeviceHandle is a placeholder. Boot the edk2 shell entry
+  # once, run `map -c` to list filesystem handles, find the one whose
+  # `\EFI\Microsoft\Boot\bootmgfw.efi` exists (Disk 1's ESP), set
+  # efiDeviceHandle to it (e.g. "FS1"), and rebuild. See INSTALL.md.
   boot.loader = {
     systemd-boot = {
       enable = true;
       configurationLimit = 10; # cap kept generations (2 GiB ESP; NVIDIA kernels ~150 MB each)
+      windows."windows" = {
+        title = "Windows";
+        # REPLACE at install with the handle from edk2's `map -c` (see above).
+        efiDeviceHandle = "REPLACE-WITH-EDK2-FS-HANDLE";
+        sortKey = "y_windows"; # below NixOS entries, above the edk2 shell
+      };
+      edk2-uefi-shell = {
+        enable = true;
+        sortKey = "z_edk2";
+      };
     };
     efi.canTouchEfiVariables = true;
   };
-  # efibootmgr for the BootNext SSH-switch above (+ inspecting entries).
-  environment.systemPackages = [ pkgs.efibootmgr ];
 
   # Hibernate resumes from the disko-declared swap (resumeDevice = true).
   boot.kernelParams = [ ];

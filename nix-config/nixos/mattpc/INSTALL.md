@@ -48,8 +48,11 @@ Clone the repo in the installer, then edit:
 - `nixos/mattpc/disko.nix` → set `device` to Disk 0's by-id path (replaces
   `REPLACE-WITH-DISK0-BY-ID`).
 
-(The bootloader needs no placeholder — Windows selection is firmware-level via
-`efibootmgr`, see §6.)
+The Windows boot entry's `efiDeviceHandle` is the second placeholder
+(`REPLACE-WITH-EDK2-FS-HANDLE` in `system.nix`), but it can't be filled until
+first boot — you discover it from the edk2 UEFI Shell (§6). Leave it as-is for
+now; the config evaluates with the placeholder, the entry just won't chainload
+until you set the real handle.
 
 ## 3. Partition + format + mount (disko)
 
@@ -83,35 +86,41 @@ reboot
 
 Set the user password on first login (or via `nixos-install`'s prompt).
 
-## 6. Windows boot entry + the SSH boot-select
+## 6. Discover the Windows ESP handle, then the SSH boot-select
 
-NixOS boots by default (systemd-boot on Disk 0's ESP). Windows has its own
-UEFI boot entry (Windows Boot Manager on Disk 1). To switch **over SSH**:
+systemd-boot is the default (boots NixOS). Windows Boot Manager lives on Disk
+1's ESP; since that's a *different* disk, systemd-boot chainloads it through the
+bundled edk2 UEFI Shell. The one-time discovery of Disk 1's ESP handle:
+
+1. Reboot and pick **EDK2 UEFI Shell** from the systemd-boot menu.
+2. `map -c` — lists the consistent filesystem handles (`FS0`, `FS1`, …).
+3. For each, check for the Windows bootloader at
+   `FS1:\EFI\Microsoft\Boot\bootmgfw.efi`.
+   Run `ls FS1:\EFI` first; the handle whose tree contains
+   `Microsoft\Boot\bootmgfw.efi` is Disk 1's ESP. (Running the `.efi` path
+   directly boots Windows — a good confirmation.)
+4. Set that handle in `system.nix`:
+   `boot.loader.systemd-boot.windows."windows".efiDeviceHandle = "FS1";`
+   (replacing `REPLACE-WITH-EDK2-FS-HANDLE`), then `nix-switch` (§7).
+
+Now **Windows** is a normal entry in the systemd-boot menu. To switch **over
+SSH** without touching the console:
 
 ```bash
-sudo efibootmgr                 # list entries; note Windows' Boot#### (e.g. Boot0002)
-sudo efibootmgr -n 0002         # set BootNext = Windows (ONE boot only)
-sudo reboot                     # boots Windows once…
-# …after the gaming session, a normal Windows restart returns to NixOS,
-# because BootNext is consumed on that single boot and the default
-# (systemd-boot → NixOS) is restored automatically.
+bootctl list                              # confirm the "Windows" entry exists
+sudo bootctl set-oneshot windows          # next boot only → Windows
+sudo reboot
+# …after the gaming session, a normal Windows restart returns to NixOS:
+# set-oneshot is consumed on that single boot, so the default (NixOS) resumes.
 ```
 
-That's the remote OS-selection mechanism: `efibootmgr -n <windows> && reboot`
+That's the remote OS-selection mechanism: `bootctl set-oneshot windows && reboot`
 from anywhere on the tailnet. Default stays NixOS; Windows is a one-shot.
 
-- **Manual fallback:** the firmware boot menu (F-key at power-on) lists both
-  disks' entries.
-- **Persistent default swap** (rarely needed): `efibootmgr -o <order>` reorders
-  boot entries; keep NixOS first.
-
-> Windows appears in the **firmware** boot menu and via the `efibootmgr`
-> switch, not inside the systemd-boot menu — a cross-disk entry can't render
-> there without an `edk2-uefi-shell` chainloader, and this flake's
-> `nixpkgs-unstable` pin predates that module. If you later want Windows
-> *in the systemd-boot menu*, bump `nixpkgs-unstable` and add
-> `boot.loader.systemd-boot.windows` + `boot.loader.edk2-uefi-shell` (both
-> then exist), discovering the ESP handle via the edk2 shell's `map -c`.
+- **Manual fallback:** the systemd-boot menu at power-on lists NixOS, Windows,
+  and the EDK2 UEFI Shell; the firmware menu (F-key) lists both disks directly.
+- **Persistent default swap** (rarely needed): `bootctl set-default windows`
+  (or a NixOS generation); `bootctl set-default @saved` clears it.
 
 ## 7. Converge afterward
 
