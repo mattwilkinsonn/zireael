@@ -14,13 +14,15 @@
 # so requests don't 400 — scoped to litellm/codex only; every other gateway
 # model keeps default chat-completions shaping.
 #
-# Claude via the gateway rides the openai-completions wire, so LiteLLM
-# discovery marks it reasoning-capable but can't synthesize the effort ladder
-# the thinking selector is gated on — so no selector shows. Declare it per
-# Claude model below: `thinking.mode: effort` surfaces the minimal..xhigh
-# selector and `compat` sends `reasoning_effort` (openai format), which the
-# gateway maps to Claude's thinking budget. The selector defaults to off — a
-# level is opt-in per session — so this adds the control without default spend.
+# Claude via the gateway rides the openai-completions wire as a bare
+# `openai/…` passthrough, so LiteLLM discovery reports no `supports_reasoning`
+# → the models are baked `reasoning: false` with no effort ladder, and OMP
+# gates the thinking selector on both. Declare both per Claude model below:
+# `reasoning: true` clears the gate; `thinking.mode: effort` supplies the
+# minimal..xhigh ladder; and `compat` sends `reasoning_effort` (openai format),
+# which the gateway maps to Claude's thinking budget. The selector defaults to
+# off — a level is opt-in per session — so this adds the control without
+# default spend.
 providers:
   litellm:
     modelOverrides:
@@ -28,6 +30,7 @@ providers:
         compat:
           supportsDeveloperRole: true
       claude-opus:
+        reasoning: true
         thinking:
           mode: effort
           efforts: [minimal, low, medium, high, xhigh]
@@ -36,6 +39,7 @@ providers:
           supportsReasoningEffort: true
           thinkingFormat: openai
       claude-sonnet:
+        reasoning: true
         thinking:
           mode: effort
           efforts: [minimal, low, medium, high, xhigh]
@@ -44,6 +48,7 @@ providers:
           supportsReasoningEffort: true
           thinkingFormat: openai
       claude-haiku:
+        reasoning: true
         thinking:
           mode: effort
           efforts: [minimal, low, medium, high, xhigh]
