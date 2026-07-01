@@ -100,7 +100,7 @@ Two image sources stack up in `messages[0]` (the post-compaction "resume / HISTO
 
 ## Recover / resume
 
-- **Preferred — fresh session + artifacts.** Start a new session and rebuild from durable outputs: files written, the tracker, commits/bookmarks. The transcript tells you *where you stopped*; the files on disk *are* the continuity. Reconstruct the to-do from the last `todo` tool results in the transcript.
+- **Preferred — fresh session + artifacts.** Start a new session and rebuild from durable outputs: files written, the tracker, commits/branches. The transcript tells you *where you stopped*; the files on disk *are* the continuity. Reconstruct the to-do from the last `todo` tool results in the transcript.
 - **Surgical un-wedge (advanced, last resort).** With the session's process **stopped**, copy the `.jsonl` aside, then drop the offending image block(s) (or truncate the lines after the poison) and reopen. For a **`snapcompact`** wedge this alone is not enough: the frames are rebuilt from the compaction entry's preserved `snapcompact` data on every context rebuild, so you must also remove or truncate **through that `compaction` line** (or clear its `snapcompact` preserve data) — dropping the image blocks alone leaves the poison to re-render. Risky: a running process may hold the transcript in memory and overwrite your edit — never edit a live session's file.
 - **Prevent.** Keep heavy images out of long-lived context: screenshot only when you'll actually read it, set `browser: { enabled: false }` in `config.yml` when not using it, and be wary of image-based compaction on image-heavy sessions.
 
