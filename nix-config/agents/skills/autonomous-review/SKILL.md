@@ -24,12 +24,12 @@ rules) lives in `skill://github-pr-review` — this skill adds the **loop** and 
    Attribution per `rule://commit-conventions`: commit as Matt with the
    per-repo email + `Co-Authored-By: seal <noreply@sealedsecurity.com>`
    trailer, pushed over the seal-bot token. `gt` does **not** hoist that
-   trailer or issue links into the PR body, and Graphite's merge-queue squash
-   builds the `main` commit from the PR title + description — so put the
-   `Co-Authored-By:` trailer and any issue refs (`Refs #N` / `Closes #N`) at
-   the **bottom of the PR description** yourself, or co-authorship and issue
-   links are lost on merge. Feature branches on allowlisted-owner repos only
-   (see Boundaries).
+   trailer or issue links, and Graphite's merge-queue squash builds the
+   `main` commit from the PR title + description — so the PR description must
+   **end with** `Co-Authored-By: seal <noreply@sealedsecurity.com>` as its
+   last line (issue refs `Refs #N` / `Closes #N` just above it, nothing after
+   the trailer), or co-authorship isn't recorded on merge. Feature branches
+   on allowlisted-owner repos only (see Boundaries).
 2. **Wait for the bots — always as a background task.** Launch `wait-for-reviews <pr>` through `bash` with **`async: true`** (never a blocking/foreground call) and a generous `timeout` (~1800s), then **yield** — do other work or end the turn; the harness wakes you with the result when it returns. **Don't busy-poll it** (no `job`-poll loop). It returns when every bot has reviewed the head, is rate/usage-limited, or reviewed an earlier commit and didn't re-trigger within the grace window; a backstop is the final fallback. No webhook/cron needed.
 3. **Triage** all four surfaces per `skill://github-pr-review`; enumerate every
    reviewer (CodeRabbit / Greptile / cubic / Codex + any human).

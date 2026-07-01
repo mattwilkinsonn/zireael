@@ -57,7 +57,7 @@ gh pr edit <n> --title "type(scope): summary" --body-file <file>
 gh pr ready <n>
 ```
 
-`--no-stack` skips the prompt to also submit **upstack** branches; it does **not** drop the **downstack** base (a bare `gt submit` force-pushes every branch from trunk to yours). A single change off `main` needs nothing extra — `gt submit` pushes just your branch. **`gt` does not hoist the co-author trailer or issue links into the PR body** — and Graphite's merge-queue squash builds the `main` commit from the PR title + description — so put the `Co-Authored-By: seal <noreply@sealedsecurity.com>` trailer and any issue refs (`Refs #N` / `Closes #N`) at the **bottom of the PR description** yourself, or they're lost on merge (`rule://commit-conventions`). Keep the description accurate as review commits land.
+`--no-stack` skips the prompt to also submit **upstack** branches; it does **not** drop the **downstack** base (a bare `gt submit` force-pushes every branch from trunk to yours). A single change off `main` needs nothing extra — `gt submit` pushes just your branch. **`gt` does not hoist the co-author trailer or issue links into the PR body**, and Graphite's merge-queue squash builds the `main` commit from the PR title + description — so **end the PR description with `Co-Authored-By: seal <noreply@sealedsecurity.com>` as its last line** (issue refs `Refs #N` / `Closes #N` on the lines just above it, nothing after the trailer), or co-authorship is lost on merge (`rule://commit-conventions`). Keep the description accurate as review commits land.
 
 ## The Review-Fix Loop
 
