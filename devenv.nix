@@ -16,6 +16,8 @@ let
   # Rust-version source.
   rustToolchain = inputs.fenix.packages.${pkgs.stdenv.system}.fromToolchainFile {
     file = ./rust-toolchain.toml;
+    # Bumping rust-toolchain.toml's channel invalidates this hash — update it
+    # from the mismatch error's `got:` line (fenix has no lockfile for it).
     sha256 = "sha256-mvUGEOHYJpn3ikC5hckneuGixaC+yGrkMM/liDIDgoU=";
   };
 in
