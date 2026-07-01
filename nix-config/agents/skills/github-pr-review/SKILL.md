@@ -61,11 +61,11 @@ Note every reply/resolve in the turn summary (thread + the commit or issue behin
 
 ## Where review-fix commits go
 
-When you do address feedback (autonomously for bot-only findings, or with Matt's go-ahead otherwise — `skill://autonomous-review`), land the fix as a **new commit** and move the PR's bookmark up over it — so the fix rides the **same PR the comments are on**, updating it and its threads in place.
+When you do address feedback (autonomously for bot-only findings, or with Matt's go-ahead otherwise — `skill://autonomous-review`), land the fix as a **new commit** on the PR's branch — so the fix rides the **same PR the comments are on**, updating it and its threads in place.
 
 - **Always a new commit. Never amend or squash a pushed PR's commits.** The auto-reviewers (Greptile, CodeRabbit, cubic, Codex) often don't re-trigger on a rewritten (amended/squashed) commit — a fresh commit on top reliably re-triggers them. Extra commits don't pollute history: every repo squash-merges into `main`.
-- **Don't spin the fix onto a new bookmark** — that opens a *separate* PR disconnected from the review, and the original threads never see it.
-- jj/Graphite: `jj new` on the PR's tip, edit, then `jj bookmark set <pr-bookmark> -r @` to carry the bookmark over the fix.
+- **Don't spin the fix onto a new branch** — that opens a *separate* PR disconnected from the review, and the original threads never see it.
+- With `gt`: `gt modify --commit` on the PR's branch (adds a commit, keeps the branch), then `gt submit` to push it onto the same PR.
 
 ## Fallback: the `gh` CLI
 
