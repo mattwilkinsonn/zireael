@@ -6,6 +6,12 @@ name: flake-update-weekly
 # everything else. Opens a PR against main; Matt reviews + merges.
 #
 # Distinct branch from the daily job so the two PRs never collide.
+#
+# The PR is opened over a token minted from the zireael-release GitHub App
+# (App ID in vars.RELEASE_BOT_APP_ID, key in secrets.RELEASE_BOT_PRIVATE_KEY)
+# — the default GITHUB_TOKEN cannot open PRs (GitHub blocks Actions-authored
+# PR creation), and an App-authored PR also triggers the on:pull_request
+# checks. The App must carry contents:write + pull-requests:write.
 
 "on":
   schedule:
@@ -23,7 +29,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.RELEASE_BOT_APP_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
       - uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
       - uses: DeterminateSystems/determinate-nix-action@v3
       - uses: DeterminateSystems/update-flake-lock@main
         with:
@@ -35,4 +48,4 @@ jobs:
             nix
             automated
           nix-options: --accept-flake-config
-          token: ${{ secrets.GH_TOKEN_FOR_UPDATES || github.token }}
+          token: ${{ steps.app-token.outputs.token }}
