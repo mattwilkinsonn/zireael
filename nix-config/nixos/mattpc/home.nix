@@ -60,6 +60,9 @@
         "LIBVA_DRIVER_NAME,nvidia"
         "GBM_BACKEND,nvidia-drm"
         "__GLX_VENDOR_LIBRARY_NAME,nvidia"
+        # RTX 4080 + wlroots: without this the cursor is invisible until a
+        # session restart. Harmless on other GPUs.
+        "WLR_NO_HARDWARE_CURSORS,1"
       ];
 
       bind = [

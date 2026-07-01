@@ -31,7 +31,7 @@
   boot.loader = {
     systemd-boot = {
       enable = true;
-      configurationLimit = 20; # cap kept generations on the 1 GiB ESP
+      configurationLimit = 10; # cap kept generations (2 GiB ESP; NVIDIA kernels ~150 MB each)
     };
     efi.canTouchEfiVariables = true;
   };
@@ -74,7 +74,10 @@
   # Wayland-native portals for screen-share / file pickers under Hyprland.
   xdg.portal = {
     enable = true;
-    extraPortals = [ pkgs.xdg-desktop-portal-gtk ];
+    extraPortals = [
+      pkgs.xdg-desktop-portal-gtk # file pickers
+      pkgs.xdg-desktop-portal-hyprland # wlr-screencopy (screen share) — GTK alone can't
+    ];
   };
   # NVIDIA + Wayland: let GBM back the EGL platform.
   environment.sessionVariables.NIXOS_OZONE_WL = "1";

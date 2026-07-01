@@ -18,7 +18,7 @@ _:
 # Confirm with `lsblk -f` before running disko: the target disk should show a
 # single large NTFS ("Games") and nothing else.
 #
-# Layout (per the approved plan): 1 GiB ESP (vfat) + 64 GiB swap (= RAM, for
+# Layout (per the approved plan): 2 GiB ESP (vfat) + 64 GiB swap (= RAM, for
 # hibernate) + btrfs root with @ / @home / @nix subvolumes (zstd-compressed).
 {
   disko.devices = {
@@ -34,7 +34,7 @@ _:
             ESP = {
               priority = 1;
               name = "ESP";
-              size = "1G";
+              size = "2G";
               type = "EF00";
               content = {
                 type = "filesystem";
