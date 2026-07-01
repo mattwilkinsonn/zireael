@@ -1,0 +1,20 @@
+# devenv inputs. Rolling nixpkgs is devenv's recommended channel for dev
+# shells (newer than a release channel, curated for devenv). fenix builds the
+# exact rust-toolchain.toml Rust pin for the dev shell + CI.
+inputs:
+  nixpkgs:
+    url: github:cachix/devenv-nixpkgs/rolling
+  # fenix builds the exact rust-toolchain.toml Rust pin. The monorepo's Rust
+  # toolchain source, shared by the dev shell and the CI workflow.
+  fenix:
+    url: github:nix-community/fenix
+    inputs:
+      nixpkgs:
+        follows: nixpkgs
+  # hk (the pre-push hook runner) isn't packaged in nixpkgs — it ships from its
+  # own flake. jj-hooks' integration tests also drive hk, so it must be on PATH.
+  hk:
+    url: github:jdx/hk/v1.48.0
+    inputs:
+      nixpkgs:
+        follows: nixpkgs

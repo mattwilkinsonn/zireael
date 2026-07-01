@@ -1,0 +1,8 @@
+# Language/runtime toolchains, pinned per the proto/devenv split. proto owns
+# these; devenv.nix provides proto itself plus every other tool the gate runs.
+#
+# moon is pinned HERE rather than taken from nixpkgs (which lags on the 1.x
+# line) so it tracks the 2.x series `moon ci` and the workspace schema target.
+bun = "1.3.14"
+node = "24.18.0"
+moon = "2.3.5"
