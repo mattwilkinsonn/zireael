@@ -1,5 +1,5 @@
 modelRoles: 
-  default: anthropic/claude-opus-4-8:xhigh
+  default: litellm/claude-opus:xhigh
 theme: 
   dark: dark-rose-pine
   light: light-tokyo-night
@@ -22,3 +22,6 @@ browser:
 startup: 
   setupWizard: true
 setupVersion: 1
+dev: 
+  autoqa: 
+    consent: granted
