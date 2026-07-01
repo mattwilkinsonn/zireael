@@ -1,4 +1,4 @@
-{ pkgs, lib, inputs, ... }:
+{ pkgs, inputs, ... }:
 # zireael dev shell — the single source of the dev + CI toolchain. The split:
 #
 #   proto  — owns the language/runtime toolchains (bun, node, moon), pinned in
@@ -20,47 +20,45 @@ let
   };
 in
 {
-  packages =
-    with pkgs;
-    [
-      # Language/runtime manager. Pins bun/node/moon via .prototools.
-      proto
+  packages = with pkgs; [
+    # Language/runtime manager. Pins bun/node/moon via .prototools.
+    proto
 
-      # Nix linters — the same set the pre-push gate runs.
-      nixfmt-rfc-style
-      deadnix
-      statix
-      nil
+    # Nix linters — the same set the pre-push gate runs.
+    nixfmt-rfc-style
+    deadnix
+    statix
+    nil
 
-      # Shell + TOML linters.
-      shellcheck
-      shfmt
-      taplo
+    # Shell + TOML linters.
+    shellcheck
+    shfmt
+    taplo
 
-      # CI / workflow + docs tooling.
-      actionlint
-      markdownlint-cli2
+    # CI / workflow + docs tooling.
+    actionlint
+    markdownlint-cli2
 
-      # VCS: jj (Matt's review tool; the release script shells out to it) + hk,
-      # the pre-push hook runner (from its own flake — not in nixpkgs).
-      jujutsu
-      inputs.hk.packages.${pkgs.stdenv.system}.hk
+    # VCS: jj (Matt's review tool; the release script shells out to it) + hk,
+    # the pre-push hook runner (from its own flake — not in nixpkgs).
+    jujutsu
+    inputs.hk.packages.${pkgs.stdenv.system}.hk
 
-      # Rust toolchain (jj-hooks, jj-gt). fenix provides the rust-toolchain.toml
-      # pin; cc/ld for cargo's link step; cargo-nextest is the test runner.
-      rustToolchain
-      stdenv.cc
-      cargo-nextest
+    # Rust toolchain (jj-hooks, jj-gt). fenix provides the rust-toolchain.toml
+    # pin; cc/ld for cargo's link step; cargo-nextest is the test runner.
+    rustToolchain
+    stdenv.cc
+    cargo-nextest
 
-      # jj-hooks' integration tests drive real hook frameworks, so they need the
-      # backends on PATH: pre-commit, prek, lefthook (+ hk above), and pkl (hk
-      # reads hk.pkl). markdownlint-cli2 + actionlint (above) cover its doc /
-      # workflow hooks.
-      pre-commit
-      prek
-      lefthook
-      pkl
-    ];
+    # jj-hooks' integration tests drive real hook frameworks, so they need the
+    # backends on PATH: pre-commit, prek, lefthook (+ hk above), and pkl (hk
+    # reads hk.pkl). markdownlint-cli2 + actionlint (above) cover its doc /
+    # workflow hooks.
+    pre-commit
+    prek
+    lefthook
+    pkl
+  ];
 
   enterShell = ''
     # Activate the proto-managed toolchains (bun/node/moon from .prototools).

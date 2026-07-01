@@ -29,3 +29,8 @@ seal.local.toml
 .devenv*
 .direnv/
 devenv.local.nix
+
+# moon: build cache + docker scaffold are generated. The .moon/workspace.yml,
+# .moon/tasks/, and per-project moon.yml configs are committed.
+.moon/cache/
+.moon/docker/

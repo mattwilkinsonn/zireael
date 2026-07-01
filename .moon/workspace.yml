@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/workspace.json
+#
+# moon workspace. One project per tool + the nix-config tree + a root meta
+# project. Tasks are *system* tasks — they exec the toolchain the devenv shell
+# puts on PATH via proto (bun/node/moon) and nix (the linters), rather than
+# moon managing its own toolchain. This keeps proto (.prototools) the single
+# version source; there is intentionally no .moon/toolchain.yml.
+#
+# `moon ci` runs every affected `runInCI` task — the local + CI gate. The hk
+# pre-push hook is a thin shell over it.
+
+projects:
+  # Root meta project: repo-wide markdown + workflow lints + the release script.
+  root: '.'
+  # Rust workspace members (tools/jj-hooks, tools/jj-gt).
+  jj-hooks: 'tools/jj-hooks'
+  jj-gt: 'tools/jj-gt'
+  # bun/TypeScript tool (its own bun.lock — not a hoisted root workspace).
+  akiflow-cli: 'tools/akiflow-cli'
+  # NixOS + nix-darwin host configs: nix/shell/toml lints + per-host flake-eval.
+  nix-config: 'nix-config'
+  # Homebrew tap: brew style over the formulae.
+  tap: 'Formula'
+
+vcs:
+  client: 'git'
+  provider: 'github'
+  defaultBranch: 'main'
