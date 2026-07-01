@@ -25,7 +25,7 @@ activate it first.
 
 ## The four surfaces
 
-| # | Surface | What lives there | `pull_request_read` method |
+| # | Surface | What lives there | `mcp__litellm_github_pull_request_read` method |
 | --- | --- | --- | --- |
 | a | Inline review threads | Per-line conversations; carry `is_resolved` / `is_outdated` / `is_collapsed` + thread IDs | `get_review_comments` |
 | b | Review bodies | `reviews[].body` — summaries, "Actionable comments: N", outside-diff items, failed-to-post findings | `get_reviews` |
@@ -37,10 +37,10 @@ Inline threads and review bodies are **different shapes** — a reviewer's summa
 ## Pulling each surface
 
 ```text
-pull_request_read  get_review_comments  owner/repo #N   → (a) inline threads + thread metadata + IDs
-pull_request_read  get_reviews          owner/repo #N   → (b) every review body + state + author
-pull_request_read  get_comments         owner/repo #N   → (c) top-level conversation
-pull_request_read  get_check_runs       owner/repo #N   → (d) CI check runs
+mcp__litellm_github_pull_request_read  get_review_comments  owner/repo #N  → (a) inline threads + thread metadata + IDs
+mcp__litellm_github_pull_request_read  get_reviews          owner/repo #N  → (b) every review body + state + author
+mcp__litellm_github_pull_request_read  get_comments         owner/repo #N  → (c) top-level conversation
+mcp__litellm_github_pull_request_read  get_check_runs       owner/repo #N  → (d) CI check runs
 ```
 
 Each inline thread from `get_review_comments` carries a stable thread node ID (e.g. `PRRT_kwDO…`) plus `is_resolved` / `is_outdated`. That ID is the handle for a reply or a resolve — both only under the conditions in Discipline below.
