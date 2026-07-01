@@ -31,7 +31,7 @@ Commits are authored **and committed as Matt** — this keeps his contribution g
 
 ## Push policy
 
-The agent commits, creates branches, **and pushes/submits its own feature branches** over the seal-bot token, then runs the review loop to merge-ready (`skill://autonomous-review`). Submit with `gt submit` (**no `--ai`** — you author the PR title + description; see below).
+The agent commits, creates branches, **and pushes/submits its own feature branches** over the seal-bot token, then runs the review loop to merge-ready (`skill://autonomous-review`). Submit with `gt submit` (**no `--ai`** — you author the PR title + description; see below). **Open PRs only with `gt submit`, never `gh pr create`** — `gh pr create` authors under the `gh` CLI account (`seal-agent`), not the seal-bot identity, so the PR lands under the wrong user and Graphite can't track/re-submit it; `gh` is edit-only on an already-open PR (`gh pr edit`/`ready`).
 
 These stay hard limits, enforced by the push-guard:
 
