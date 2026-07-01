@@ -17,7 +17,7 @@ Use a Conventional Commits prefix; never ship a subject without one:
 - `perf(scope):` — performance only.
 - `chore(scope):` — tooling, deps, housekeeping.
 
-The scope is the affected area (`daemon`, `cli`, `parser`, `auth`, …). Match the scope vocabulary the repo's existing `git log --oneline` / `jj log` history already uses rather than inventing new ones.
+The scope is the affected area (`daemon`, `cli`, `parser`, `auth`, …). Match the scope vocabulary the repo's existing `git log --oneline` history already uses rather than inventing new ones.
 
 ## Body
 

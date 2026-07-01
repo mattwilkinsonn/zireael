@@ -96,7 +96,7 @@ Separate clones don't share branches, so the base must be **on origin** first (i
 ```sh
 gt get <base-branch>                                 # fetch their branch (+ downstack) from remote, tracked
 gt create <codename>-<issue>-<slug> -u -m "…" --no-ai --no-interactive
-gt submit --stack --update-only --no-interactive     # don't resubmit their PR
+gt submit --no-stack --no-interactive               # open a PR for your branch only; don't touch theirs
 ```
 
 - An **in-progress base keeps moving** — when its owner pushes fixes or Matt rebases it, re-pull and restack: `gt get <base-branch>` then `gt restack`. Once the base merges, `gt sync` moves your branch onto `main`.
@@ -108,13 +108,13 @@ gt submit --stack --update-only --no-interactive     # don't resubmit their PR
 | Task | Command |
 | --- | --- |
 | Sync trunk + restack + clean up merged | `gt sync` |
-| New stacked branch + commit | `gt create <name> -u -m "…" --no-ai` |
-| Amend the current branch's commit | `gt modify -u` |
-| Add a new commit (review fix) | `gt modify -c -u -m "…"` |
+| New stacked branch + commit | `gt create <name> -u -m "…" --no-ai --no-interactive` |
+| Amend the current branch's commit | `gt modify -u --no-interactive` |
+| Add a new commit (review fix) | `gt modify -c -u -m "…" --no-interactive` |
 | Rebase the stack onto its parents | `gt restack` |
 | Push + open/update PR(s) | `gt submit --no-interactive` |
-| Submit the whole stack | `gt submit --stack` (`gt ss`) |
-| Push only branches with open PRs | `gt submit --update-only` (`-u`) |
+| Submit the whole stack | `gt submit --stack --no-interactive` (`gt ss`) |
+| Push only branches with open PRs | `gt submit --update-only --no-interactive` (`-u`) |
 | Switch / navigate branches | `gt checkout <branch>` (`gt co`), `gt up`, `gt down` |
 | Show the stack | `gt log`, `gt log short` (`gt ls`) |
 | Fetch a teammate's pushed branch | `gt get <branch>` |

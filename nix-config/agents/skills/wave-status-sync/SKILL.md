@@ -73,11 +73,11 @@ Cross-reference the three sources. Per issue:
   every sync; do it, and say so in the report.
 - **Local-ready commit, no PR** → In Progress. **Pushed / PR open** → In
   Review. **No work, blocked or merely slotted** → Queued/Todo (downgrade a
-  stale In Review only when the ground shows zero work — no bookmark, not on
+  stale In Review only when the ground shows zero work — no branch, not on
   `main`, no open PR).
 - **Don't mutate on a guess.** If a state looks stale but you can't find a
   PR/commit either way, leave it and flag it for the human.
-- **Link every PR — all repos, not just SEA issues.** Every pushed bookmark that
+- **Link every PR — all repos, not just SEA issues.** Every pushed branch that
   has a PR gets a clickable link in the tracker (sealed *and* zireael / oh-my-pi /
   woodpecker / compass — the non-SEA infra / OMP / skills work counts too). In
   `tracker.md`: a reference link — `[#N]` for sealed, `[z#N]` (zireael) /
@@ -96,13 +96,13 @@ the codename inventory if the roster changed. Keep markdown lint-clean.
 ## 5. Report
 
 State plainly: what you Done'd (with the merging PR number), what states you
-corrected (with the jj/PR evidence behind each), and anything left flagged
+corrected (with the git/PR evidence behind each), and anything left flagged
 for the human to decide.
 
 ## Notes
 
 - Agents are separate sessions/processes — you can't `irc` them. Read their
-  state from jj + PRs, not by asking. To recover a *broken* agent's session,
+  state from git + PRs, not by asking. To recover a *broken* agent's session,
   use `skill://session-recovery`.
 - A tracker "assignee" in the issue tracker is a person, not an agent
   codename — agent assignment lives in the wave tracker, not the issue
