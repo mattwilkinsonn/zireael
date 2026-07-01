@@ -21,3 +21,4 @@ browser:
   enabled: false
 startup: 
   setupWizard: true
+setupVersion: 1
