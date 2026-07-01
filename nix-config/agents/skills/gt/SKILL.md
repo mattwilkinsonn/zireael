@@ -57,7 +57,7 @@ gh pr edit <n> --title "type(scope): summary" --body-file <file>
 gh pr ready <n>
 ```
 
-Add `--no-stack` to submit only the current branch (skip the prompt to include branches above it). **`gt` does not hoist the co-author trailer or issue links into the PR body** — and Graphite's merge-queue squash builds the `main` commit from the PR title + description — so put the `Co-Authored-By: seal <noreply@sealedsecurity.com>` trailer and any issue refs (`Refs #N` / `Closes #N`) at the **bottom of the PR description** yourself, or they're lost on merge (`rule://commit-conventions`). Keep the description accurate as review commits land.
+`--no-stack` skips the prompt to also submit **upstack** branches; it does **not** drop the **downstack** base (a bare `gt submit` force-pushes every branch from trunk to yours). A single change off `main` needs nothing extra — `gt submit` pushes just your branch. **`gt` does not hoist the co-author trailer or issue links into the PR body** — and Graphite's merge-queue squash builds the `main` commit from the PR title + description — so put the `Co-Authored-By: seal <noreply@sealedsecurity.com>` trailer and any issue refs (`Refs #N` / `Closes #N`) at the **bottom of the PR description** yourself, or they're lost on merge (`rule://commit-conventions`). Keep the description accurate as review commits land.
 
 ## The Review-Fix Loop
 
@@ -91,16 +91,18 @@ gt submit --stack --no-interactive                   # submits the whole stack (
 
 ### On another agent's pushed base (cross-clone)
 
-Separate clones don't share branches, so the base must be **on origin** first (its owner has submitted it). Then pull it into your clone and build on it:
+Separate clones don't share branches, so the base must be **on origin** first (its owner has submitted it). Pull it in, **freeze it** so your submits never touch their PR, then build on top:
 
 ```sh
-gt get <base-branch>                                 # fetch their branch (+ downstack) from remote, tracked
+gt get <base-branch>                                 # fetch their branch (+ downstack) from remote
+gt freeze <base-branch>                              # protect their PR — your submits/restacks skip it
 gt create <codename>-<issue>-<slug> -u -m "…" --no-ai --no-interactive
-gt submit --no-stack --no-interactive               # open a PR for your branch only; don't touch theirs
+gt submit --no-interactive                           # opens your PR on top; the frozen base is left alone
 ```
 
-- An **in-progress base keeps moving** — when its owner pushes fixes or Matt rebases it, re-pull and restack: `gt get <base-branch>` then `gt restack`. Once the base merges, `gt sync` moves your branch onto `main`.
-- **Coordinate with the base's owner** (via Matt) before submitting a stack on their unmerged PR, so you don't resubmit or race their branch.
+- **Why freeze:** a bare `gt submit` force-pushes every branch from trunk to yours — the base included. Freezing the base blocks that, so you stack on their PR without modifying it; `gt unfreeze <base-branch>` lifts it.
+- An **in-progress base keeps moving** — when its owner pushes fixes or Matt rebases it, re-pull: `gt get <base-branch>` (syncs the frozen base from remote) then `gt restack`. Once the base merges, `gt unfreeze <base-branch>` then `gt sync` moves your branch onto `main`.
+- **Coordinate with the base's owner** (via Matt) before stacking on their unmerged PR.
 - **Disjoint files?** If your work touches entirely different files from the base, work off `main` and let `gt sync` rebase once at the end — stack only when you genuinely need the base's changes to build or test.
 
 ## Command Reference
@@ -118,6 +120,7 @@ gt submit --no-stack --no-interactive               # open a PR for your branch 
 | Switch / navigate branches | `gt checkout <branch>` (`gt co`), `gt up`, `gt down` |
 | Show the stack | `gt log`, `gt log short` (`gt ls`) |
 | Fetch a teammate's pushed branch | `gt get <branch>` |
+| Stack on a base without touching it | `gt freeze <branch>` / `gt unfreeze <branch>` |
 | Fix a branch's parent metadata | `gt track --parent <parent>` |
 | Undo the last `gt` mutation | `gt undo` |
 
