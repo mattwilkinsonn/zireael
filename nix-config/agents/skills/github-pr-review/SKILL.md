@@ -7,9 +7,21 @@ description: "Triage PR feedback across all four surfaces (GitHub MCP; gh CLI fa
 
 Review feedback on a PR lives on **four independent surfaces**. Checking one or two and inferring the rest are empty is the classic miss — a PR can be fully actionable while showing zero unresolved inline threads. Enumerate all four, every time. The companion principle lives in `rule://enumerate-pr-review-surfaces`.
 
-Use the **GitHub MCP** (`pull_request_read`) as the primary tool — structured output, one call per surface, no shell-quoting or `--jq` plumbing. The `gh` CLI is fallback only (see the last section).
+Use the **GitHub MCP** (`mcp__litellm_github_pull_request_read`) as the primary tool — structured output, one call per surface, no shell-quoting or `--jq` plumbing. The `gh` CLI is fallback only (see the last section).
 
 When you own a PR end-to-end — push, fix, drive to merge-ready — run this triage inside the loop in `skill://autonomous-review`; the discipline below is unchanged, the loop just adds the autonomy to act on bot-only findings without round-tripping the human.
+
+## Tools via the LiteLLM gateway
+
+MCP routes through the mattfw LiteLLM gateway, so every tool is namespaced
+`mcp__litellm_<server>_<op>`. The primary read tool is
+`mcp__litellm_github_pull_request_read` (its `method` arg selects the surface,
+below); replies/resolves use `mcp__litellm_github_pull_request_review_write`
+(`method: resolve_thread` / `unresolve_thread`) and
+`mcp__litellm_github_add_reply_to_pull_request_comment`. The gateway exposes a
+large tool set and many are **behind tool-search** — if the tool you need isn't
+already active, run `search_tool_bm25` (e.g. `"github pull request review"`) to
+activate it first.
 
 ## The four surfaces
 
