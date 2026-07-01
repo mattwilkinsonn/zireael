@@ -125,6 +125,7 @@ jobs:
     name: moon CI
     needs:
       - optimize_ci
+      - changes
       - moon-ci
       - moon-ci-darwin
     if: always()
@@ -137,6 +138,7 @@ jobs:
           # Each upstream job reports one of: success, failure, cancelled, skipped.
           # success/skipped → contribute pass; failure/cancelled → fail the gate.
           declare -A results=(
+            [changes]='${{ needs.changes.result }}'
             [moon-ci]='${{ needs.moon-ci.result }}'
             [moon-ci-darwin]='${{ needs.moon-ci-darwin.result }}'
           )
