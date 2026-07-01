@@ -112,15 +112,32 @@ _await_headroom() {
 	done
 }
 
-# owner/repo — explicit arg wins; else `gh repo view` (GraphQL — callers should
-# pass owner/repo to avoid spending a GraphQL call just to resolve the repo).
+# owner/repo — explicit arg wins; else resolve from the local checkout via
+# `gh repo view` (one GraphQL call). Callers should pass owner/repo to avoid
+# spending even that; `gh repo view` already returns the canonical owner/repo.
 _repo() {
 	if [ -n "${1:-}" ]; then
 		printf '%s' "$1"
 	else
-		gh api repos/"$(gh repo view --json nameWithOwner -q .nameWithOwner)" --jq .full_name 2>/dev/null ||
-			gh repo view --json nameWithOwner -q .nameWithOwner
+		gh repo view --json nameWithOwner -q .nameWithOwner
 	fi
+}
+
+# _gql <query> <label> [gh -F args...] — run a GraphQL query and, if any
+# connection in the response hit its page cap (a `pageInfo.hasNextPage` is true),
+# warn to stderr so silent truncation on a large PR routed to GraphQL is visible
+# (the REST branches `--paginate` the full set). Emits the raw response on stdout
+# for the caller's jq transform. Add `pageInfo{hasNextPage}` to each paged
+# connection in <query> for the check to see it.
+_gql() {
+	local query="$1" label="$2"
+	shift 2
+	local raw
+	raw="$(gh api graphql -f query="$query" "$@")"
+	if jq -e '[.. | objects | .hasNextPage? // empty] | any' <<<"$raw" >/dev/null 2>&1; then
+		echo "gh-route: $label truncated at the 100-item GraphQL page cap; the same read via REST paginates fully — re-run when REST has headroom, or use the MCP for the complete list." >&2
+	fi
+	printf '%s' "$raw"
 }
 
 cmd_head_sha() {
@@ -144,8 +161,8 @@ cmd_reviews() {
 	name="${repo##*/}"
 	_await_headroom
 	if [ "$(pick)" = graphql ]; then
-		gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){reviews(first:100){nodes{author{login __typename} state submittedAt commit{oid} body}}}}}' \
-			-F o="$owner" -F n="$name" -F p="$pr" --jq '
+		_gql 'query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){reviews(first:100){pageInfo{hasNextPage} nodes{author{login __typename} state submittedAt commit{oid} body}}}}}' reviews \
+			-F o="$owner" -F n="$name" -F p="$pr" | jq -c '
 			def login: (.author.login // "") + (if .author.__typename == "Bot" then "[bot]" else "" end);
 			[.data.repository.pullRequest.reviews.nodes[]
 			| {user: {login: login}, state: .state, submitted_at: .submittedAt, commit_id: .commit.oid, body: .body}]'
@@ -162,8 +179,8 @@ cmd_comments() {
 	name="${repo##*/}"
 	_await_headroom
 	if [ "$(pick)" = graphql ]; then
-		gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){comments(first:100){nodes{author{login __typename} body createdAt updatedAt}}}}}' \
-			-F o="$owner" -F n="$name" -F p="$pr" --jq '
+		_gql 'query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){comments(first:100){pageInfo{hasNextPage} nodes{author{login __typename} body createdAt updatedAt}}}}}' comments \
+			-F o="$owner" -F n="$name" -F p="$pr" | jq -c '
 			def login: (.author.login // "") + (if .author.__typename == "Bot" then "[bot]" else "" end);
 			[.data.repository.pullRequest.comments.nodes[]
 			| {user: {login: login}, body: .body, created_at: .createdAt, updated_at: .updatedAt}]'
@@ -180,8 +197,8 @@ cmd_review_comments() {
 	name="${repo##*/}"
 	_await_headroom
 	if [ "$(pick)" = graphql ]; then
-		gh api graphql -f query='query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){reviewThreads(first:100){nodes{comments(first:100){nodes{author{login __typename} body path line commit{oid} originalCommit{oid}}}}}}}}' \
-			-F o="$owner" -F n="$name" -F p="$pr" --jq '
+		_gql 'query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){reviewThreads(first:100){pageInfo{hasNextPage} nodes{comments(first:100){pageInfo{hasNextPage} nodes{author{login __typename} body path line commit{oid} originalCommit{oid}}}}}}}}' review-comments \
+			-F o="$owner" -F n="$name" -F p="$pr" | jq -c '
 			def login: (.author.login // "") + (if .author.__typename == "Bot" then "[bot]" else "" end);
 			[.data.repository.pullRequest.reviewThreads.nodes[].comments.nodes[]
 			| {user: {login: login}, body: .body, path: .path, line: .line, commit_id: (.commit.oid // .originalCommit.oid)}]'
@@ -198,8 +215,8 @@ cmd_check_runs() {
 	name="${repo##*/}"
 	_await_headroom
 	if [ "$(pick)" = graphql ]; then
-		gh api graphql -f query='query($o:String!,$n:String!,$r:String!){repository(owner:$o,name:$n){object(expression:$r){... on Commit{checkSuites(first:20){nodes{checkRuns(first:100){nodes{name status conclusion}}}}}}}}' \
-			-F o="$owner" -F n="$name" -F r="$ref" --jq '
+		_gql 'query($o:String!,$n:String!,$r:String!){repository(owner:$o,name:$n){object(expression:$r){... on Commit{checkSuites(first:20){pageInfo{hasNextPage} nodes{checkRuns(first:100){pageInfo{hasNextPage} nodes{name status conclusion}}}}}}}}' check-runs \
+			-F o="$owner" -F n="$name" -F r="$ref" | jq -c '
 			{check_runs: [.data.repository.object.checkSuites.nodes[].checkRuns.nodes[]
 			| {name: .name, status: (.status | ascii_downcase), conclusion: (if .conclusion then (.conclusion | ascii_downcase) else null end)}]}'
 	else
@@ -215,8 +232,8 @@ cmd_pr_list() {
 	name="${repo##*/}"
 	_await_headroom
 	if [ "$(pick)" = graphql ]; then
-		gh api graphql -f query='query($o:String!,$n:String!){repository(owner:$o,name:$n){pullRequests(states:OPEN,first:100){nodes{number title state headRefOid author{login __typename}}}}}' \
-			-F o="$owner" -F n="$name" --jq '
+		_gql 'query($o:String!,$n:String!){repository(owner:$o,name:$n){pullRequests(states:OPEN,first:100){pageInfo{hasNextPage} nodes{number title state headRefOid author{login __typename}}}}}' pr-list \
+			-F o="$owner" -F n="$name" | jq -c '
 			def login: (.author.login // "") + (if .author.__typename == "Bot" then "[bot]" else "" end);
 			[.data.repository.pullRequests.nodes[]
 			| {number: .number, title: .title, state: (.state | ascii_downcase), head: {sha: .headRefOid}, user: {login: login}}]'

@@ -63,9 +63,15 @@ COMMENTS_REST='[{"user":{"login":"alice"},"body":"hi","created_at":"2024-01-01T0
 COMMENTS_GQL='{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"login":"alice","__typename":"User"},"body":"hi","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T01:00:00Z"},{"author":{"login":"seal-bot","__typename":"Bot"},"body":"CI passed","createdAt":"2024-01-02T00:00:00Z","updatedAt":"2024-01-02T00:00:00Z"}]}}}}}'
 RC_REST='[{"user":{"login":"alice"},"body":"style","path":"src/a.ts","line":10,"commit_id":"ccc333"},{"user":{"login":"seal-bot[bot]"},"body":"unused var","path":"src/b.ts","line":20,"commit_id":"ddd444"}]'
 RC_GQL='{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"comments":{"nodes":[{"author":{"login":"alice","__typename":"User"},"body":"style","path":"src/a.ts","line":10,"commit":{"oid":"ccc333"},"originalCommit":{"oid":"zzz000"}},{"author":{"login":"seal-bot","__typename":"Bot"},"body":"unused var","path":"src/b.ts","line":20,"commit":{"oid":"ddd444"},"originalCommit":{"oid":"zzz000"}}]}}]}}}}}'
+HEAD_SHA_REST='{"head":{"sha":"c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"},"number":1}'
+HEAD_SHA_GQL='{"data":{"repository":{"pullRequest":{"headRefOid":"c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00"}}}}'
+CHECK_RUNS_REST='{"check_runs":[{"name":"build","status":"completed","conclusion":"success"},{"name":"lint","status":"queued","conclusion":null}]}'
+CHECK_RUNS_GQL='{"data":{"repository":{"object":{"checkSuites":{"nodes":[{"checkRuns":{"nodes":[{"name":"build","status":"COMPLETED","conclusion":"SUCCESS"}]}},{"checkRuns":{"nodes":[{"name":"lint","status":"QUEUED","conclusion":null}]}}]}}}}}'
+PR_LIST_REST='[{"number":7,"title":"Add feature","state":"open","head":{"sha":"abc123"},"user":{"login":"alice"}},{"number":8,"title":"Fix bug","state":"open","head":{"sha":"def456"},"user":{"login":"dependabot[bot]"}}]'
+PR_LIST_GQL='{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,"title":"Add feature","state":"OPEN","headRefOid":"abc123","author":{"login":"alice","__typename":"User"}},{"number":8,"title":"Fix bug","state":"OPEN","headRefOid":"def456","author":{"login":"dependabot","__typename":"Bot"}}]}}}}'
 RL_DRAINED='{"resources":{"core":{"remaining":5,"limit":5000,"reset":9999999999},"graphql":{"remaining":5,"limit":5000,"reset":9999999999}}}'
 
-emit() { if [ -n "$jqprog" ]; then jq "$jqprog"; else cat; fi; }
+emit() { if [ -n "$jqprog" ]; then jq -r "$jqprog"; else cat; fi; }
 
 if [ "$is_rl" = 1 ]; then
 	printf '%s' "$RL_DRAINED"
@@ -77,6 +83,9 @@ if [ "$is_graphql" = 1 ]; then
 	*reviewThreads*) printf '%s' "$RC_GQL" | emit ;;
 	*reviews*) printf '%s' "$REVIEWS_GQL" | emit ;;
 	*comments*) printf '%s' "$COMMENTS_GQL" | emit ;;
+	*checkSuites*) printf '%s' "$CHECK_RUNS_GQL" | emit ;;
+	*states:OPEN*) printf '%s' "$PR_LIST_GQL" | emit ;;
+	*headRefOid*) printf '%s' "$HEAD_SHA_GQL" | emit ;;
 	*) printf '{}' | emit ;;
 	esac
 	exit 0
@@ -86,6 +95,9 @@ case "$restpath" in
 */issues/*/comments) printf '%s' "$COMMENTS_REST" | emit ;;
 */pulls/*/reviews) printf '%s' "$REVIEWS_REST" | emit ;;
 */pulls/*/comments) printf '%s' "$RC_REST" | emit ;;
+*/commits/*/check-runs) printf '%s' "$CHECK_RUNS_REST" | emit ;;
+*state=open*) printf '%s' "$PR_LIST_REST" | emit ;;
+*/pulls/*) printf '%s' "$HEAD_SHA_REST" | emit ;;
 *) printf '[]' | emit ;;
 esac
 GH
@@ -197,6 +209,42 @@ check "review-comments via REST → normalized shape" \
 check "review-comments via GraphQL → same shape ([bot] appended)" \
 	"$(run_route gql review-comments 1 o/r | canon)" \
 	"$(printf '%s' "$EXP_RC" | canon)"
+
+echo
+echo "shape parity — head-sha / check-runs / pr-list (REST branch == GraphQL branch):"
+
+# head-sha: REST reads .head.sha off the pull object; GraphQL reads headRefOid.
+# Both --jq to a bare SHA string, so the two routes must yield the identical SHA.
+EXP_HEAD_SHA='c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00'
+check "head-sha via REST → bare head SHA" \
+	"$(run_route rest head-sha 1 o/r)" "$EXP_HEAD_SHA"
+check "head-sha via GraphQL → same SHA (headRefOid)" \
+	"$(run_route gql head-sha 1 o/r)" "$EXP_HEAD_SHA"
+
+# check-runs: REST relies on the API already lowercasing status/conclusion and
+# flattens check_runs across pages; GraphQL applies explicit ascii_downcase and
+# flattens across checkSuites. Feed lowercase REST vs UPPERCASE GraphQL carrying
+# the same logical runs (build in suite 1, lint in suite 2) and assert both
+# normalize to the identical lowercase, flattened shape — the divergence a parity
+# test is here to catch. null conclusion must survive as JSON null, not "null".
+EXP_CHECK_RUNS='{"check_runs":[{"name":"build","status":"completed","conclusion":"success"},{"name":"lint","status":"queued","conclusion":null}]}'
+check "check-runs via REST → normalized lowercase shape" \
+	"$(run_route rest check-runs abc o/r | canon)" \
+	"$(printf '%s' "$EXP_CHECK_RUNS" | canon)"
+check "check-runs via GraphQL → UPPERCASE ascii_downcased to same shape" \
+	"$(run_route gql check-runs abc o/r | canon)" \
+	"$(printf '%s' "$EXP_CHECK_RUNS" | canon)"
+
+# pr-list: REST state is already lowercase and Bot logins already carry [bot];
+# GraphQL downcases state and appends [bot] from __typename. Same logical PRs
+# (one human, one Bot author) must converge on the identical normalized array.
+EXP_PR_LIST='[{"number":7,"title":"Add feature","state":"open","head":{"sha":"abc123"},"user":{"login":"alice"}},{"number":8,"title":"Fix bug","state":"open","head":{"sha":"def456"},"user":{"login":"dependabot[bot]"}}]'
+check "pr-list via REST → normalized shape" \
+	"$(run_route rest pr-list o/r | canon)" \
+	"$(printf '%s' "$EXP_PR_LIST" | canon)"
+check "pr-list via GraphQL → same shape (state downcased, [bot] appended)" \
+	"$(run_route gql pr-list o/r | canon)" \
+	"$(printf '%s' "$EXP_PR_LIST" | canon)"
 
 echo
 echo "back-off (both buckets < FLOOR):"
