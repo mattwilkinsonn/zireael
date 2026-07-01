@@ -20,6 +20,7 @@ Use this for every VCS operation in your per-agent git clone. Agents work in a p
 
 - **Always non-interactive.** Pass `--no-interactive` and `-m "msg"` to `create` / `modify` / `submit`; a bare invocation opens an editor or TUI and hangs a headless agent. For the same reason, never use the patch (`-p`) or `--interactive-rebase` flags.
 - **Never `--ai`.** It regenerates the PR title/description non-deterministically on every submit, clobbering your prose and dropping issue links. You author the PR title + description yourself (`rule://commit-conventions`).
+- **Open PRs with `gt submit` — never `gh pr create`.** `gh pr create` authors the PR under the `gh` CLI account (`seal-agent`), not the seal-bot identity `gt submit` uses, so the PR lands under the wrong user *and* Graphite never learns about it (no stack tracking, no re-submit). `gt submit` is the *only* way to open a PR. `gh` is edit-only on an already-open PR (`gh pr edit`/`ready`/`checks`), and even then the MCP is preferred (see below).
 - **Review fixes are a NEW commit, never an amend.** Use `gt modify --commit` (`-c`) for a fix on a pushed branch. Amending or squashing a pushed commit rewrites history and fails to re-trigger the review bots (`skill://autonomous-review`).
 - **Never push/force-push `main`; never merge.** Merge is the human gate. Feature branches on `mattwilkinsonn/*` + `sealedsecurity/*` only.
 - **Commit as Matt** (per-repo email) with the `Co-Authored-By: seal <noreply@sealedsecurity.com>` trailer.

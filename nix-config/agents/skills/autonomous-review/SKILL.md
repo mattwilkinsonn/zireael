@@ -18,7 +18,10 @@ rules) lives in `skill://github-pr-review` — this skill adds the **loop** and 
 
 1. **Commit + submit.** Commit your change, create your feature branch, and
    submit it yourself: `gt submit` — **no `--ai`** (it regenerates the body
-   every submit and clobbers your prose). You author the PR title +
+   every submit and clobbers your prose). **Open the PR only with `gt submit`,
+   never `gh pr create`** — the latter authors under the `gh` account
+   (`seal-agent`), not the seal-bot identity, so the PR lands under the wrong
+   user and Graphite can't track it. You author the PR title +
    description and **keep it accurate as the loop lands commits** — set/update
    via the GitHub MCP `mcp__litellm_github_update_pull_request` (or `gh pr edit
    <n> --body …` as fallback). MCP tools route through the LiteLLM gateway as
