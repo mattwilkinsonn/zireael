@@ -15,8 +15,10 @@ the maintenance routine for the wave that `skill://multi-agent-wave` runs.
 
 - Read the tracker (`~/notes/wave/tracker.md`): roster, per-agent repos +
   clones, conflict map, the live issue-tracker projects.
-- Activate integrations if not already active (`search_tool_bm25` for the
-  Linear + GitHub MCP servers).
+- Activate the MCP tools if not already active: they route through the LiteLLM
+  gateway as `mcp__litellm_<server>_<op>` (Linear + GitHub) and many are behind
+  tool-search — run `search_tool_bm25` (e.g. `"linear list issues"`,
+  `"github list pull requests"`) to activate the ones you need.
 - **Linear MCP must be called via direct top-level tools**, never from an
   `eval` cell or a subagent — the harness `i`-arg leaks on those paths and
   strict servers reject the call *silently* (see `skill://session-recovery`).
@@ -51,14 +53,15 @@ git -C <repo> fetch && git log --oneline -60 origin/main
 ```
 
 Scan the squashed titles for issue keys / PR numbers. For open-PR truth
-(→ In Review) use the GitHub MCP `list_pull_requests` (state `open`) and
-`pull_request_read` (`get` → `state`).
+(→ In Review) use the GitHub MCP `mcp__litellm_github_list_pull_requests`
+(state `open`) and `mcp__litellm_github_pull_request_read` (`get` → `state`).
 
 ## 3. Issue-tracker state
 
-`list_issues` per live project + `list_issue_statuses` for the exact status
+`mcp__litellm_linear_list_issues` per live project +
+`mcp__litellm_linear_list_issue_statuses` for the exact status
 names. Sort by `createdAt` to catch newly filed issues (and follow-ups).
-`get_issue <KEY>` returns each issue's **attachments** — the linked PR(s) +
+`mcp__litellm_linear_get_issue <KEY>` returns each issue's **attachments** — the linked PR(s) +
 commits (the forge/Graphite integration attaches them on submit); that's the
 source of truth for which PR is the issue's, and the PR number to record.
 
@@ -67,7 +70,8 @@ source of truth for which PR is the issue's, and the PR number to record.
 Cross-reference the three sources. Per issue:
 
 - **Merged on `main` but not in the completed state** → set it by hand
-  (`save_issue` to the status from `list_issue_statuses` whose type/category
+  (`mcp__litellm_linear_save_issue` to the status from
+  `mcp__litellm_linear_list_issue_statuses` whose type/category
   is `completed` — pass its exact name/id, not a name-match on `Done`, since
   the terminal state may be `Shipped`/`Merged`/`Resolved`). If the merge→completed automation is broken, this is manual on
   every sync; do it, and say so in the report.
@@ -84,10 +88,10 @@ Cross-reference the three sources. Per issue:
   `[omp#N]` (oh-my-pi) for other repos — with the matching `[label]: <github-pr-url>`
   def in the PR-links block at the file end. In `tracker.html`: `pr: N` (or
   `prs: [N, …]`) on the card, plus `prRepo:` for non-sealed (the render maps it
-  through `PR_BASE`). Sealed PR numbers come from `get_issue` attachments; non-SEA
-  from `list_pull_requests` per repo (`mattwilkinsonn/zireael`,
+  through `PR_BASE`). Sealed PR numbers come from `mcp__litellm_linear_get_issue` attachments; non-SEA
+  from `mcp__litellm_github_list_pull_requests` per repo (`mattwilkinsonn/zireael`,
   `can1357/oh-my-pi`, …). If Linear never auto-attached a SEA PR (no
-  `Closes SEA-NNN`), add it with `save_issue` `links`.
+  `Closes SEA-NNN`), add it with `mcp__litellm_linear_save_issue` `links`.
 
 Then update the artifacts: rewrite `tracker.md` (roster/status, conflict
 map, candidate queue), mirror the data arrays in `tracker.html`, and update

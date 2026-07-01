@@ -57,6 +57,12 @@ gh pr edit <n> --title "type(scope): summary" --body-file <file>
 gh pr ready <n>
 ```
 
+MCP-native (preferred): `mcp__litellm_github_update_pull_request` with `title`,
+`body`, and `draft: false` sets the metadata **and** marks the PR ready in one
+call. MCP tools route through the LiteLLM gateway as `mcp__litellm_<server>_<op>`
+and many are behind tool-search — run `search_tool_bm25` to activate one that
+isn't already live.
+
 `--no-stack` skips the prompt to also submit **upstack** branches; it does **not** drop the **downstack** base (a bare `gt submit` force-pushes every branch from trunk to yours). A single change off `main` needs nothing extra — `gt submit` pushes just your branch. **`gt` does not hoist the co-author trailer or issue links into the PR body**, and Graphite's merge-queue squash builds the `main` commit from the PR title + description — so **end the PR description with `Co-Authored-By: seal <noreply@sealedsecurity.com>` as its last line** (issue refs `Refs #N` / `Closes #N` on the lines just above it, nothing after the trailer), or co-authorship is lost on merge (`rule://commit-conventions`). Keep the description accurate as review commits land.
 
 ## The Review-Fix Loop

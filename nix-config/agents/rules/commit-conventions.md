@@ -42,7 +42,7 @@ These stay hard limits, enforced by the push-guard:
 
 You write the PR title and description yourself — **never `--ai`**. Graphite's `--ai` regenerates the body non-deterministically every submit, clobbering your prose and dropping issue links; without it, `gt submit` leaves the description under your control.
 
-- Write it like a good commit body — what changed and why — and **update it as review-loop commits land** so it stays accurate. Set/update via `gh pr edit <n> --body …` or the GitHub MCP `update_pull_request`.
+- Write it like a good commit body — what changed and why — and **update it as review-loop commits land** so it stays accurate. Set/update via the GitHub MCP `mcp__litellm_github_update_pull_request` (routed through the LiteLLM gateway; run `search_tool_bm25` to activate it if it isn't already live), or `gh pr edit <n> --body …` as fallback.
 - **End every PR description with the `Co-Authored-By` trailer as its last line** — `gt` doesn't hoist it. Graphite's merge-queue squash builds the `main` commit from the **PR title + description**, so the description's last line becomes the commit's last line, and GitHub records co-authorship only when `Co-Authored-By: seal <noreply@sealedsecurity.com>` is that final line — nothing (prose, headings, other text) after it. Put issue links (`Refs #N` / `Closes #N`) on the lines just above it. Keep the trailer in your commits too (per Attribution), but the description is what lands via the queue.
 
 ## Branch naming

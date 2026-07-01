@@ -20,7 +20,10 @@ rules) lives in `skill://github-pr-review` — this skill adds the **loop** and 
    submit it yourself: `gt submit` — **no `--ai`** (it regenerates the body
    every submit and clobbers your prose). You author the PR title +
    description and **keep it accurate as the loop lands commits** — set/update
-   via `gh pr edit <n> --body …` or the GitHub MCP `update_pull_request`.
+   via the GitHub MCP `mcp__litellm_github_update_pull_request` (or `gh pr edit
+   <n> --body …` as fallback). MCP tools route through the LiteLLM gateway as
+   `mcp__litellm_<server>_<op>` and many are behind tool-search — run
+   `search_tool_bm25` to activate one that isn't already live.
    Attribution per `rule://commit-conventions`: commit as Matt with the
    per-repo email + `Co-Authored-By: seal <noreply@sealedsecurity.com>`
    trailer, pushed over the seal-bot token. `gt` does **not** hoist that
