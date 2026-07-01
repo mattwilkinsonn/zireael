@@ -127,6 +127,15 @@ CI shape:
 Per-tool recipes are delegated to each tool's own `Justfile`. See
 [`tools/<name>/README.md`](./tools/) for tool-specific details.
 
+## Docs
+
+[`docs/`](./docs) holds two kinds of document, mirrored by domain:
+
++ **`designs/<domain>/`** — point-in-time **design records** (the *why*; frozen once decided).
++ **`specs/<domain>/`** — the **living source of truth** for how a component *currently* behaves.
+
+Domains: `platform/` (nix hosts + CI), `tools/` (jj-gt, jj-hooks), `agents/` (push-guard). A behavior change updates the matching `specs/` doc **in the same PR**; see [`docs/README.md`](./docs/README.md).
+
 ## Repository history
 
 This repo replaces these previous standalone repos:

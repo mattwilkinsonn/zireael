@@ -103,7 +103,7 @@ The `required_status_checks[].context` strings must match the
 **job display name** GitHub renders in PR check listings. For
 reusable-workflow calls (jj-hooks.yml + jj-gt.yml calling
 ci-base-rust.yml), the rendered name is the called job's `name:`
-field, not the caller's job-id. See `docs/CI.md` for the full
+field, not the caller's job-id. See `docs/specs/platform/ci.md` for the full
 mapping.
 
 ## Two-step rollout for new required checks
