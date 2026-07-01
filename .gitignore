@@ -24,5 +24,8 @@ Thumbs.db
 seal.local.toml
 .envrc.local
 
-# direnv state (commit .envrc, ignore the cached approval)
+# devenv + direnv: generated shell artifacts + direnv cache. The
+# devenv.{nix,yaml}, devenv.lock, and .envrc sources are committed.
+.devenv*
 .direnv/
+devenv.local.nix
