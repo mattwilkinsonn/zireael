@@ -96,6 +96,16 @@ in
       # not yet automated via op-cli because gt auth is a one-time
       # action and the token is durable.
       graphite-cli
+      # Woodpecker CI CLI — drives the sealed Woodpecker fleet (server
+      # `ci.sealedsecurity.com`) from the terminal: inspect / trigger /
+      # restart pipelines. dev.nix not home.nix, like graphite-cli
+      # above (Pis don't drive CI). nixpkgs tracks 3.15, matching the
+      # pinned fleet server + agents — keep the client on the server's
+      # major. Ships `woodpecker` + `woodpecker-cli`. Auth is pure env:
+      # WOODPECKER_SERVER (static export below) + WOODPECKER_TOKEN
+      # (per-user PAT from 1Password via load-secrets.nix); no
+      # `woodpecker-cli setup` / persisted config needed.
+      woodpecker-cli
       # Nix / shell / toml linters — invoked by the hk pre-push hook
       # (~/hk.pkl). Cheap to keep on dev boxes for one-off CLI use too.
       deadnix # unused let bindings / function args in Nix
@@ -182,6 +192,17 @@ in
     [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 
     ${builtins.readFile ../dotfiles/zsh/fnm.zsh}
+  '';
+
+  # Woodpecker CI server URL for the `woodpecker-cli` above. Not a
+  # secret (public Cloudflare-tunnel UI + webhook), so a plain static
+  # export rather than op-injected; the matching WOODPECKER_TOKEN
+  # (per-user PAT) loads from 1Password via shared/load-secrets.nix.
+  # envExtra (~/.zshenv, unconditional) not home.sessionVariables —
+  # same guard-footgun reasoning as home.nix's COLORFGBG. The CLI reads
+  # both from env; env vars alone suffice.
+  programs.zsh.envExtra = ''
+    export WOODPECKER_SERVER="https://ci.sealedsecurity.com"
   '';
 
   # rustup default toolchain: set stable as default on first install.
