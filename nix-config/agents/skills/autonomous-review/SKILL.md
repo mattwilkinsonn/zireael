@@ -16,17 +16,20 @@ rules) lives in `skill://github-pr-review` — this skill adds the **loop** and 
 
 ## The loop
 
-1. **Commit + submit.** Commit your change, create/move your bookmark, and submit
-   it yourself: `jj-gt submit -b <bookmark>` — **no `--ai`** (it regenerates the
-   body every submit and clobbers your prose). You author the PR title +
+1. **Commit + submit.** Commit your change, create your feature branch, and
+   submit it yourself: `gt submit` — **no `--ai`** (it regenerates the body
+   every submit and clobbers your prose). You author the PR title +
    description and **keep it accurate as the loop lands commits** — set/update
    via `gh pr edit <n> --body …` or the GitHub MCP `update_pull_request`.
-   Attribution per `rule://commit-conventions`: the commit is authored as Matt
-   with the per-repo email, trailered `Co-Authored-By: seal
-   <noreply@sealedsecurity.com>`, and pushed over the seal-bot token — `jj-gt`
-   hoists that trailer into the PR body's trailing block so GitHub records
-   co-authorship on squash-merge. Feature branches on allowlisted-owner repos
-   only (see Boundaries).
+   Attribution per `rule://commit-conventions`: commit as Matt with the
+   per-repo email + `Co-Authored-By: seal <noreply@sealedsecurity.com>`
+   trailer, pushed over the seal-bot token. `gt` does **not** hoist that
+   trailer or issue links, and Graphite's merge-queue squash builds the
+   `main` commit from the PR title + description — so the PR description must
+   **end with** `Co-Authored-By: seal <noreply@sealedsecurity.com>` as its
+   last line (issue refs `Refs #N` / `Closes #N` just above it, nothing after
+   the trailer), or co-authorship isn't recorded on merge. Feature branches
+   on allowlisted-owner repos only (see Boundaries).
 2. **Wait for the bots — always as a background task.** Launch `wait-for-reviews <pr>` through `bash` with **`async: true`** (never a blocking/foreground call) and a generous `timeout` (~1800s), then **yield** — do other work or end the turn; the harness wakes you with the result when it returns. **Don't busy-poll it** (no `job`-poll loop). It returns when every bot has reviewed the head, is rate/usage-limited, or reviewed an earlier commit and didn't re-trigger within the grace window; a backstop is the final fallback. No webhook/cron needed.
 3. **Triage** all four surfaces per `skill://github-pr-review`; enumerate every
    reviewer (CodeRabbit / Greptile / cubic / Codex + any human).
@@ -34,8 +37,8 @@ rules) lives in `skill://github-pr-review` — this skill adds the **loop** and 
    - **Auto-fix + auto-resolve** clear, **bot-only** findings you can resolve
      without a judgment call (about half are mechanical — rename, guard, dep
      bump, lint, doc, deprecation). Land each as a **new commit** on the PR tip
-     (never amend/squash a pushed PR — that fails to re-trigger the bots), move
-     the bookmark over it, and resolve the bot-only thread per the
+     (`gt modify -c`; never amend/squash a pushed PR — that fails to re-trigger
+     the bots), then `gt submit`, and resolve the bot-only thread per the
      `github-pr-review` resolve discipline (bot-authored, no human comments, fix
      live on head, re-reviewed). The fix + resolve speaks — no prose reply.
    - **Surface judgment calls** to the human via the terminal structured-question

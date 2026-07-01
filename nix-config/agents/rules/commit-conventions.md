@@ -17,7 +17,7 @@ Use a Conventional Commits prefix; never ship a subject without one:
 - `perf(scope):` — performance only.
 - `chore(scope):` — tooling, deps, housekeeping.
 
-The scope is the affected area (`daemon`, `cli`, `parser`, `auth`, …). Match the scope vocabulary the repo's existing `git log --oneline` / `jj log` history already uses rather than inventing new ones.
+The scope is the affected area (`daemon`, `cli`, `parser`, `auth`, …). Match the scope vocabulary the repo's existing `git log --oneline` history already uses rather than inventing new ones.
 
 ## Body
 
@@ -31,7 +31,7 @@ Commits are authored **and committed as Matt** — this keeps his contribution g
 
 ## Push policy
 
-The agent commits, creates/moves bookmarks, **and pushes/submits its own feature branches** over the seal-bot token, then runs the review loop to merge-ready (`skill://autonomous-review`). Submit with `jj-gt submit -b <bookmark>` (**no `--ai`** — you author the PR title + description; see below); in a pure-git repo, `git push -u origin <branch>`.
+The agent commits, creates branches, **and pushes/submits its own feature branches** over the seal-bot token, then runs the review loop to merge-ready (`skill://autonomous-review`). Submit with `gt submit` (**no `--ai`** — you author the PR title + description; see below).
 
 These stay hard limits, enforced by the push-guard:
 
@@ -40,11 +40,11 @@ These stay hard limits, enforced by the push-guard:
 
 ## PR title + description
 
-You write the PR title and description yourself — **never `--ai`**. Graphite's `--ai` regenerates the body non-deterministically every submit, clobbering your prose and dropping issue links; without it, `jj-gt submit` leaves the description under your control.
+You write the PR title and description yourself — **never `--ai`**. Graphite's `--ai` regenerates the body non-deterministically every submit, clobbering your prose and dropping issue links; without it, `gt submit` leaves the description under your control.
 
 - Write it like a good commit body — what changed and why — and **update it as review-loop commits land** so it stays accurate. Set/update via `gh pr edit <n> --body …` or the GitHub MCP `update_pull_request`.
-- Don't hand-write the `Co-Authored-By:` trailer or `Closes/Refs` links — `jj-gt` hoists them from your commit messages into a managed block, rendered last so GitHub records co-authorship on squash-merge. Keep the `Co-Authored-By: seal <…>` trailer in your **commits** (per Attribution); the hoist does the rest (a hand-written trailer is preserved, not duplicated).
+- **End every PR description with the `Co-Authored-By` trailer as its last line** — `gt` doesn't hoist it. Graphite's merge-queue squash builds the `main` commit from the **PR title + description**, so the description's last line becomes the commit's last line, and GitHub records co-authorship only when `Co-Authored-By: seal <noreply@sealedsecurity.com>` is that final line — nothing (prose, headings, other text) after it. Put issue links (`Refs #N` / `Closes #N`) on the lines just above it. Keep the trailer in your commits too (per Attribution), but the description is what lands via the queue.
 
-## Bookmark naming
+## Branch naming
 
 `<name>-<issue>-<short-desc>` — codename/lane-tag first in multi-agent work (the **one** place a persona name belongs — never in the subject/body, PR content, or code), then the issue ref, then a short kebab description (e.g. `hudson-sea-865-aws-provider`). No issue → `<name>-<short-desc>` (e.g. `cook-compass-scaffold`). No `user/` prefix; solo work drops the codename.

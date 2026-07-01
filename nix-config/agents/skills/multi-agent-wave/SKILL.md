@@ -1,6 +1,6 @@
 ---
 name: multi-agent-wave
-description: "Run several agents in parallel: headless task subagents vs persistent peer sessions, conflict-first slot assignment, shared tracker"
+description: "Run several agents in parallel: headless task subagents vs persistent peer sessions, conflict-first assignment, shared tracker"
 ---
 
 # Multi-Agent Wave
@@ -23,22 +23,22 @@ Spawn ephemeral subagents from inside a single session with the `task` tool.
 
 One top-level `omp` agent per workspace, each its own long-lived session.
 
-- **Emdash** — single-repo cockpit: one task per slot, all on the same repo.
-- **Ghostty + Zellij panes** — cross-repo: one pane per slot, each pointed at its own repo/worktree.
+- **Emdash** — single-repo cockpit: one task per agent, all on the same repo.
+- **Ghostty + Zellij panes** — cross-repo: one pane per agent, each pointed at its own clone.
 - Peers coordinate over the `irc` tool (direct or broadcast) plus a shared markdown tracker. The tracker is the wave's state; `irc` is for live questions and unblocking.
 - Use when the work is several genuinely separate jobs that each want their own context, run for a long time, or span repos — not slices of one task.
-- **Workspace layout.** Agent workspaces are grouped **by agent, not repo**: `~/agents/workspaces/<slot>-<codename>/<repo>/` — one dir per agent, a repo-named jj workspace inside for each repo it touches (e.g. `~/agents/workspaces/4-shackleton/{seal,walrus,sealed}`, `~/agents/workspaces/11-nansen/{zireael,sealed}`). Canonical repo clones stay under `~/repos/`; never sit agent workspaces beside them; the `jj-ws` helper script is superseded — don't use it for wave workspaces (it makes `<repo>.ws/` siblings). Pre-create **from the repo** — `jj workspace add` only creates the leaf dir, so make the per-agent parent first: `mkdir -p ~/agents/workspaces/<slot>-<codename> && jj workspace add --name <slot>-<codename> ~/agents/workspaces/<slot>-<codename>/<repo> -r 'trunk()'`. `--name` keeps the name unique per store; `-r 'trunk()'` bases on the repo's own main/master tip (don't hard-code `main` — cross-repo waves hit `master`-default repos). For a slot **stacked** on another's unmerged work, base on the dependency's tip instead, per *Slot assignment → Stacking*: `-r <base-bookmark>@origin` if that base is already pushed, or its local bookmark/change-id if it's only local in a shared store. Retire in two steps: `jj workspace forget <slot>-<codename>` unregisters the workspace but leaves its checkout on disk, so follow with `rm -rf ~/agents/workspaces/<slot>-<codename>/<repo>` (or the whole `<slot>-<codename>/` dir once every repo in it is forgotten). Keeps the top level clean and every workspace for an agent in one place.
-- **Agent prompts are the spin-up artifact.** Each slot launches from its prompt at `~/notes/wave/prompts/<slot>-<codename>-prompt.md`. **Spinning up a new agent or re-tasking an existing one = rewrite that prompt in place** (task, repo/workspace, conflict-scoped file zone, constraints, bookmark name, acceptance — all of it). Never write a separate handoff/assignment doc beside it; a second file drifts from and competes with the prompt. The supervisor's `prompts/mercator-prompt.md` is the same pattern.
+- **Workspace layout.** Each agent works in its **own git clone**, grouped by agent: `~/agents/workspaces/<codename>/<repo>/` — one dir per agent, a plain clone (its own `.git/`) per repo it touches (e.g. `~/agents/workspaces/shackleton/{seal,walrus,sealed}`, `~/agents/workspaces/nansen/{zireael,sealed}`). Canonical clones stay under `~/repos/`; don't sit agent workspaces beside them. Create one with `git clone <origin-url> ~/agents/workspaces/<codename>/<repo>`, then `cd` in and `git checkout main && git pull`; drive branches, stacks, and PRs with Graphite (`gt`) — full workflow in `skill://gt`. An isolated clone means no sibling or supervisor op can touch your VCS state, so you coordinate only on overlapping files, at PR/merge time. Retire an agent by removing its dir: `rm -rf ~/agents/workspaces/<codename>/<repo>` (or the whole `<codename>/` dir once every repo in it is done).
+- **Agent prompts are the spin-up artifact.** Each agent launches from its prompt at `~/notes/wave/prompts/<codename>-prompt.md`. **Spinning up a new agent or re-tasking an existing one = rewrite that prompt in place** (task, repo/clone, conflict-scoped file zone, constraints, branch name, acceptance — all of it). Never write a separate handoff/assignment doc beside it; a second file drifts from and competes with the prompt. The supervisor's `prompts/mercator-prompt.md` is the same pattern.
 
 ### Choosing
 
 Slices of one task that reassemble in one place → `task` subagents. Separate long-running jobs, especially across repos or needing independent review checkpoints → peer sessions. When unsure, prefer `task`; promote to peer sessions only when a slice needs its own durable context.
 
-## Slot assignment: conflict-avoidance first
+## Assigning work: conflict-avoidance first
 
-Assign by what a slot can safely touch, then by priority — **not** by specialization (all agents are the same model and can work any area).
+Assign by what an agent can safely touch, then by priority — **not** by specialization (all agents are the same model and can work any area).
 
-1. **Disjoint files first.** A candidate is only eligible for a slot if its file set does not overlap any in-flight slot's file set. Overlap → stall the candidate or have the human re-order, explicitly.
+1. **Disjoint files first.** A candidate is only eligible for an agent if its file set does not overlap any in-flight agent's file set. Overlap → stall the candidate or have the human re-order, explicitly.
 2. **Then priority.** Among conflict-free candidates, take the highest priority. Standing rule: flake / CI-health fixes jump the queue — a broken pipeline taxes the whole wave.
 3. **Stacking.** If B genuinely depends on A's unmerged work, branch B from A's tip rather than forcing them disjoint; note the dependency in the tracker.
 
@@ -46,8 +46,8 @@ Assign by what a slot can safely touch, then by priority — **not** by speciali
 
 One markdown file, owned and edited by the human supervisor. Read it first; it is authoritative when live state has drifted. Update it immediately after every assignment, status change, or finish. Sections:
 
-- **Agent/state table** — slot, codename, current task, status.
-- **Conflict map** — file ranges and which slot owns them; a row clears when that work merges.
+- **Agent/state table** — codename, current task, status.
+- **Conflict map** — file ranges and which agent owns them; a row clears when that work merges.
 - **Candidate queue** — waiting items ordered by priority (flake/CI first), with any stacking/blocked-by notes.
 
 Markdownlint-clean (blank lines around headings, lists, tables; compact `| a | b |` rows).
@@ -58,9 +58,9 @@ These hold for every agent in a wave, both models:
 
 - **Asking-first checkpoints.** Before removing/replacing code, changing a public API, or choosing between plausible approaches, present 2-3 options with a recommendation and wait. Halt immediately on pushback.
 - **BDD-then-TDD gating.** Outer behavior test first, then unit tests for the new logic, run them and confirm they fail, then implement to green. Bugfixes get a regression test that fails before and passes after.
-- **Commit + submit policy.** A slot commits (Conventional Commits subject), creates/moves its own bookmarks, **and submits its own feature branch** over the seal-bot token — `jj-gt submit -b <bookmark>` (no `--ai`; author the PR title + description — `rule://commit-conventions`) — then runs the review loop to merge-ready (`skill://autonomous-review`). Author/committer = Matt (per-repo email) + `Co-Authored-By: seal <noreply@sealedsecurity.com>` (`rule://commit-conventions`). Hard limits (push-guard-enforced): never push or force-push `main`, never merge (the human gate), never push/PR/issue outside `mattwilkinsonn/*` + `sealedsecurity/*`. **Bookmark naming:** `<codename>-<issue>-<short-desc>` — codename **first** as the lane tag, then issue ref, then short kebab desc (e.g. `hudson-sea-930-woodpecker-fleet-conversion`); no issue → `<codename>-<short-desc>` (e.g. `cook-compass-scaffold`). No `user/` prefix; the codename is required.
-- **Commit promptly.** Wave agents share one `.jj/`, so another slot's or the supervisor's op can rebase your `@` between steps. **Snapshot with `jj describe -m "msg"` after each edit pass — before you run lint or tests** (the `-m` keeps it non-interactive — a bare `jj describe` opens `$EDITOR` and hangs a headless slot) — so committed work rebases cleanly; uncommitted work is what `update-stale` discards. **Reserve `jj new` (stepping off to a fresh change) until that step's checks pass** — running it before verification lands your fixups in the empty child, not the change being verified. If a stale `@` ever diverts your edits, recover them per `skill://vcs-jj` (Troubleshooting & Recovery).
+- **Commit + submit policy.** An agent commits (Conventional Commits subject), creates its own feature branch, **and submits it** over the seal-bot token — `gt submit --no-interactive` (no `--ai`; author the PR title + description — `rule://commit-conventions`) — then runs the review loop to merge-ready (`skill://autonomous-review`). Author/committer = Matt (per-repo email) + `Co-Authored-By: seal <noreply@sealedsecurity.com>` (`rule://commit-conventions`). Hard limits (push-guard-enforced): never push or force-push `main`, never merge (the human gate), never push/PR/issue outside `mattwilkinsonn/*` + `sealedsecurity/*`. **Branch naming:** `<codename>-<issue>-<short-desc>` — codename **first** as the lane tag, then issue ref, then short kebab desc (e.g. `hudson-sea-930-woodpecker-fleet-conversion`); no issue → `<codename>-<short-desc>` (e.g. `cook-compass-scaffold`). No `user/` prefix; the codename is required. Full git + `gt` workflow: `skill://gt`.
+- **Your clone is isolated.** Each agent works in its own git clone (own `.git/`), so no sibling's or the supervisor's op can rebase your work mid-edit — you own your VCS state end to end. Commit as you go with `gt` and drive your own branch; coordinate only on overlapping *files*, at PR/merge time (`skill://gt`).
 
 ## Codenames / personas
 
-Optional, human-facing only. Pick a codename theme with distinct first letters for eye-scanning if it helps you track slots. It is labeling for the supervisor, not a behavioral or memory difference between agents. Keep it out of commit messages, PR titles/descriptions, and code — with **one** deliberate exception: the `<codename>-` **prefix** on the branch/bookmark name, which is the lane tag the supervisor reads to tell whose work a PR is (see Commit/submit policy above).
+Optional, human-facing only. Pick a codename theme with distinct first letters for eye-scanning if it helps you track agents. It is labeling for the supervisor, not a behavioral or memory difference between agents. Keep it out of commit messages, PR titles/descriptions, and code — with **one** deliberate exception: the `<codename>-` **prefix** on the branch name, which is the lane tag the supervisor reads to tell whose work a PR is (see Commit/submit policy above).
