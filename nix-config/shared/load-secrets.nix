@@ -201,12 +201,15 @@
               unset LITELLM_BASE_URL LITELLM_API_KEY LITELLM_MCP_URL
               _op_inject_with_token OP_TEAM_SERVICE_ACCOUNT_TOKEN LiteLLM "$litellm_template"
               # Derive the MCP gateway URL only after a successful inject sets both
-              # halves: LiteLLM serves the aggregated MCP endpoint at `<host>/mcp`,
-              # a sibling of the `/v1` chat path. Require the key too so a partial
-              # inject can't leave a half-configured provider live.
+              # halves: LiteLLM serves the aggregated MCP endpoint at `<host>/mcp/`,
+              # a sibling of the `/v1` chat path. The trailing slash is required —
+              # LiteLLM 307-redirects `/mcp` → `/mcp/`, and MCP clients don't
+              # re-POST across the redirect, so a slashless URL breaks discovery.
+              # Require the key too so a partial inject can't leave a
+              # half-configured provider live.
               if [[ -n "''${LITELLM_BASE_URL:-}" && -n "''${LITELLM_API_KEY:-}" ]]; then
                 local litellm_mcp_base="''${LITELLM_BASE_URL%/}"
-                export LITELLM_MCP_URL="''${litellm_mcp_base%/v1}/mcp"
+                export LITELLM_MCP_URL="''${litellm_mcp_base%/v1}/mcp/"
               else
                 unset LITELLM_BASE_URL LITELLM_API_KEY LITELLM_MCP_URL
               fi
