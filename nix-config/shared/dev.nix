@@ -69,7 +69,7 @@ in
       cargo-nextest # faster test runner
       cargo-binstall # install prebuilt crate binaries when nixpkgs lacks them
       cargo-update # cargo install-update
-      sccache # compiler cache (referenced by RUSTC_WRAPPER below)
+      sccache # compiler cache (configured by shared/sccache-dev.nix)
       # zig — toolchain + drop-in cross C/C++ compiler (`zig cc`). Used
       # to cross-compile Rust crates' C/asm build scripts (ring, etc.)
       # for other targets without that platform's SDK — e.g. the
@@ -170,7 +170,7 @@ in
     ];
 
   # Dev-tier shell additions. PATH entries for the toolchains we install
-  # above, plus the RUSTC_WRAPPER export.
+  # above; sccache-specific Rust cache config lives in shared/sccache-dev.nix.
   programs.zsh.initContent = ''
     export PATH="$HOME/.local/share/uv/python/bin:$PATH"
     export PATH="$HOME/.opencode/bin:$PATH"
@@ -180,7 +180,6 @@ in
 
     # Cargo/Rust
     [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
-    export RUSTC_WRAPPER=sccache
 
     ${builtins.readFile ../dotfiles/zsh/fnm.zsh}
   '';

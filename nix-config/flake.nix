@@ -115,6 +115,7 @@
                 ./shared/home.nix
                 ./shared/linux.nix
                 ./shared/dev.nix
+                ./shared/sccache-dev.nix
                 ./shared/linux-build-deps.nix
                 ./shared/load-secrets.nix
                 ./shared/privatefiles-symlinks.nix
