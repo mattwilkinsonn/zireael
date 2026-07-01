@@ -182,6 +182,7 @@
       "raycast"
       "notion"
       "stablyai/orca/orca"
+      "transmit"
     ];
     # Mac App Store apps. IDs from `mas search <name>` / the App Store
     # share-link `/id<NUMBER>`. Requires a one-time manual App Store
