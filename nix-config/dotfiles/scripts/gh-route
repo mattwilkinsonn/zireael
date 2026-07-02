@@ -68,12 +68,19 @@ _rate_limit() {
 	cat "$CACHE_FILE" 2>/dev/null || echo '{}'
 }
 
-# `rest` | `graphql` — the bucket with the higher remaining/limit fraction. Ties
-# and a REST lead both resolve to REST (the idle, query-cost-free bucket).
+# `rest` | `graphql` — the bucket with the higher remaining/limit fraction, but
+# never a bucket at/below FLOOR when the other still has room (a near-empty
+# bucket with a momentarily higher fraction must not win, or the very next call
+# 403s). Ties and a REST lead resolve to REST (the idle, query-cost-free bucket).
 pick() {
-	_rate_limit | jq -r '
+	_rate_limit | jq -r --argjson floor "$FLOOR" '
 		def frac($x): if (($x.limit) // 0) > 0 then ($x.remaining * 1000 / $x.limit) else 0 end;
-		if frac(.resources.graphql) > frac(.resources.core) then "graphql" else "rest" end
+		(.resources.core.remaining // 0)    as $rest_r |
+		(.resources.graphql.remaining // 0) as $gql_r |
+		if   $gql_r <= $floor and $rest_r >  $floor then "rest"
+		elif $rest_r <= $floor and $gql_r >  $floor then "graphql"
+		elif frac(.resources.graphql) > frac(.resources.core) then "graphql"
+		else "rest" end
 	'
 }
 

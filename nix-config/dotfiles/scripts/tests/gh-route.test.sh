@@ -175,6 +175,35 @@ check "equal fraction → rest (tie to idle bucket)" "$(bash "$SCRIPT" pick)" "r
 seed_cache 500 5000 0 5000
 check "graphql exhausted → rest" "$(bash "$SCRIPT" pick)" "rest"
 
+# Floor guard (hardening): a bucket at/below FLOOR (200) must not be chosen when
+# the other still has room, even if the near-empty bucket has a momentarily
+# HIGHER remaining/limit fraction — else the very next call 403s. The guard runs
+# BEFORE the fraction compare. These two make the near-empty bucket's fraction
+# strictly the higher one (0.199 vs 0.06), so the guard is the ONLY thing that
+# can produce the pick; the pre-hardening fraction logic would pick the opposite.
+seed_cache 300 5000 199 1000
+check "graphql at/below floor but higher fraction → rest (guard overrides fraction)" "$(bash "$SCRIPT" pick)" "rest"
+
+seed_cache 199 1000 300 5000
+check "rest at/below floor but higher fraction → graphql (guard overrides fraction)" "$(bash "$SCRIPT" pick)" "graphql"
+
+# Boundary of the ≤ guard: remaining exactly AT the floor is guarded (a strict `<`
+# would wrongly let 200 fall through to the fraction compare and pick the
+# near-empty bucket); one request above the floor is healthy and competes on
+# fraction as normal — the adjacent 200/201 pair straddles the boundary with
+# opposite outcomes, so an off-by-one in the guard reddens exactly one of them.
+seed_cache 300 5000 200 1000
+check "graphql exactly at floor → rest (≤ boundary is guarded)" "$(bash "$SCRIPT" pick)" "rest"
+
+seed_cache 300 5000 201 1000
+check "graphql one above floor → graphql (healthy, wins on fraction)" "$(bash "$SCRIPT" pick)" "graphql"
+
+# Fraction compare is reached only once BOTH buckets clear the floor: a strictly
+# higher fraction wins (graphql here, 0.80 vs 0.60). The tie and rest-lead paths
+# through this branch already live above.
+seed_cache 3000 5000 4000 5000
+check "both healthy, graphql higher fraction → graphql" "$(bash "$SCRIPT" pick)" "graphql"
+
 echo
 echo "remaining:"
 
