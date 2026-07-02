@@ -23,15 +23,38 @@ large tool set and many are **behind tool-search** — if the tool you need isn'
 already active, run `search_tool_bm25` (e.g. `"github pull request review"`) to
 activate it first.
 
-**Bucket balance.** `pull_request_read` runs on GitHub's **GraphQL** API; under
-wave load a shared token exhausts the GraphQL bucket while the REST bucket sits
-idle. For the routable read surfaces (b review bodies, c top-level comments, d
-check-runs, plus the head SHA and open-PR list) prefer **`gh-route`** — a CLI
-router that sends each read to whichever bucket (REST or GraphQL) has more
-headroom and emits the same shape either way (see Fallback below). Reserve the
-GraphQL-only MCP for what only it can do: **surface (a)** inline-thread state
-(`is_resolved` / `is_outdated`) and the thread node IDs that
-`pull_request_review_write` needs to resolve/reply — REST exposes neither.
+**Always read PR state through tern (mandatory on large fleets).** The single
+biggest source of GitHub rate-limit exhaustion is many agents each polling their
+own PR's review state directly — `pull_request_read` runs on the **GraphQL** API,
+and N agents × repeated polls drain the shared token's GraphQL bucket fleet-wide
+(the SEA-1083 outage). **`tern`** (the caching review MCP) exists to stop this:
+it fetches every in-flight PR's state in one batched request and serves the rest
+from a shared cache, so N reads collapse to ~one upstream fetch. **You MUST use
+`mcp__litellm_tern_get_review_state` as your first and default read** for a PR's
+reviews, comments, inline review-comment bodies, check-runs, **and** inline-thread
+resolution state (`is_resolved` / `is_outdated` + thread IDs — tern's batched
+GraphQL carries these, which the REST path cannot):
+
+```text
+mcp__litellm_tern_get_review_state   owner/repo #N  → {reviews, comments,
+    review-comments, check-runs, threads[{id,is_resolved,is_outdated}], head_sha}
+mcp__litellm_tern_get_head_sha       owner/repo #N  → {head_sha}
+```
+
+One tern call replaces the four separate `pull_request_read` surface reads below.
+Reach past tern only for:
+
+- **Writes** — resolving/replying to a thread still goes through
+  `pull_request_review_write` / `add_reply_to_pull_request_comment` (tern is
+  read-only). Use the thread IDs tern already gave you.
+- **A genuine tern gap or outage** — if tern is unreachable or a specific datum
+  is missing, fall back to **`gh-route`** (bucket-balanced REST/GraphQL CLI, see
+  Fallback below) or, last, `pull_request_read`. Prefer `gh-route` over the raw
+  GraphQL MCP so a fallback doesn't re-create the exhaustion tern prevents.
+
+The `mcp__litellm_github_pull_request_read` methods below describe the underlying
+surfaces (and are the fallback shape) — but **default to tern**, which returns
+all of them at once, cached.
 
 ## The four surfaces
 
@@ -51,6 +74,12 @@ back there — to read the actual failure log, drop to `skill://woodpecker-ci`
 filter the pipeline's steps to the failed one).
 
 ## Pulling each surface
+
+`get_review_state` returns all four at once — `reviews` (b), `comments` (c),
+`review-comments` (a bodies), `check-runs` (d), and `threads` (a state + IDs).
+That one cached call is what you use. The per-surface `pull_request_read`
+methods below are the **fallback shape** for when tern is unavailable (and what
+`gh-route` mirrors):
 
 ```text
 mcp__litellm_github_pull_request_read  get_review_comments  owner/repo #N  → (a) inline threads + thread metadata + IDs
@@ -103,12 +132,14 @@ Reserve the CLI for when the MCP can't express something (rare). Prefer higher-l
 - `gh pr view <N> --json comments` (top-level), `gh pr checks <N>` (CI).
 - `gh api` only when nothing higher-level works, paired with a note on why.
 
-### `gh-route` — the bucket-balanced read path
+### `gh-route` — the bucket-balanced read path (fallback, when tern is down)
 
-`gh-route <cmd> <pr> [owner/repo]` routes a read to the REST or GraphQL bucket
-with more headroom and prints the **REST JSON shape** regardless — a drop-in for
-the equivalent `gh api` call that keeps GraphQL from draining while REST idles.
-It also backs off (sleeping toward the nearest reset) when both buckets run low.
+**Default to `mcp__litellm_tern_get_review_state` first** (above); reach for
+`gh-route` only when tern is unavailable. `gh-route <cmd> <pr> [owner/repo]`
+routes a read to the REST or GraphQL bucket with more headroom and prints the
+**REST JSON shape** regardless — a drop-in for the equivalent `gh api` call that
+keeps GraphQL from draining while REST idles. It also backs off (sleeping toward
+the nearest reset) when both buckets run low.
 
 - `gh-route reviews <pr>` — review bodies (surface b), REST-shaped array.
 - `gh-route comments <pr>` — top-level issue-comments (surface c).
