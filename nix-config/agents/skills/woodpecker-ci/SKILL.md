@@ -76,7 +76,7 @@ gives the one-line pipeline summary (status, event, branch, author).
 # By step name OR step number — both work. Logs are LARGE (a single moon-ci
 # step can be >6000 lines / >150 KB), so ALWAYS pipe to grep/tail — never dump raw.
 woodpecker-cli pipeline log show sealedsecurity/sealed <pipeline> root-shfmt | tail -40
-woodpecker-cli pipeline log show sealedsecurity/sealed <pipeline> 143 | grep -iE 'error|fail|✗' 
+woodpecker-cli pipeline log show sealedsecurity/sealed <pipeline> 143 | grep -iE 'error|fail|✗'
 
 # Omit the step to stream every step's log concatenated (rarely what you want).
 woodpecker-cli pipeline log show sealedsecurity/sealed <pipeline>
@@ -90,23 +90,28 @@ The moon task failure line is near the end of the log — e.g.
 
 The PR-review skills land here from a red check. A Woodpecker check's `details_url`
 (surfaced by `mcp__litellm_github_pull_request_read get_check_runs`, or `gh pr
-checks`) encodes everything you need:
+checks`) gives you the repo and pipeline:
 
 ```text
 https://ci.sealedsecurity.com/repos/2/pipeline/911/11
                                     │        │       │
-                                 repo id  pipeline  step index
+                                 repo id  pipeline  routing index (NOT the step PID)
 ```
 
-Repo id `2` is `sealedsecurity/sealed`. So that URL is:
+Repo id `2` is `sealedsecurity/sealed`, so this is pipeline `911`. Take the
+**pipeline number** from the URL, then get the step from `pipeline ps` — do
+**not** feed the URL's last segment to `log show`. That trailing segment is the
+web-app's sequential step index, which does **not** equal the step PID that
+`log show` expects (e.g. this pipeline's PIDs start at `12`, so there is no step
+`11`); using it silently fetches the wrong step or errors.
 
 ```sh
-woodpecker-cli pipeline log show sealedsecurity/sealed 911 11 | tail -60
+# 1. name the failed step(s) — real PIDs/names (see step 2 of the read loop):
+woodpecker-cli pipeline ps sealedsecurity/sealed 911 \
+  --format '{{ .step.State }} {{ .step.Name }} (#{{ .step.PID }})' | grep -E '^(failure|running)'
+# 2. pull that step's log by name or PID:
+woodpecker-cli pipeline log show sealedsecurity/sealed 911 <step-name-or-pid> | tail -60
 ```
-
-You don't have to parse the step index out of the URL — `pipeline ps <pipeline>`
-plus the failure filter (step 2 above) names the failed steps directly, which is
-usually clearer than the raw index.
 
 ## Output formatting
 
