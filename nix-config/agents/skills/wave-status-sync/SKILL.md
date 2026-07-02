@@ -52,13 +52,15 @@ landed on `main`:
 git -C <repo> fetch && git log --oneline -60 origin/main
 ```
 
-Scan the squashed titles for issue keys / PR numbers. For open-PR truth
-(→ In Review) use the GitHub MCP `mcp__litellm_github_list_pull_requests`
-(state `open`) and `mcp__litellm_github_pull_request_read` (`get` → `state`).
-A reconcile sweeps every repo, so under wave load prefer **`gh-route pr-list
-[owner/repo]`** for the open-PR list — it routes to whichever API bucket (REST
-or GraphQL) has headroom and returns `{number,title,state,head,user}` per PR,
-keeping the sweep off the already-strained shared GraphQL bucket.
+Scan the squashed titles for issue keys / PR numbers. For the **open-PR list**
+use **`gh-route pr-list [owner/repo]`** (tern is per-PR, not a lister) — it routes
+to whichever API bucket has headroom and returns `{number,title,state,head,user}`
+per PR, keeping the every-repo sweep off the strained GraphQL bucket; the GitHub
+MCP `list_pull_requests` is the fallback. For any **per-PR review detail** during
+the sweep (state of reviews/checks/threads on a specific PR), read it through
+**`mcp__litellm_tern_get_review_state`** — cache-served and fleet-shared, so a
+wide reconcile doesn't re-exhaust the bucket the way N direct `pull_request_read`
+calls would.
 
 ## 3. Issue-tracker state
 

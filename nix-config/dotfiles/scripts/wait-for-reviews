@@ -40,10 +40,46 @@ BACKSTOP="${WAIT_BACKSTOP_SECS:-1200}"
 GRACE="${WAIT_GRACE_SECS:-300}"
 INTERVAL="${WAIT_POLL_SECS:-30}"
 
-# head SHA via the adaptive router (gh-route picks REST or GraphQL by headroom),
-# so the launch's one head-ref read no longer always hits GraphQL.
-head="$(gh-route head-sha "$PR" "$REPO")"
-echo "wait-for-reviews: $REPO#$PR head=${head:0:10} bots=[$BOTS] grace=${GRACE}s backstop=${BACKSTOP}s"
+# ─── tern-first review-state fetch ───────────────────────────────────────
+# Every fleet agent polls its own PR here. To avoid N agents × M polls hammering
+# the shared GitHub API bucket, ALWAYS read through tern (the caching review MCP,
+# SEA-1083) via the LiteLLM gateway: N reads of a PR collapse to one batched
+# upstream fetch + cache hits. tern returns head + reviews + comments + threads
+# + check-runs in one call. Fall back to gh-route (bucket-balanced REST/GraphQL)
+# only if the gateway env is absent or tern is unreachable.
+#
+# tern_state → prints tern's full review-state JSON on stdout, or "" on failure.
+TERN_MCP_URL="${LITELLM_MCP_URL:-}"
+TERN_MCP_KEY="${LITELLM_API_KEY:-}"
+tern_state() {
+  [ -n "$TERN_MCP_URL" ] && [ -n "$TERN_MCP_KEY" ] || return 1
+  local owner="${REPO%%/*}" name="${REPO##*/}" payload resp
+  payload=$(jq -nc --arg o "$owner" --arg n "$name" --argjson p "$PR" \
+    '{jsonrpc:"2.0",id:1,method:"tools/call",params:{name:"get_review_state",arguments:{owner:$o,repo:$n,number:$p}}}')
+  resp=$(curl -sS -m 25 -X POST "$TERN_MCP_URL" \
+    -H "x-litellm-api-key: Bearer $TERN_MCP_KEY" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -H "x-mcp-servers: tern" \
+    -d "$payload" 2>/dev/null) || return 1
+  # SSE frames: the JSON-RPC result is the `data:` line; unwrap the tool text.
+  sed -n 's/^data: //p' <<<"$resp" \
+    | jq -e -r '.result.content[0].text' 2>/dev/null
+}
+
+# head SHA: prefer tern's cached state (no upstream call for the fleet); else the
+# adaptive router. Fetch state once up front so the classifier has a head to key on.
+state="$(tern_state || true)"
+head=""
+[ -n "$state" ] && head="$(jq -r '.head_sha // ""' <<<"$state")"
+# tern up but head_sha missing/empty → treat as a miss and resolve via the router,
+# never leave $head empty (an empty head makes the classifier's grep match every
+# line and misreport every bot as "done").
+if [ -z "$head" ]; then
+  head="$(gh-route head-sha "$PR" "$REPO")"
+  state=""
+fi
+echo "wait-for-reviews: $REPO#$PR head=${head:0:10} bots=[$BOTS] grace=${GRACE}s backstop=${BACKSTOP}s (tern:$([ -n "$state" ] && echo on || echo off))"
 start=$(date +%s)
 
 # classify <bot> <reviews-json> <comments-json> → done | limited | stale | pending
@@ -78,12 +114,21 @@ classify() {
   echo "pending"
 }
 
+# Seed the first iteration with the state already fetched for the head SHA, so
+# the opening cycle is one tern call, not two. Cleared at each loop end to force
+# a fresh read next poll.
+st_json="$state"
 while :; do
-  # Route the poll reads through gh-route so the wait loop balances buckets too:
-  # gh-route emits the REST shape the classifier expects regardless of which API
-  # served it, and falls back to an empty array on error (bucket drained mid-loop).
-  reviews="$(gh-route reviews "$PR" "$REPO" 2>/dev/null || echo '[]')"
-  comments="$(gh-route comments "$PR" "$REPO" 2>/dev/null || echo '[]')"
+  # One tern read per poll gives reviews + comments (cache-served, fleet-shared);
+  # fall back to gh-route's REST reads only if tern is unavailable this cycle.
+  [ -n "$st_json" ] || st_json="$(tern_state || true)"
+  if [ -n "$st_json" ]; then
+    reviews="$(jq -c '.reviews // []' <<<"$st_json" 2>/dev/null || echo '[]')"
+    comments="$(jq -c '.comments // []' <<<"$st_json" 2>/dev/null || echo '[]')"
+  else
+    reviews="$(gh-route reviews "$PR" "$REPO" 2>/dev/null || echo '[]')"
+    comments="$(gh-route comments "$PR" "$REPO" 2>/dev/null || echo '[]')"
+  fi
   now=$(date +%s)
   elapsed=$((now - start))
   blocking=()
@@ -106,5 +151,6 @@ while :; do
     echo "wait-for-reviews: backstop ${BACKSTOP}s reached; proceeding. still blocking: ${blocking[*]}"
     exit 0
   fi
+  st_json="" # force a fresh tern read on the next poll
   sleep "$INTERVAL"
 done
