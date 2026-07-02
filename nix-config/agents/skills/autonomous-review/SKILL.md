@@ -55,7 +55,9 @@ rules) lives in `skill://github-pr-review` — this skill adds the **loop** and 
      finding, anything a human commented on, deferrals, security-sensitive calls.
      One **batched** `ask` per round — never one question at a time.
 5. **Push fixes → loop to step 2.** Repeat (usually several rounds) until no
-   actionable bot findings remain and CI is green.
+   actionable bot findings remain and CI is green. When a check is red, read the
+   failure log from Woodpecker (`skill://woodpecker-ci`) — the GitHub check only
+   links back to `ci.sealedsecurity.com`, so pull the step log there to see why.
 6. **Hand off.** PR is merge-ready; the human does the final review + merge — the
    one gate that stays human.
 

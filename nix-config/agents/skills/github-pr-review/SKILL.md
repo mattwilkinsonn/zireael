@@ -44,6 +44,12 @@ GraphQL-only MCP for what only it can do: **surface (a)** inline-thread state
 
 Inline threads and review bodies are **different shapes** — a reviewer's summary body (e.g. an "Actionable comments posted: N" block, or findings GitHub couldn't post inline because they fall outside the patch range) is *not* an inline thread and carries no thread ID. A thread that has since auto-resolved or gone outdated can still reference an unaddressed finding, so never let a resolved/outdated flag silently drop a body-level finding from view. Always read the review bodies (`get_reviews`) in full, independent of thread state.
 
+Surface (d) tells you a check is red, not *why*. The sealed checks run on
+Woodpecker (`ci.sealedsecurity.com`) and the check's `details_url` only links
+back there — to read the actual failure log, drop to `skill://woodpecker-ci`
+(decode the `details_url` into a `woodpecker-cli pipeline log show` call, or
+filter the pipeline's steps to the failed one).
+
 ## Pulling each surface
 
 ```text
