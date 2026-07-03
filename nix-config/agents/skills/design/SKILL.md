@@ -52,7 +52,7 @@ artifact. Four short sections:
 
 The `design` subagent is headless — it has **no `ask` tool** and cannot prompt
 the human. So it batches **all** open questions and assumptions into an **Open
-Questions** section of the `design.md` (and its returned summary), designing
+Questions** section of the record (and its returned summary), designing
 against a stated assumption rather than stalling. The **main agent relays those
 questions to the human in a single `ask`** — never a Socratic
 one-question-per-turn loop, which is the main thing that makes heavier flows
@@ -62,7 +62,7 @@ slow. The human answers once; the design is updated and frozen.
 
 The design record is reviewed **on a pull request**, not in a local buffer —
 that's what lets the human **and** the AI review bots read the design before any
-implementation exists. Once the subagent has drafted `design.md` into the repo:
+implementation exists. Once the subagent has drafted the record (`docs/designs/<domain>/<record>.md`) into the repo:
 
 - **Its own branch/PR, separate from the implementation** — commit the record
   (`docs(<domain>): <change>` subject + `Co-Authored-By: seal` trailer), so the
