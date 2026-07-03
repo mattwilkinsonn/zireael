@@ -144,6 +144,21 @@ in
       # in Emdash (generalaction/emdash).
       (writeShellScriptBin "pi" ''exec "$HOME/.local/bin/omp" "$@"'')
 
+      # cotal — the Cotal mesh CLI (`cotal up --open`, `join`, `console`, …). The repo ships no
+      # packaged bin; it runs via `tsx bin/cotal.ts` from the fork clone that
+      # installCotalOmpExtension (below) builds at ~/.local/src/cotal. This shim runs that entry
+      # with the nix node on PATH (so tsx's bundled runtime + the workspace deps resolve). A host
+      # that hasn't run the activation yet gets a clear error pointing at nix-switch.
+      (writeShellScriptBin "cotal" ''
+        CO_SRC="$HOME/.local/src/cotal"
+        if [ ! -f "$CO_SRC/bin/cotal.ts" ]; then
+          echo "cotal: not built yet — run nix-switch (installCotalOmpExtension builds it at $CO_SRC)." >&2
+          exit 1
+        fi
+        export PATH="${pkgs.nodejs_24}/bin:$PATH"
+        exec "$CO_SRC/node_modules/.bin/tsx" "$CO_SRC/bin/cotal.ts" "$@"
+      '')
+
       # jj-ws — workspace helper for the multi-agent wave (creates/forgets
       # jj workspaces under <repo>.ws/). Pairs with the `wave` zellij layout.
       (writeShellScriptBin "jj-ws" (builtins.readFile ../dotfiles/scripts/jj-ws))
@@ -688,14 +703,16 @@ in
     fi
   '';
 
-  # cotal-mesh: the Cotal connector's interactive `pi --extension` for oh-my-pi, from our
-  # fork https://github.com/sealedsecurity/Cotal (branch zheng-connector-oh-my-pi, stacked on
-  # the upstream connector-pi PR). It turns an omp session into a first-class mesh peer
-  # (cotal_* tools, presence, inbound-message delivery). Build-from-source: the extension
-  # imports @cotal-ai/connector-core (peer-dep @cotal-ai/core), which omp's loader can't
-  # resolve from a nested package — so it must be esbuild-bundled into a single self-contained
-  # dist/extension.bundle.js (host @oh-my-pi/* stays external), the artifact omp loads. The
-  # built path is wired into ~/.omp/agent/config.yml (agents/config.yml) `extensions:`.
+  # cotal: our fork of the Cotal mesh (https://github.com/sealedsecurity/Cotal, branch
+  # zheng-connector-oh-my-pi). Build-from-source gives BOTH halves of using Cotal with oh-my-pi:
+  #   1. the `cotal` CLI (`cotal up --open`, `join`, …) — the mesh you connect to. Shimmed onto
+  #      PATH below (writeShellScriptBin "cotal") since the repo has no packaged bin; it runs via
+  #      `tsx bin/cotal.ts`.
+  #   2. the oh-my-pi `pi --extension` (cotal_* tools, presence, message delivery) — esbuild-bundled
+  #      to a self-contained dist/extension.bundle.js (host @oh-my-pi/* external), wired into
+  #      ~/.omp/agent/config.yml (agents/config.yml) `extensions:` so a COTAL_NAME omp session joins.
+  # A full `pnpm build` produces both; the CLI's bundled nats-server (@eplightning/nats-server-*)
+  # comes from the install, so `cotal up --open` needs no external binary.
   #
   # Iteration while it settles: edit in the fork → commit+push the branch → nix-switch rebuilds.
   home.activation.installCotalOmpExtension = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
@@ -726,36 +743,37 @@ in
       ${pkgs.git}/bin/git -C "$CO_SRC" reset --hard "origin/$CO_BRANCH"
     fi
 
-    # Skip the ~1GB install + build when the built bundle already matches the current HEAD.
+    # Skip the ~1GB install + build when both artifacts already match the current HEAD.
+    CO_CLI="$CO_SRC/implementations/cli/dist/index.js"
     HEAD_SHA=$(${pkgs.git}/bin/git -C "$CO_SRC" rev-parse HEAD)
-    if [ -f "$CO_BUNDLE" ] && [ -f "$CO_SRC/.last-built-sha" ] \
+    if [ -f "$CO_BUNDLE" ] && [ -f "$CO_CLI" ] && [ -f "$CO_SRC/.last-built-sha" ] \
        && [ "$(cat "$CO_SRC/.last-built-sha")" = "$HEAD_SHA" ]; then
-      echo "cotal-mesh extension up to date ($HEAD_SHA)"
+      echo "cotal (CLI + extension) up to date ($HEAD_SHA)"
     else
-      echo "Building cotal-mesh extension (pnpm install + esbuild bundle)..."
-      # corepack provides pnpm; the connector's `build` script chains `pnpm run bundle`, so
+      echo "Building cotal (pnpm install + full workspace build)..."
+      # corepack provides pnpm; several packages' `build` scripts chain `pnpm run bundle`, so
       # pnpm must resolve by name inside the build — a tiny shim on PATH forwards to corepack.
       SHIM="$(mktemp -d)"
       printf '#!/bin/sh\nexec ${pkgs.nodejs_24}/bin/corepack pnpm "$@"\n' > "$SHIM/pnpm"
       chmod +x "$SHIM/pnpm"
-      # `... ` suffix filters to connector-oh-my-pi + its workspace deps (core, connector-core),
-      # so install/build touch 3 of 19 projects, not the whole monorepo.
-      # Guard on the bundle actually existing (not just a 0 exit): if the filter ever matches
-      # nothing, or esbuild's outDir changes, pnpm can exit 0 while writing no bundle — without
-      # this check the SHA would stamp and every later switch would re-run the ~1GB build forever.
+      # Full install + build (not filtered): the `cotal` CLI's entry (bin/cotal.ts) pulls in the
+      # manager, delivery, connectors, and cmux/tmux packages, and the bundled nats-server
+      # (@eplightning/nats-server-*) rides the install — so `cotal up --open` needs no external
+      # binary. Guard on BOTH built artifacts existing (not just a 0 exit): a build that writes
+      # neither would otherwise stamp the SHA and every later switch would re-run the ~1GB build.
       if ( cd "$CO_SRC" \
-           && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm install --filter '@cotal-ai/oh-my-pi...' --no-frozen-lockfile \
-           && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm --filter '@cotal-ai/oh-my-pi...' build ) \
-         && [ -f "$CO_BUNDLE" ]; then
+           && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm install --no-frozen-lockfile \
+           && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm build ) \
+         && [ -f "$CO_BUNDLE" ] && [ -f "$CO_CLI" ]; then
         rm -rf "$SHIM"
         echo "$HEAD_SHA" > "$CO_SRC/.last-built-sha"
-        echo "cotal-mesh extension built → $CO_BUNDLE"
+        echo "cotal built — CLI ($CO_CLI) + extension ($CO_BUNDLE)"
       else
         # Fail loudly (like installAkiflowCli): leave .last-built-sha unstamped so the next
         # switch retries, and propagate so nix-switch doesn't report a false success while
-        # config.yml points at a stale-or-missing bundle.
+        # config.yml points at a stale-or-missing bundle / the cotal shim points at a missing CLI.
         rm -rf "$SHIM"
-        echo "cotal-mesh extension build FAILED" >&2
+        echo "cotal build FAILED" >&2
         exit 1
       fi
     fi
