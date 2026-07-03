@@ -688,6 +688,70 @@ in
     fi
   '';
 
+  # cotal-mesh: the Cotal connector's interactive `pi --extension` for oh-my-pi, from our
+  # fork https://github.com/sealedsecurity/Cotal (branch zheng-connector-oh-my-pi, stacked on
+  # the upstream connector-pi PR). It turns an omp session into a first-class mesh peer
+  # (cotal_* tools, presence, inbound-message delivery). Build-from-source: the extension
+  # imports @cotal-ai/connector-core (peer-dep @cotal-ai/core), which omp's loader can't
+  # resolve from a nested package — so it must be esbuild-bundled into a single self-contained
+  # dist/extension.bundle.js (host @oh-my-pi/* stays external), the artifact omp loads. The
+  # built path is wired into ~/.omp/agent/config.yml (agents/config.yml) `extensions:`.
+  #
+  # Iteration while it settles: edit in the fork → commit+push the branch → nix-switch rebuilds.
+  home.activation.installCotalOmpExtension =
+    lib.hm.dag.entryAfter [ "writeBoundary" "fnmDefaultLts" ]
+      ''
+        CO_REPO="https://github.com/sealedsecurity/Cotal.git"
+        CO_BRANCH="zheng-connector-oh-my-pi"
+        CO_SRC="$HOME/.local/src/cotal"
+        CO_BUNDLE="$CO_SRC/extensions/connector-oh-my-pi/dist/extension.bundle.js"
+        mkdir -p "$HOME/.local/src"
+        export PATH="${pkgs.nodejs_24}/bin:${pkgs.git}/bin:$PATH"
+
+        # A checkout whose origin URL doesn't match the fork gets re-cloned (same reasoning as
+        # installAkiflowCli): cheaper than repairing a swapped remote.
+        if [ -d "$CO_SRC/.git" ]; then
+          CURRENT_URL=$(${pkgs.git}/bin/git -C "$CO_SRC" remote get-url origin 2>/dev/null || echo "")
+          if [ "$CURRENT_URL" != "$CO_REPO" ]; then
+            echo "cotal: remote was '$CURRENT_URL', expected '$CO_REPO' — re-cloning"
+            rm -rf "$CO_SRC"
+          fi
+        fi
+
+        if [ ! -d "$CO_SRC/.git" ]; then
+          echo "Cloning Cotal fork ($CO_BRANCH)..."
+          ${pkgs.git}/bin/git clone --branch "$CO_BRANCH" "$CO_REPO" "$CO_SRC"
+        else
+          echo "Updating Cotal fork ($CO_BRANCH)..."
+          ${pkgs.git}/bin/git -C "$CO_SRC" fetch origin "$CO_BRANCH"
+          ${pkgs.git}/bin/git -C "$CO_SRC" checkout -q "$CO_BRANCH" 2>/dev/null || ${pkgs.git}/bin/git -C "$CO_SRC" checkout -qB "$CO_BRANCH" "origin/$CO_BRANCH"
+          ${pkgs.git}/bin/git -C "$CO_SRC" reset --hard "origin/$CO_BRANCH"
+        fi
+
+        # Skip the ~1GB install + build when the built bundle already matches the current HEAD.
+        HEAD_SHA=$(${pkgs.git}/bin/git -C "$CO_SRC" rev-parse HEAD)
+        if [ -f "$CO_BUNDLE" ] && [ -f "$CO_SRC/.last-built-sha" ] \
+           && [ "$(cat "$CO_SRC/.last-built-sha")" = "$HEAD_SHA" ]; then
+          echo "cotal-mesh extension up to date ($HEAD_SHA)"
+        else
+          echo "Building cotal-mesh extension (pnpm install + esbuild bundle)..."
+          # corepack provides pnpm; the connector's `build` script chains `pnpm run bundle`, so
+          # pnpm must resolve by name inside the build — a tiny shim on PATH forwards to corepack.
+          SHIM="$(mktemp -d)"
+          printf '#!/bin/sh\nexec ${pkgs.nodejs_24}/bin/corepack pnpm "$@"\n' > "$SHIM/pnpm"
+          chmod +x "$SHIM/pnpm"
+          # `... ` suffix filters to connector-oh-my-pi + its workspace deps (core, connector-core),
+          # so install/build touch 3 of 19 projects, not the whole monorepo.
+          ( cd "$CO_SRC" \
+            && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm install --filter '@cotal-ai/oh-my-pi...' --no-frozen-lockfile \
+            && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm --filter '@cotal-ai/oh-my-pi...' build ) \
+            && echo "$HEAD_SHA" > "$CO_SRC/.last-built-sha" \
+            && echo "cotal-mesh extension built → $CO_BUNDLE" \
+            || echo "cotal-mesh extension build FAILED (leaving previous bundle, if any)"
+          rm -rf "$SHIM"
+        fi
+      '';
+
   # Berkeley Mono fonts: paid, can't ship via nixpkgs. Synced down from
   # Google Drive via rclone on each activation. First-time setup per machine:
   #   rclone config         # set up a "gdrive" remote (interactive OAuth)
