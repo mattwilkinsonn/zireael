@@ -17,6 +17,12 @@ projects:
   jj-gt: 'tools/jj-gt'
   # bun/TypeScript tool (its own bun.lock — not a hoisted root workspace).
   akiflow-cli: 'tools/akiflow-cli'
+  # bun/TypeScript agent tools under nix-config (own bun.lock each). Converted
+  # from bash (SEA-932): the autonomous-review wait primitive + its API router.
+  wait-for-reviews: 'nix-config/tools/wait-for-reviews'
+  gh-route: 'nix-config/tools/gh-route'
+  # CI gate (SEA-932): fails on committed bash outside the shrinking allowlist.
+  no-bash-gate: 'nix-config/tools/no-bash-gate'
   # NixOS + nix-darwin host configs: nix/shell/toml lints + per-host flake-eval.
   nix-config: 'nix-config'
   # Homebrew tap: brew style over the formulae.

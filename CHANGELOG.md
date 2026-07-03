@@ -33,6 +33,11 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
 - Unified the local + CI gate on `moon ci` (moon + proto + devenv), replacing `just`, `hk`'s per-tool step list, and the per-tool GitHub workflows. `.prototools` pins bun/node/moon; `devenv.nix` provides the toolchain; `direnv allow` is the whole dev bootstrap.
 - Retired the `Justfile`; `release` and `install-debug` moved to `scripts/` (`moon run root:release` / `root:install-debug`).
 
+### Changed — nix-config
+
+- Converted the `wait-for-reviews` and `gh-route` agent scripts from bash to bun/TypeScript (`nix-config/tools/{wait-for-reviews,gh-route}`), each a bun package with a construction/execution split and `bun test` coverage; nix packages them via a `writeShellScriptBin` wrapper that `exec`s `bun run` on the `.ts`. Behavior is unchanged (identical CLI, output, and exit codes).
+- Added a `no-bash-gate` CI task (`nix-config/tools/no-bash-gate`) that fails on any committed bash outside an explicit, shrinking allowlist — enforcing the "TypeScript over bash" rule for new scripts.
+
 ### Fixed — jj-hooks
 
 - Parallel `jj-gt submit` hook runs no longer fail intermittently with
