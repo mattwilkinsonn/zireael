@@ -706,7 +706,7 @@ in
         CO_SRC="$HOME/.local/src/cotal"
         CO_BUNDLE="$CO_SRC/extensions/connector-oh-my-pi/dist/extension.bundle.js"
         mkdir -p "$HOME/.local/src"
-        export PATH="${pkgs.nodejs_24}/bin:${pkgs.git}/bin:$PATH"
+        PATH="${pkgs.nodejs_24}/bin:${pkgs.git}/bin:$PATH"
 
         # A checkout whose origin URL doesn't match the fork gets re-cloned (same reasoning as
         # installAkiflowCli): cheaper than repairing a swapped remote.
@@ -742,13 +742,20 @@ in
           chmod +x "$SHIM/pnpm"
           # `... ` suffix filters to connector-oh-my-pi + its workspace deps (core, connector-core),
           # so install/build touch 3 of 19 projects, not the whole monorepo.
-          ( cd "$CO_SRC" \
-            && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm install --filter '@cotal-ai/oh-my-pi...' --no-frozen-lockfile \
-            && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm --filter '@cotal-ai/oh-my-pi...' build ) \
-            && echo "$HEAD_SHA" > "$CO_SRC/.last-built-sha" \
-            && echo "cotal-mesh extension built → $CO_BUNDLE" \
-            || echo "cotal-mesh extension build FAILED (leaving previous bundle, if any)"
-          rm -rf "$SHIM"
+          if ( cd "$CO_SRC" \
+               && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm install --filter '@cotal-ai/oh-my-pi...' --no-frozen-lockfile \
+               && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm --filter '@cotal-ai/oh-my-pi...' build ); then
+            rm -rf "$SHIM"
+            echo "$HEAD_SHA" > "$CO_SRC/.last-built-sha"
+            echo "cotal-mesh extension built → $CO_BUNDLE"
+          else
+            # Fail loudly (like installAkiflowCli): leave .last-built-sha unstamped so the next
+            # switch retries, and propagate so nix-switch doesn't report a false success while
+            # config.yml points at a stale-or-missing bundle.
+            rm -rf "$SHIM"
+            echo "cotal-mesh extension build FAILED" >&2
+            exit 1
+          fi
         fi
       '';
 
