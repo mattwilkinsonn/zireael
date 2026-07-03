@@ -33,8 +33,28 @@
 #      WAIT_POLL_SECS (30).
 # shellcheck shell=bash
 set -euo pipefail
-PR="${1:?usage: wait-for-reviews <pr> [owner/repo]   (env: WAIT_BOTS WAIT_GRACE_SECS WAIT_BACKSTOP_SECS WAIT_POLL_SECS)}"
-REPO="${2:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
+usage() {
+  echo "usage: wait-for-reviews <pr> [owner/repo | --repo owner/repo]" >&2
+  echo "  env: WAIT_BOTS WAIT_GRACE_SECS WAIT_BACKSTOP_SECS WAIT_POLL_SECS" >&2
+  exit 2
+}
+PR="${1:-}"
+case "$PR" in
+"" | -*) usage ;; # missing, or a flag where the PR number belongs
+esac
+shift
+
+# Optional repo: a positional `owner/repo`, or `--repo owner/repo` / `--repo=x`.
+# Reject any other leading-dash token instead of silently taking it as the repo.
+REPO=""
+case "${1:-}" in
+--repo) REPO="${2:?--repo needs a value}" ;;
+--repo=*) REPO="${1#--repo=}" ;;
+-*) echo "wait-for-reviews: unknown option '$1'" >&2; usage ;;
+?*) REPO="$1" ;;
+esac
+# Default to the current checkout's repo when none was given.
+REPO="${REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 BOTS="${WAIT_BOTS:-coderabbitai cubic-dev-ai greptile-apps chatgpt-codex-connector}"
 BACKSTOP="${WAIT_BACKSTOP_SECS:-1200}"
 GRACE="${WAIT_GRACE_SECS:-300}"
@@ -62,9 +82,13 @@ tern_state() {
     -H "Accept: application/json, text/event-stream" \
     -H "x-mcp-servers: tern" \
     -d "$payload" 2>/dev/null) || return 1
-  # SSE frames: the JSON-RPC result is the `data:` line; unwrap the tool text.
+  # SSE frames: the JSON-RPC result is on the `data:` line. Treat a tool-level
+  # error (result.isError) or a JSON-RPC error as a failure — return non-zero so
+  # the caller's `|| true` leaves $state empty and the gh-route fallback runs,
+  # instead of emitting the error text as if it were review-state JSON (which
+  # would crash the next jq under set -e with a cryptic parse error).
   sed -n 's/^data: //p' <<<"$resp" \
-    | jq -e -r '.result.content[0].text' 2>/dev/null
+    | jq -e -r 'if (.error != null) or (.result.isError == true) then error("tern error") else .result.content[0].text end' 2>/dev/null
 }
 
 # head SHA: prefer tern's cached state (no upstream call for the fleet); else the
