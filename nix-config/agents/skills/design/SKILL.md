@@ -1,14 +1,15 @@
 ---
 name: design
-description: "Lean up-front design for a change: one pass, one artifact (Problem · Approach · Plan · Tasks), depth-scaled with a fast path. A Fable subagent drafts it; the human reviews and freezes it as the contract executing agents read."
+description: "Lean up-front design for a change: one pass, one record (Problem · Approach · Plan · Tasks), depth-scaled with a fast path. A Fable subagent drafts it into the repo; it ships as its own PR, reviewed by the human and the AI bots, then frozen on merge as the contract executing agents read."
 ---
 
 # Lean design
 
 Use before implementing a non-trivial change. Past the fast path, the main
 agent **delegates the design pass to the `design` subagent** — it runs on Fable,
-grounds itself in the codebase, and writes the `design.md` into the repo. The
-human **reviews and freezes** that one artifact; execution then proceeds on the
+grounds itself in the codebase, and writes the design record into the repo. It
+ships as its own PR — the human **and** the review bots review it, and the
+**merge freezes** it; execution then proceeds on the
 default model (Opus). Deliberately light: the heavy autonomous brainstorm +
 per-task subagent machinery other frameworks bundle is replaced by our split —
 a Fable subagent drafts the design, the human freezes it, Opus executes +
@@ -26,8 +27,8 @@ For any non-fast-path change, the main agent spawns the design subagent instead
 of drafting the artifact inline:
 
 - `task(agent: "design", …)` — it runs on Fable (`pi/designer`), does its own
-  codebase recon, and writes `design.md` into the repo under
-  `docs/design/<change>/` (or `openspec/changes/<id>/`).
+  codebase recon, and writes the record into the repo at
+  `docs/designs/<domain>/<record>.md`.
 - Coding then proceeds on the default model (Opus) against the frozen artifact.
 
 The subagent drafts, the human freezes, Opus executes — the main agent doesn't
@@ -35,8 +36,11 @@ hand-write the design when it can delegate the pass.
 
 ## One pass, one artifact
 
-Produce a single `design.md` (under `docs/design/<change>/`, or
-`openspec/changes/<id>/` if we adopt OpenSpec's layout) with four short sections:
+Write a single design record **into the repo** at
+`docs/designs/<domain>/<record>.md` (`<domain>` = `platform` / `tools` /
+`agents` / `product`; `<record>` = a short kebab slug). It's a committed file
+that ships as a PR (see **Ship it as a reviewed PR**), never a local scratch
+artifact. Four short sections:
 
 - **Problem / Intent** — what and why, 1–3 sentences.
 - **Approach** — the chosen approach; list alternatives only when the choice
@@ -54,11 +58,24 @@ questions to the human in a single `ask`** — never a Socratic
 one-question-per-turn loop, which is the main thing that makes heavier flows
 slow. The human answers once; the design is updated and frozen.
 
-## No gates, no loops, no chaining
+## Ship it as a reviewed PR
 
-The human reviews the one frozen artifact once — they **review and freeze** it
-(the Fable subagent drafts it, Opus executes against it). No mandatory
-self-review loops, no per-section approval gates, no sub-skill chain.
+The design record is reviewed **on a pull request**, not in a local buffer —
+that's what lets the human **and** the AI review bots read the design before any
+implementation exists. Once the subagent has drafted `design.md` into the repo:
+
+- **Its own branch/PR, separate from the implementation** — commit the record
+  (`docs(<domain>): <change>` subject + `Co-Authored-By: seal` trailer), so the
+  design is reviewed as pure design with zero code noise.
+- `gt submit`, then drive `skill://autonomous-review` — un-draft, let the bots
+  review, triage findings, iterate.
+- **The merge is the freeze.** The design PR merging to `main` is what freezes
+  the contract; execution starts from the merged record. Matt merges — you never
+  do.
+
+No mandatory self-review loops, no per-section approval gates, no sub-skill
+chain — the single PR review is the whole gate (the subagent drafts, the bots +
+human review, the merge freezes, Opus executes against it).
 
 ## Plan discipline (the one hard requirement)
 
