@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
+#
+# no-bash-gate — a bun/TypeScript CLI with its own bun.lock (not a hoisted root
+# workspace), so it owns its `install`. System tasks exec the bun toolchain the
+# devenv shell provides via proto: biome check + tsc --noEmit + bun test.
+layer: 'application'
+language: 'typescript'
+
+tasks:
+  install:
+    command: 'bun install --frozen-lockfile'
+    inputs: ['package.json', 'bun.lock']
+    options:
+      cache: false
+  lint:
+    command: 'bunx biome check .'
+    deps: ['install']
+    inputs: ['*.ts', 'biome.json', 'package.json']
+  typecheck:
+    command: 'bunx tsc --noEmit'
+    deps: ['install']
+    inputs: ['*.ts', 'tsconfig.json', 'package.json']
+  test:
+    command: 'bun test'
+    deps: ['install']
+    inputs: ['*.ts', 'package.json', 'bun.lock']
+    options:
+      cache: false
+  # The gate: scan the nix-config subtree for non-allowlisted bash. GATE_ROOT is
+  # the nix-config dir so `git ls-files` there yields nix-config-relative paths
+  # (matching the allowlist) and the scan is scoped to what this repo area owns.
+  gate:
+    command: 'bun run index.ts'
+    deps: ['install']
+    env:
+      GATE_ROOT: '$workspaceRoot/nix-config'
+    options:
+      cache: false
+  ci:
+    deps: ['lint', 'typecheck', 'test', 'gate']
+    options:
+      cache: false

@@ -1,0 +1,20 @@
+{
+	"name": "no-bash-gate",
+	"version": "0.1.0",
+	"description": "CI gate (SEA-932): fail on any committed bash not in the shrinking allowlist, forcing new scripts to be TypeScript.",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/mattwilkinsonn/zireael.git",
+		"directory": "nix-config/tools/no-bash-gate"
+	},
+	"license": "MIT",
+	"module": "index.ts",
+	"type": "module",
+	"bin": {
+		"no-bash-gate": "./index.ts"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5"
+	}
+}
