@@ -177,6 +177,35 @@ bogus_rc=$?
 check "'305 --bogus' → exit 2" "$bogus_rc" "2"
 check_contains "'305 --bogus' → 'unknown option' on stderr" "$(cat "$bogus_err")" "unknown option"
 
+# --repo with no following value (space form, end of args) → the value guard:
+# reject rather than default-resolve a bogus repo. exit 2 + the specific message.
+repo_noval_err="$WORK/repo_noval.err"
+timeout 5 bash "$SCRIPT" 305 --repo >/dev/null 2>"$repo_noval_err"
+repo_noval_rc=$?
+check "'305 --repo' (no value) → exit 2" "$repo_noval_rc" "2"
+check_contains "'305 --repo' → '--repo needs an owner/repo value' on stderr" \
+	"$(cat "$repo_noval_err")" \
+	"--repo needs an owner/repo value"
+
+# --repo followed by a dash flag → must NOT be swallowed as REPO=--bogus; the
+# guard rejects a leading-dash value the same as a missing one.
+repo_dashval_err="$WORK/repo_dashval.err"
+timeout 5 bash "$SCRIPT" 305 --repo --bogus >/dev/null 2>"$repo_dashval_err"
+repo_dashval_rc=$?
+check "'305 --repo --bogus' (dash value) → exit 2" "$repo_dashval_rc" "2"
+check_contains "'305 --repo --bogus' → '--repo needs an owner/repo value' on stderr" \
+	"$(cat "$repo_dashval_err")" \
+	"--repo needs an owner/repo value"
+
+# --repo= with an empty equals value → same guard on the equals form.
+repo_empty_err="$WORK/repo_empty.err"
+timeout 5 bash "$SCRIPT" 305 --repo= >/dev/null 2>"$repo_empty_err"
+repo_empty_rc=$?
+check "'305 --repo=' (empty equals) → exit 2" "$repo_empty_rc" "2"
+check_contains "'305 --repo=' → '--repo needs an owner/repo value' on stderr" \
+	"$(cat "$repo_empty_err")" \
+	"--repo needs an owner/repo value"
+
 # --repo owner/repo (space form) → accepted: NOT an arg exit (rc != 2) and the
 # header line prints, proving the args parsed and the loop was entered.
 accept1_out="$WORK/accept1.out"

@@ -48,8 +48,16 @@ shift
 # Reject any other leading-dash token instead of silently taking it as the repo.
 REPO=""
 case "${1:-}" in
---repo) REPO="${2:?--repo needs a value}" ;;
---repo=*) REPO="${1#--repo=}" ;;
+--repo)
+  case "${2:-}" in
+  "" | -*) echo "wait-for-reviews: --repo needs an owner/repo value" >&2; usage ;;
+  esac
+  REPO="$2"
+  ;;
+--repo=*)
+  REPO="${1#--repo=}"
+  [ -n "$REPO" ] || { echo "wait-for-reviews: --repo needs an owner/repo value" >&2; usage; }
+  ;;
 -*) echo "wait-for-reviews: unknown option '$1'" >&2; usage ;;
 ?*) REPO="$1" ;;
 esac
