@@ -110,6 +110,17 @@ describe("runOnce", () => {
 		expect(errs.some((l) => l.includes("router"))).toBe(true);
 	});
 
+	test("extensionless bash in a dot-named dir is still sniffed → exit 1", async () => {
+		// Regression: the candidate filter must test the basename for a dot, not
+		// the full path, or a dot-named parent dir hides the script from sniffing.
+		const { d, errs } = deps({
+			lsFiles: async () => ["tools.v2/helper"],
+			readHead: async () => "#!/usr/bin/env bash\n",
+		});
+		expect(await runOnce(d)).toBe(1);
+		expect(errs.some((l) => l.includes("tools.v2/helper"))).toBe(true);
+	});
+
 	test("extensionless NON-bash (bun script) → exit 0", async () => {
 		const { d } = deps({
 			lsFiles: async () => ["dotfiles/scripts/thing"],

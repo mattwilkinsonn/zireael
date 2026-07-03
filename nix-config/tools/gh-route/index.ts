@@ -170,7 +170,12 @@ function parseJsonStream(text: string): unknown[] {
 		else if (c === "}" || c === "]") {
 			depth--;
 			if (depth === 0) {
-				values.push(JSON.parse(text.slice(start, i + 1)));
+				try {
+					values.push(JSON.parse(text.slice(start, i + 1)));
+				} catch {
+					// Malformed page (e.g. a truncated --paginate stream) — skip it,
+					// matching `jq -s`'s tolerance rather than crashing the process.
+				}
 				start = -1;
 			}
 		}
@@ -718,11 +723,7 @@ const HELP_TEXT = [
 	"`--paginate`s, so prefer REST for a PR with >100 reviews/comments.",
 	"",
 	"Env: GH_ROUTE_FLOOR (200), GH_ROUTE_CACHE_TTL (15), GH_ROUTE_MAX_WAIT (300),",
-	"     GH_ROUTE_CACHE (per-uid tmp path). gh + jq resolve from the dev set.",
-	"shellcheck shell=bash",
-	"GraphQL query strings and jq programs use `$var` that must stay literal (they",
-	"are GraphQL variables / jq bindings, not shell expansions), so disable SC2016.",
-	"shellcheck disable=SC2016",
+	"     GH_ROUTE_CACHE (per-uid tmp path). gh resolves from the dev set.",
 ].join("\n");
 
 // Command dispatch mirroring bash main() (lines 253-274). Returns the exit code.

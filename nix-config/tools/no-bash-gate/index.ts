@@ -113,10 +113,13 @@ export async function runOnce(deps: Deps): Promise<number> {
 	}
 
 	// Sniff only the extensionless candidates — cheap, and `.sh` needs no sniff.
+	// Test the BASENAME for a dot, not the whole path: an extensionless script in
+	// a dot-named directory (e.g. `tools.v2/helper`) must still be sniffed.
 	const shellCache = new Map<string, boolean>();
-	const candidates = files.filter(
-		(p) => !p.endsWith(".sh") && !p.includes("."),
-	);
+	const candidates = files.filter((p) => {
+		const basename = p.slice(p.lastIndexOf("/") + 1);
+		return !p.endsWith(".sh") && !basename.includes(".");
+	});
 	await Promise.all(
 		candidates.map(async (path) => {
 			try {

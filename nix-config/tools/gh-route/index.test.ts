@@ -757,6 +757,11 @@ describe("plumbing", () => {
 			[{ body: "a } { b" }],
 		]);
 	});
+	test("parseJsonStream skips a balanced-but-invalid page instead of throwing", () => {
+		// Brackets balance (so a slice is cut) but the content isn't valid JSON;
+		// the guard must drop it, not crash. The good page still comes through.
+		expect(parseJsonStream('[},{]\n[{"b":2}]')).toEqual([[{ b: 2 }]]);
+	});
 	test("slurpAdd flattens array pages (add // [])", () => {
 		expect(slurpAdd([[{ a: 1 }], [{ b: 2 }, { c: 3 }]])).toEqual([
 			{ a: 1 },
