@@ -10,6 +10,10 @@ When Matt pushes back mid-action ("why would you…", "stop", "what the fuck"), 
 
 When the intent is clear and no design fork exists, proceed without asking.
 
+## Design before non-trivial work
+
+For any change past the fast-path bar — more than a one-liner/config tweak/rename, or anything with a real design fork — invoke `skill://design` before implementing: write a design record into the repo (`docs/designs/<domain>/<record>.md`), ship it as its **own** PR, and let Matt and the review bots review the design *before* the implementation PR exists. The design PR merging is the freeze; execution starts from the merged record. Genuinely trivial changes skip it (that's the skill's explicit fast path) — don't manufacture a design doc for a rename.
+
 ## Tests are not optional
 
 Every feature, bugfix, or non-trivial change gets tests, run before you call it done. "Builds clean" ≠ "tested." Bugfixes get a regression test that fails before the fix and passes after. Verify against the exact user-facing invocation, not a reasoned-equivalent. Call out genuinely untestable areas explicitly rather than skipping silently. Full workflow: `rule://red-green-testing`.
