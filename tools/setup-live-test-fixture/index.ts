@@ -13,12 +13,11 @@
 // `owner` defaults to your `gh` auth-status username
 // (`gh api user --jq .login`).
 //
-// Behaviour parity port of scripts/setup-live-test-fixture.sh. The
-// bash `set -euo pipefail` semantics are preserved: the *condition*
-// probes (`gh repo view`, `gh api .../branches/...`, `gh pr list`)
-// run with `.nothrow()` and are read via their exit code / stdout,
-// exactly like the bash `2>/dev/null` / `|| true` forms; every other
-// shell call is mandatory and aborts the run on a nonzero exit.
+// The *condition* probes (`gh repo view`, `gh api .../branches/...`,
+// `gh pr list`) run with `.nothrow()` and are read via their exit code /
+// stdout, so a missing repo/branch/PR is a normal "create it" signal, not a
+// failure; every other shell call is mandatory and aborts the run on a
+// nonzero exit.
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -36,7 +35,7 @@ const PR_BODY =
 	"Persistent fixture PR for jj-gt live tests. Do not merge. Will be re-closed on every setup run.";
 
 const CLOSE_COMMENT =
-	"Auto-closed by scripts/setup-live-test-fixture.sh — fixture PRs stay closed to avoid cluttering the Graphite home page. Do not delete the branch.";
+	"Auto-closed by tools/setup-live-test-fixture/index.ts — fixture PRs stay closed to avoid cluttering the Graphite home page. Do not delete the branch.";
 
 // Heredoc content of fixture/README.md, verbatim (backticks and the
 // trailing newline are part of the fixture the tests reference).

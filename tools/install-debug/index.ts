@@ -199,7 +199,9 @@ if (import.meta.main) {
 		if (bin === undefined) {
 			return { exitCode: 0 };
 		}
-		let proc = $`${bin} ${args}`.nothrow().quiet();
+		// No .quiet(): install-debug is an interactive dev tool, so cargo/bun build
+		// output (and errors) must stream to the terminal like the bash original did.
+		let proc = $`${bin} ${args}`.nothrow();
 		if (opts?.cwd !== undefined) {
 			proc = proc.cwd(opts.cwd);
 		}
