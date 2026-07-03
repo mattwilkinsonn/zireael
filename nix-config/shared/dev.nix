@@ -151,12 +151,13 @@ in
       # that hasn't run the activation yet gets a clear error pointing at nix-switch.
       (writeShellScriptBin "cotal" ''
         CO_SRC="$HOME/.local/src/cotal"
-        if [ ! -f "$CO_SRC/bin/cotal.ts" ]; then
-          echo "cotal: not built yet — run nix-switch (installCotalOmpExtension builds it at $CO_SRC)." >&2
+        CO_TSX="$CO_SRC/node_modules/.bin/tsx"
+        if [ ! -f "$CO_SRC/bin/cotal.ts" ] || [ ! -x "$CO_TSX" ]; then
+          echo "cotal: not built yet (missing entry or deps) — run nix-switch (installCotalOmpExtension builds it at $CO_SRC)." >&2
           exit 1
         fi
         export PATH="${pkgs.nodejs_24}/bin:$PATH"
-        exec "$CO_SRC/node_modules/.bin/tsx" "$CO_SRC/bin/cotal.ts" "$@"
+        exec "$CO_TSX" "$CO_SRC/bin/cotal.ts" "$@"
       '')
 
       # jj-ws — workspace helper for the multi-agent wave (creates/forgets
@@ -743,10 +744,13 @@ in
       ${pkgs.git}/bin/git -C "$CO_SRC" reset --hard "origin/$CO_BRANCH"
     fi
 
-    # Skip the ~1GB install + build when both artifacts already match the current HEAD.
+    # Skip the ~1GB install + build only when the deps + both artifacts are present AND match HEAD.
+    # Include CO_TSX (the shim's runtime): if node_modules was wiped but dist + stamp survive, we
+    # must rebuild, not report "up to date" and ship a broken `cotal`.
     CO_CLI="$CO_SRC/implementations/cli/dist/index.js"
+    CO_TSX="$CO_SRC/node_modules/.bin/tsx"
     HEAD_SHA=$(${pkgs.git}/bin/git -C "$CO_SRC" rev-parse HEAD)
-    if [ -f "$CO_BUNDLE" ] && [ -f "$CO_CLI" ] && [ -f "$CO_SRC/.last-built-sha" ] \
+    if [ -f "$CO_BUNDLE" ] && [ -f "$CO_CLI" ] && [ -x "$CO_TSX" ] && [ -f "$CO_SRC/.last-built-sha" ] \
        && [ "$(cat "$CO_SRC/.last-built-sha")" = "$HEAD_SHA" ]; then
       echo "cotal (CLI + extension) up to date ($HEAD_SHA)"
     else
@@ -756,11 +760,14 @@ in
       SHIM="$(mktemp -d)"
       printf '#!/bin/sh\nexec ${pkgs.nodejs_24}/bin/corepack pnpm "$@"\n' > "$SHIM/pnpm"
       chmod +x "$SHIM/pnpm"
+      # Delete the prior outputs first: dist is gitignored so it survives `git reset --hard`, and
+      # tsc/esbuild could in principle exit 0 without regenerating one. Removing them means the
+      # post-build `[ -f ]` guard proves THIS build produced them, not a stale leftover.
+      rm -f "$CO_BUNDLE" "$CO_CLI"
       # Full install + build (not filtered): the `cotal` CLI's entry (bin/cotal.ts) pulls in the
       # manager, delivery, connectors, and cmux/tmux packages, and the bundled nats-server
       # (@eplightning/nats-server-*) rides the install — so `cotal up --open` needs no external
-      # binary. Guard on BOTH built artifacts existing (not just a 0 exit): a build that writes
-      # neither would otherwise stamp the SHA and every later switch would re-run the ~1GB build.
+      # binary. Guard on both freshly-built artifacts (not just a 0 exit) before stamping.
       if ( cd "$CO_SRC" \
            && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm install --no-frozen-lockfile \
            && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm build ) \
