@@ -698,66 +698,68 @@ in
   # built path is wired into ~/.omp/agent/config.yml (agents/config.yml) `extensions:`.
   #
   # Iteration while it settles: edit in the fork → commit+push the branch → nix-switch rebuilds.
-  home.activation.installCotalOmpExtension =
-    lib.hm.dag.entryAfter [ "writeBoundary" "fnmDefaultLts" ]
-      ''
-        CO_REPO="https://github.com/sealedsecurity/Cotal.git"
-        CO_BRANCH="zheng-connector-oh-my-pi"
-        CO_SRC="$HOME/.local/src/cotal"
-        CO_BUNDLE="$CO_SRC/extensions/connector-oh-my-pi/dist/extension.bundle.js"
-        mkdir -p "$HOME/.local/src"
-        PATH="${pkgs.nodejs_24}/bin:${pkgs.git}/bin:$PATH"
+  home.activation.installCotalOmpExtension = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    CO_REPO="https://github.com/sealedsecurity/Cotal.git"
+    CO_BRANCH="zheng-connector-oh-my-pi"
+    CO_SRC="$HOME/.local/src/cotal"
+    CO_BUNDLE="$CO_SRC/extensions/connector-oh-my-pi/dist/extension.bundle.js"
+    mkdir -p "$HOME/.local/src"
+    PATH="${pkgs.nodejs_24}/bin:${pkgs.git}/bin:$PATH"
 
-        # A checkout whose origin URL doesn't match the fork gets re-cloned (same reasoning as
-        # installAkiflowCli): cheaper than repairing a swapped remote.
-        if [ -d "$CO_SRC/.git" ]; then
-          CURRENT_URL=$(${pkgs.git}/bin/git -C "$CO_SRC" remote get-url origin 2>/dev/null || echo "")
-          if [ "$CURRENT_URL" != "$CO_REPO" ]; then
-            echo "cotal: remote was '$CURRENT_URL', expected '$CO_REPO' — re-cloning"
-            rm -rf "$CO_SRC"
-          fi
-        fi
+    # A checkout whose origin URL doesn't match the fork gets re-cloned (same reasoning as
+    # installAkiflowCli): cheaper than repairing a swapped remote.
+    if [ -d "$CO_SRC/.git" ]; then
+      CURRENT_URL=$(${pkgs.git}/bin/git -C "$CO_SRC" remote get-url origin 2>/dev/null || echo "")
+      if [ "$CURRENT_URL" != "$CO_REPO" ]; then
+        echo "cotal: remote was '$CURRENT_URL', expected '$CO_REPO' — re-cloning"
+        rm -rf "$CO_SRC"
+      fi
+    fi
 
-        if [ ! -d "$CO_SRC/.git" ]; then
-          echo "Cloning Cotal fork ($CO_BRANCH)..."
-          ${pkgs.git}/bin/git clone --branch "$CO_BRANCH" "$CO_REPO" "$CO_SRC"
-        else
-          echo "Updating Cotal fork ($CO_BRANCH)..."
-          ${pkgs.git}/bin/git -C "$CO_SRC" fetch origin "$CO_BRANCH"
-          ${pkgs.git}/bin/git -C "$CO_SRC" checkout -q "$CO_BRANCH" 2>/dev/null || ${pkgs.git}/bin/git -C "$CO_SRC" checkout -qB "$CO_BRANCH" "origin/$CO_BRANCH"
-          ${pkgs.git}/bin/git -C "$CO_SRC" reset --hard "origin/$CO_BRANCH"
-        fi
+    if [ ! -d "$CO_SRC/.git" ]; then
+      echo "Cloning Cotal fork ($CO_BRANCH)..."
+      ${pkgs.git}/bin/git clone --branch "$CO_BRANCH" "$CO_REPO" "$CO_SRC"
+    else
+      echo "Updating Cotal fork ($CO_BRANCH)..."
+      ${pkgs.git}/bin/git -C "$CO_SRC" fetch origin "$CO_BRANCH"
+      ${pkgs.git}/bin/git -C "$CO_SRC" checkout -q "$CO_BRANCH" 2>/dev/null || ${pkgs.git}/bin/git -C "$CO_SRC" checkout -qB "$CO_BRANCH" "origin/$CO_BRANCH"
+      ${pkgs.git}/bin/git -C "$CO_SRC" reset --hard "origin/$CO_BRANCH"
+    fi
 
-        # Skip the ~1GB install + build when the built bundle already matches the current HEAD.
-        HEAD_SHA=$(${pkgs.git}/bin/git -C "$CO_SRC" rev-parse HEAD)
-        if [ -f "$CO_BUNDLE" ] && [ -f "$CO_SRC/.last-built-sha" ] \
-           && [ "$(cat "$CO_SRC/.last-built-sha")" = "$HEAD_SHA" ]; then
-          echo "cotal-mesh extension up to date ($HEAD_SHA)"
-        else
-          echo "Building cotal-mesh extension (pnpm install + esbuild bundle)..."
-          # corepack provides pnpm; the connector's `build` script chains `pnpm run bundle`, so
-          # pnpm must resolve by name inside the build — a tiny shim on PATH forwards to corepack.
-          SHIM="$(mktemp -d)"
-          printf '#!/bin/sh\nexec ${pkgs.nodejs_24}/bin/corepack pnpm "$@"\n' > "$SHIM/pnpm"
-          chmod +x "$SHIM/pnpm"
-          # `... ` suffix filters to connector-oh-my-pi + its workspace deps (core, connector-core),
-          # so install/build touch 3 of 19 projects, not the whole monorepo.
-          if ( cd "$CO_SRC" \
-               && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm install --filter '@cotal-ai/oh-my-pi...' --no-frozen-lockfile \
-               && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm --filter '@cotal-ai/oh-my-pi...' build ); then
-            rm -rf "$SHIM"
-            echo "$HEAD_SHA" > "$CO_SRC/.last-built-sha"
-            echo "cotal-mesh extension built → $CO_BUNDLE"
-          else
-            # Fail loudly (like installAkiflowCli): leave .last-built-sha unstamped so the next
-            # switch retries, and propagate so nix-switch doesn't report a false success while
-            # config.yml points at a stale-or-missing bundle.
-            rm -rf "$SHIM"
-            echo "cotal-mesh extension build FAILED" >&2
-            exit 1
-          fi
-        fi
-      '';
+    # Skip the ~1GB install + build when the built bundle already matches the current HEAD.
+    HEAD_SHA=$(${pkgs.git}/bin/git -C "$CO_SRC" rev-parse HEAD)
+    if [ -f "$CO_BUNDLE" ] && [ -f "$CO_SRC/.last-built-sha" ] \
+       && [ "$(cat "$CO_SRC/.last-built-sha")" = "$HEAD_SHA" ]; then
+      echo "cotal-mesh extension up to date ($HEAD_SHA)"
+    else
+      echo "Building cotal-mesh extension (pnpm install + esbuild bundle)..."
+      # corepack provides pnpm; the connector's `build` script chains `pnpm run bundle`, so
+      # pnpm must resolve by name inside the build — a tiny shim on PATH forwards to corepack.
+      SHIM="$(mktemp -d)"
+      printf '#!/bin/sh\nexec ${pkgs.nodejs_24}/bin/corepack pnpm "$@"\n' > "$SHIM/pnpm"
+      chmod +x "$SHIM/pnpm"
+      # `... ` suffix filters to connector-oh-my-pi + its workspace deps (core, connector-core),
+      # so install/build touch 3 of 19 projects, not the whole monorepo.
+      # Guard on the bundle actually existing (not just a 0 exit): if the filter ever matches
+      # nothing, or esbuild's outDir changes, pnpm can exit 0 while writing no bundle — without
+      # this check the SHA would stamp and every later switch would re-run the ~1GB build forever.
+      if ( cd "$CO_SRC" \
+           && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm install --filter '@cotal-ai/oh-my-pi...' --no-frozen-lockfile \
+           && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm --filter '@cotal-ai/oh-my-pi...' build ) \
+         && [ -f "$CO_BUNDLE" ]; then
+        rm -rf "$SHIM"
+        echo "$HEAD_SHA" > "$CO_SRC/.last-built-sha"
+        echo "cotal-mesh extension built → $CO_BUNDLE"
+      else
+        # Fail loudly (like installAkiflowCli): leave .last-built-sha unstamped so the next
+        # switch retries, and propagate so nix-switch doesn't report a false success while
+        # config.yml points at a stale-or-missing bundle.
+        rm -rf "$SHIM"
+        echo "cotal-mesh extension build FAILED" >&2
+        exit 1
+      fi
+    fi
+  '';
 
   # Berkeley Mono fonts: paid, can't ship via nixpkgs. Synced down from
   # Google Drive via rclone on each activation. First-time setup per machine:
