@@ -144,6 +144,22 @@ in
       # in Emdash (generalaction/emdash).
       (writeShellScriptBin "pi" ''exec "$HOME/.local/bin/omp" "$@"'')
 
+      # cotal — the Cotal mesh CLI (`cotal up --open`, `join`, `console`, …). The repo ships no
+      # packaged bin; it runs via `tsx bin/cotal.ts` from the fork clone that
+      # installCotalOmpExtension (below) builds at ~/.local/src/cotal. This shim runs that entry
+      # with the nix node on PATH (so tsx's bundled runtime + the workspace deps resolve). A host
+      # that hasn't run the activation yet gets a clear error pointing at nix-switch.
+      (writeShellScriptBin "cotal" ''
+        CO_SRC="$HOME/.local/src/cotal"
+        CO_TSX="$CO_SRC/node_modules/.bin/tsx"
+        if [ ! -f "$CO_SRC/bin/cotal.ts" ] || [ ! -x "$CO_TSX" ]; then
+          echo "cotal: not built yet (missing entry or deps) — run nix-switch (installCotalOmpExtension builds it at $CO_SRC)." >&2
+          exit 1
+        fi
+        export PATH="${pkgs.nodejs_24}/bin:$PATH"
+        exec "$CO_TSX" "$CO_SRC/bin/cotal.ts" "$@"
+      '')
+
       # jj-ws — workspace helper for the multi-agent wave (creates/forgets
       # jj workspaces under <repo>.ws/). Pairs with the `wave` zellij layout.
       (writeShellScriptBin "jj-ws" (builtins.readFile ../dotfiles/scripts/jj-ws))
@@ -685,6 +701,88 @@ in
       (cd "$AF_SRC" && ${pkgs.bun}/bin/bun install && ${pkgs.bun}/bin/bun run build)
       install -m 0755 "$AF_SRC/af" "$AF_BIN"
       echo "$HEAD_SHA" > "$AF_SRC/.last-built-sha"
+    fi
+  '';
+
+  # cotal: our fork of the Cotal mesh (https://github.com/sealedsecurity/Cotal, branch
+  # zheng-connector-oh-my-pi). Build-from-source gives BOTH halves of using Cotal with oh-my-pi:
+  #   1. the `cotal` CLI (`cotal up --open`, `join`, …) — the mesh you connect to. Shimmed onto
+  #      PATH below (writeShellScriptBin "cotal") since the repo has no packaged bin; it runs via
+  #      `tsx bin/cotal.ts`.
+  #   2. the oh-my-pi `pi --extension` (cotal_* tools, presence, message delivery) — esbuild-bundled
+  #      to a self-contained dist/extension.bundle.js (host @oh-my-pi/* external), wired into
+  #      ~/.omp/agent/config.yml (agents/config.yml) `extensions:` so a COTAL_NAME omp session joins.
+  # A full `pnpm build` produces both; the CLI's bundled nats-server (@eplightning/nats-server-*)
+  # comes from the install, so `cotal up --open` needs no external binary.
+  #
+  # Iteration while it settles: edit in the fork → commit+push the branch → nix-switch rebuilds.
+  home.activation.installCotalOmpExtension = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    CO_REPO="https://github.com/sealedsecurity/Cotal.git"
+    CO_BRANCH="zheng-connector-oh-my-pi"
+    CO_SRC="$HOME/.local/src/cotal"
+    CO_BUNDLE="$CO_SRC/extensions/connector-oh-my-pi/dist/extension.bundle.js"
+    mkdir -p "$HOME/.local/src"
+    PATH="${pkgs.nodejs_24}/bin:${pkgs.git}/bin:$PATH"
+
+    # A checkout whose origin URL doesn't match the fork gets re-cloned (same reasoning as
+    # installAkiflowCli): cheaper than repairing a swapped remote.
+    if [ -d "$CO_SRC/.git" ]; then
+      CURRENT_URL=$(${pkgs.git}/bin/git -C "$CO_SRC" remote get-url origin 2>/dev/null || echo "")
+      if [ "$CURRENT_URL" != "$CO_REPO" ]; then
+        echo "cotal: remote was '$CURRENT_URL', expected '$CO_REPO' — re-cloning"
+        rm -rf "$CO_SRC"
+      fi
+    fi
+
+    if [ ! -d "$CO_SRC/.git" ]; then
+      echo "Cloning Cotal fork ($CO_BRANCH)..."
+      ${pkgs.git}/bin/git clone --branch "$CO_BRANCH" "$CO_REPO" "$CO_SRC"
+    else
+      echo "Updating Cotal fork ($CO_BRANCH)..."
+      ${pkgs.git}/bin/git -C "$CO_SRC" fetch origin "$CO_BRANCH"
+      ${pkgs.git}/bin/git -C "$CO_SRC" checkout -q "$CO_BRANCH" 2>/dev/null || ${pkgs.git}/bin/git -C "$CO_SRC" checkout -qB "$CO_BRANCH" "origin/$CO_BRANCH"
+      ${pkgs.git}/bin/git -C "$CO_SRC" reset --hard "origin/$CO_BRANCH"
+    fi
+
+    # Skip the ~1GB install + build only when the deps + both artifacts are present AND match HEAD.
+    # Include CO_TSX (the shim's runtime): if node_modules was wiped but dist + stamp survive, we
+    # must rebuild, not report "up to date" and ship a broken `cotal`.
+    CO_CLI="$CO_SRC/implementations/cli/dist/index.js"
+    CO_TSX="$CO_SRC/node_modules/.bin/tsx"
+    HEAD_SHA=$(${pkgs.git}/bin/git -C "$CO_SRC" rev-parse HEAD)
+    if [ -f "$CO_BUNDLE" ] && [ -f "$CO_CLI" ] && [ -x "$CO_TSX" ] && [ -f "$CO_SRC/.last-built-sha" ] \
+       && [ "$(cat "$CO_SRC/.last-built-sha")" = "$HEAD_SHA" ]; then
+      echo "cotal (CLI + extension) up to date ($HEAD_SHA)"
+    else
+      echo "Building cotal (pnpm install + full workspace build)..."
+      # corepack provides pnpm; several packages' `build` scripts chain `pnpm run bundle`, so
+      # pnpm must resolve by name inside the build — a tiny shim on PATH forwards to corepack.
+      SHIM="$(mktemp -d)"
+      printf '#!/bin/sh\nexec ${pkgs.nodejs_24}/bin/corepack pnpm "$@"\n' > "$SHIM/pnpm"
+      chmod +x "$SHIM/pnpm"
+      # Delete the prior outputs first: dist is gitignored so it survives `git reset --hard`, and
+      # tsc/esbuild could in principle exit 0 without regenerating one. Removing them means the
+      # post-build `[ -f ]` guard proves THIS build produced them, not a stale leftover.
+      rm -f "$CO_BUNDLE" "$CO_CLI"
+      # Full install + build (not filtered): the `cotal` CLI's entry (bin/cotal.ts) pulls in the
+      # manager, delivery, connectors, and cmux/tmux packages, and the bundled nats-server
+      # (@eplightning/nats-server-*) rides the install — so `cotal up --open` needs no external
+      # binary. Guard on both freshly-built artifacts (not just a 0 exit) before stamping.
+      if ( cd "$CO_SRC" \
+           && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm install --no-frozen-lockfile \
+           && PATH="$SHIM:$PATH" ${pkgs.nodejs_24}/bin/corepack pnpm build ) \
+         && [ -f "$CO_BUNDLE" ] && [ -f "$CO_CLI" ]; then
+        rm -rf "$SHIM"
+        echo "$HEAD_SHA" > "$CO_SRC/.last-built-sha"
+        echo "cotal built — CLI ($CO_CLI) + extension ($CO_BUNDLE)"
+      else
+        # Fail loudly (like installAkiflowCli): leave .last-built-sha unstamped so the next
+        # switch retries, and propagate so nix-switch doesn't report a false success while
+        # config.yml points at a stale-or-missing bundle / the cotal shim points at a missing CLI.
+        rm -rf "$SHIM"
+        echo "cotal build FAILED" >&2
+        exit 1
+      fi
     fi
   '';
 
