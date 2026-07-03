@@ -30,14 +30,15 @@ tasks:
 
   # ── Dev + release entrypoints (replaced the Justfile). Never gated. ──
   # `moon run root:release -- v0.3.0` cuts a release; install-debug builds
-  # the tools to ~/.cargo/bin. Args pass through after `--`.
+  # the tools to ~/.cargo/bin. Args pass through after `--`. Thin wrappers over
+  # the bun/TypeScript tools under tools/ (converted from bash, SEA-932).
   release:
-    command: 'bash scripts/release.sh'
+    command: 'bun run tools/release/index.ts'
     options:
       runInCI: false
       cache: false
   install-debug:
-    command: 'bash scripts/install-debug.sh'
+    command: 'bun run tools/install-debug/index.ts'
     options:
       runInCI: false
       cache: false

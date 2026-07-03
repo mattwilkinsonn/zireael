@@ -1,0 +1,20 @@
+{
+	"name": "release",
+	"version": "0.1.0",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/mattwilkinsonn/zireael.git",
+		"directory": "tools/release"
+	},
+	"license": "MIT",
+	"module": "index.ts",
+	"type": "module",
+	"bin": {
+		"release": "./index.ts"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5"
+	},
+	"description": "Cut a full monorepo release: bump versions, commit, tag, push."
+}

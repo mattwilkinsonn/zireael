@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/project.json
 #
-# no-bash-gate — a bun/TypeScript CLI with its own bun.lock (not a hoisted root
+# install-debug — a bun/TypeScript CLI with its own bun.lock (not a hoisted root
 # workspace), so it owns its `install`. System tasks exec the bun toolchain the
 # devenv shell provides via proto: biome check + tsc --noEmit + bun test.
 layer: 'application'
@@ -26,18 +26,7 @@ tasks:
     inputs: ['*.ts', 'package.json', 'bun.lock']
     options:
       cache: false
-  # The gate: scan the WHOLE zireael repo for non-allowlisted bash. GATE_ROOT is
-  # the workspace root so `git ls-files` yields repo-relative paths (matching the
-  # allowlist), enforcing "TypeScript over bash" across every subtree, not just
-  # nix-config.
-  gate:
-    command: 'bun run index.ts'
-    deps: ['install']
-    env:
-      GATE_ROOT: '$workspaceRoot'
-    options:
-      cache: false
   ci:
-    deps: ['lint', 'typecheck', 'test', 'gate']
+    deps: ['lint', 'typecheck', 'test']
     options:
       cache: false
