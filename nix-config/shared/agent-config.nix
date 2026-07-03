@@ -14,6 +14,9 @@
 #     written back in-place, so the write follows the symlink). Not part of
 #     .agents discovery, so they stay under ~/.omp/agent. agent.db + sessions
 #     stay OMP-managed live (not linked).
+#   - ~/.omp/agent/agents: OMP task-agent discovery (coding-agent
+#     task/discovery.ts scans ~/.omp/agent/agents/*.md). Out-of-store like the
+#     rest, so a new/edited agent takes effect without a rebuild.
 #
 # mkOutOfStoreSymlink (not source = ./agents/...): agents edit AGENTS.md / rules
 # / skills in place, so the link targets the live working copy and edits take
@@ -34,6 +37,7 @@ in
     ".agents/skills".source = linkAgent "skills";
     ".omp/agent/extensions".source = linkAgent "extensions";
     ".omp/agent/mcp.json".source = linkAgent "mcp.json";
+    ".omp/agent/agents".source = linkAgent "agents";
     # force: clobber any file OMP already wrote at these paths so a switch
     # never stalls on an existing regular file at the symlink target.
     ".omp/agent/config.yml" = {

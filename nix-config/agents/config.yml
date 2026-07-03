@@ -1,5 +1,8 @@
-modelRoles: 
+modelRoles:
   default: litellm/claude-opus:xhigh
+  plan: litellm/claude-fable:xhigh
+  designer: litellm/claude-fable:xhigh
+  advisor: litellm/claude-fable:xhigh
 theme: 
   dark: dark-rose-pine
   light: light-tokyo-night
