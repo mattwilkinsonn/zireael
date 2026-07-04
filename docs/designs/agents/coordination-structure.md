@@ -70,29 +70,31 @@ against the invariants:
 
 | Proposed | Verdict | Why |
 | --- | --- | --- |
-| `#general` | **Keep — announcements only, supervisor-authored** | Low-traffic all-hands (wave start/stop, new teammate joined, zone freezes). Under auth it becomes structurally supervisor-post-only: workers simply don't get an `allowPublish` grant for it (post ACL is default-deny, see Enforcement). Replays 24h so a late-spawned worker gets the current directive on join, not a week of them (`cotal_join` backfills history — `extensions/connector-core/src/tool-specs.ts:435-437`). |
+| `#general` | **Keep, renamed `#announcements` — supervisor-authored** | Low-traffic all-hands (wave start/stop, new teammate joined, zone freezes). Renamed from `general` to say what it's for. Under auth it's structurally supervisor-post-only: workers get no `allowPublish` grant for it (post ACL default-deny, see Enforcement). Replays 24h so a late-spawned worker gets the current directive on join, not a week of them (`cotal_join` backfills history — `extensions/connector-core/src/tool-specs.ts:435-437`). |
 | `#tasks` | **Drop** | An assignment board is a second assignment authority — it drifts from the tracker (Inv 1), and a posted board invites self-assign/pull semantics (Inv 4). Assignment is a tracker write + a DM, not a broadcast. |
 | `#status` | **Drop** | Liveness is already ambient: presence (`cotal_status` with `idle` / `working` / `waiting` + an activity note — `extensions/connector-core/src/tool-specs.ts:313-325`) shows the supervisor who is free without asking (Inv 2: never poll). Done/blocked are point-to-point *events* addressed to the one party that acts on them — they go by DM to the supervisor, who updates the tracker. |
-| `#coordination` | **Keep** | The lateral detail plane: multi-party threads (a file-zone conflict spanning three workers, an interface handshake with an audience) that pairwise DMs can't carry. Explicitly *never* for assignments. |
+| `#coordination` (flat) | **Drop the flat channel — replace with per-issue sub-channels** | A single `#coordination` everyone subscribes to broadcasts every lateral message to every worker — a worker on issue A is prompted with issue B/C/D's zone claims and handshakes it can't act on. That per-message fan-out is pure context cost. Replaced by **ad-hoc `#coordination.<issue>`** (below): only the agents on an issue join its channel. |
 | `#requests` (alternative considered) | **Drop** | Worker→supervisor requests need no channel at all: every agent cred can DM and anycast unconditionally (see Enforcement), delivery is durable (per-identity DM durable + per-role task queue), and a request is point-to-point to exactly one authority. A channel adds wake-noise for every other worker and implies queue semantics (Inv 4). |
 
-**Final layout: two channels.**
+**Final layout: one standing channel + an on-demand per-issue subtree.**
 
-| Channel | replay | Who reads | Who posts (auth-enforced) | Purpose (registry `description`/`instructions`) |
+| Channel | replay | Who reads | Who posts (auth-enforced) | Purpose |
 | --- | --- | --- | --- | --- |
-| `general` | `replayWindow: "24h"` | everyone | supervisor (+ operator via CLI) | Announcements only. Supervisor-authored. Assignments never happen here — they arrive by DM; state lives in the tracker. |
-| `coordination` | **off** (`replay: false`) | everyone | supervisor + all workers | Worker↔worker details: file zones, interfaces, handoffs. Never assignments, never status reports. |
+| `announcements` | `replayWindow: "24h"` | everyone (standing subscription) | supervisor (+ operator via CLI) | Announcements only. Supervisor-authored. Assignments never happen here — they arrive by DM; state lives in the tracker. |
+| `coordination.<issue>` (e.g. `coordination.sea-1234`) | **off** (`replay: false`) | **only agents who `cotal_join` it** | any worker on that issue | The lateral detail plane, scoped per issue: file zones, interfaces, handoffs for one piece of work. Never assignments, never status reports. Created on demand — no registry entry needed. |
+
+**Why per-issue works — and why it doesn't refill the firehose.** The fan-out fix hinges on the split between `subscribe` (the *active read set* — what a session actually receives) and `allowSubscribe` (the *read ACL* — what it *may* join). Workers boot with `subscribe: [announcements]` only, so by default they receive nothing but announcements. Their read ACL is widened to the wildcard subtree `allowSubscribe: [announcements, coordination.>]`, and post ACL to `allowPublish: [coordination.>]` — both accepted under auth (the agent-file loader concreteness check applies to `quiet`/`muted` only; `allowSubscribe`/`allowPublish` are validated by `assertValidChannel`, which permits wildcards, `agent-file.ts:152,181-182`; the wire grant is minted per entry through `chatSubject`, `provision.ts:367`, and `channelInAllow` matches via `subjectMatches`, `subjects.ts:127-129`). So a worker starting on SEA-1234 does `cotal_join("coordination.sea-1234")` (and posts there); its collaborators join the same one. Uninvolved agents never subscribe, so they never see it. A dotted name like `coordination.sea-1234` is a *concrete* channel (`isConcreteChannel` — only `*`/`>` segments are wildcards, `subjects.ts:73-75`), so it's publishable; the wildcard only ever appears in the ACL, never as a publish target.
 
 The registry file format (schema shape only) mirrors
-`examples/01-lateral-coordination/channels.json:1-13`. The **descriptions below are this design's
-actual two channels** (per T1), not the upstream example's placeholder text:
+`examples/01-lateral-coordination/channels.json:1-13`. Only `announcements` needs a registry
+entry (per-issue channels are created live by `cotal_join`, carrying their intent in the join, not
+a pre-seeded description):
 
 ```json
 {
   "defaults": { "replay": false },
   "channels": {
-    "general": { "replayWindow": "24h", "description": "Announcements only, supervisor-authored." },
-    "coordination": { "replay": false, "description": "Lateral worker coordination — details, not assignments." }
+    "announcements": { "replay": true, "replayWindow": "24h", "description": "Announcements only, supervisor-authored." }
   }
 }
 ```
@@ -110,9 +112,9 @@ unless `attention == focus` (`extensions/connector-core/src/agent.ts:441-443`) *
 replay-gated per channel — a `replay: false` channel yields nothing, by explicit design ("recall
 must not become a history bypass", `agent.ts:434-436`). So replay-on-join is the sole backfill
 path: replay size is pure per-spawn context cost with no lazy-pull upside, and the tracker is the
-durable authority regardless. Hence: **`#coordination` replay is OFF** — live detail (zone claims,
-interface handshakes) is only relevant in the moment, and a fresh worker shouldn't be force-fed a
-wall of expired chatter it can't act on. **`#general` replays 24h** so a late-spawned worker still
+durable authority regardless. Hence: **`#coordination.<issue>` replay is OFF** — live detail (zone
+claims, interface handshakes) is only relevant in the moment, and a worker joining an issue channel
+shouldn't be force-fed a wall of expired chatter it can't act on. **`#announcements` replays 24h** so a late-spawned worker still
 sees the current directive/announcement, not a week of them (`"24h"` parses via the registry's
 `parseDuration`, `^(\d+)(s|m|h|d)$` — `packages/core/src/channels.ts:59-60`). Anything durable
 lives in the tracker, which the supervisor owns and workers read from disk. `replayWindow` /
@@ -130,8 +132,8 @@ flowchart LR
     S -->|cotal_spawn / cotal_despawn / cotal_persona| MGR[manager daemon - cotal supervise]
     MGR -->|spawns, mints scoped creds| W1
     MGR -->|spawns, mints scoped creds| W2
-    W1 <-->|"DM + #coordination (details only)"| W2
-    S -->|announcements| G[#general]
+    W1 <-->|"DM + #coordination.<issue> (details only)"| W2
+    S -->|announcements| G[#announcements]
 ```
 
 - **Work request:** a free worker sets presence `idle` and sends `need-work` via
@@ -145,13 +147,13 @@ flowchart LR
 - **Assignment:** supervisor writes the tracker first (single authority, Inv 1), then DMs the
   worker the brief (task id, scope, file zone, acceptance). Never posted to a channel.
 - **Agent request:** worker DMs `need-agent: <persona> <why>`; supervisor decides, calls
-  `cotal_spawn`, records the new teammate in the tracker, announces on `#general`. If a needed
+  `cotal_spawn`, records the new teammate in the tracker, announces on `#announcements`. If a needed
   persona doesn't exist yet, the supervisor defines it first with `cotal_persona`
   (`definePersona` is a privileged-tier manager op — `implementations/manager/src/manager.ts:304-305`) —
   so *persona creation* funnels through the supervisor exactly like spawn.
 - **Progress:** ambient via presence; terminal events (`done:` with evidence, `blocked:` with
   why) by DM to the supervisor, who updates the tracker.
-- **Details:** worker↔worker DM or `#coordination`. The supervisor doesn't relay contracts.
+- **Details:** for a multi-party issue, a worker `cotal_join`s `#coordination.<issue>` (e.g. `coordination.sea-1234`) and settles zones/interfaces there with its collaborators; one-on-one detail is a direct DM. The supervisor doesn't relay contracts. Uninvolved workers never join, so they never see it.
 - **Teardown:** a finished worker may self-despawn (self-service despawn is granted to every
   agent — see matrix); the supervisor can despawn any worker it spawned (own-children scope).
 
@@ -196,13 +198,13 @@ channel-scope keys and "allowPublish — post ACL … (omit ⇒ none — default
 | `name:` | `supervisor` (generic — not "mercator") | per instance (e.g. `worker-impl`) |
 | `role:` | `supervisor` (the anycast address — must stay stable) | `worker` (or a specialty; every role name pre-creates a `svc_<role>` queue at mint — `provision.ts:243`) |
 | `capabilities:` | `[spawn]` | **absent** |
-| `subscribe:` | `[general, coordination]` | `[general, coordination]` |
-| `allowSubscribe:` | `[general, coordination]` | `[general, coordination]` |
-| `allowPublish:` | `[general, coordination]` | `[coordination]` only (the stricter `[]` — post-nothing, request-only via DM/anycast — was weighed and rejected: workers need `#coordination` for lateral detail) |
+| `subscribe:` (active read set) | `[announcements]` — the supervisor joins issue channels on demand like anyone | `[announcements]` — boots receiving announcements only; `cotal_join`s an issue channel when it starts that work |
+| `allowSubscribe:` (read ACL) | `[announcements, coordination.>]` | `[announcements, coordination.>]` (wildcard subtree — bounds which issue channels it may join) |
+| `allowPublish:` (post ACL) | `[announcements, coordination.>]` | `[coordination.>]` only (no `announcements` grant → structurally can't post announcements; the stricter `[]` was rejected — workers need to post lateral detail on their issue channels) |
 | DM / anycast | always available | always available (needs no grant — see below) |
 | Control plane | privileged tier: `start` (spawn), own-child `stop`, `definePersona`; **not** `purge`/`launch` (admin-only) | self-service tier only: no-name self-despawn (`manager.ts:335-346`, `opStopSelf` — "structurally incapable of hitting another agent") |
 | Visible tools | full set incl. `cotal_spawn` / `cotal_persona` | `cotal_spawn`/`cotal_persona` hidden under auth (tool gate below) |
-| `model:` | pinned to `opus` (Resolved Decision #6 — deterministic supervisor behavior) | per-task choice at spawn (`cotal_spawn` takes a `model` override — `tool-specs.ts:486-489`) |
+| `model:` | pinned to `litellm/claude-opus:xhigh` (Resolved Decision #6 — deterministic supervisor behavior; the exact id the OMP model registry exposes, `config.yml` `modelRoles.default`) | per-task choice at spawn (`cotal_spawn` takes a `model` override — `tool-specs.ts:486-489`) |
 
 `capabilities` is operator-granted, never self-granted (`agent-file.ts:58-63`: "Granting
 authority is operator-level (`definePersona` is itself privileged), so no peer can self-grant via
@@ -227,11 +229,11 @@ per-agent ACLs)"). What the minted creds actually enforce:
      with "Default-deny otherwise: the subject is simply absent from this allow-list, so
      nats-server rejects the publish — no handler check". `cotal_spawn` itself just routes to the
      manager (`tool-specs.ts:499`: `const reply = await agent.spawn(name, role, { agent: agentType, model, cwd });`).
-2. **Announcement gate on `#general`.** Chat publish is a default-deny allow-list minted
+2. **Announcement gate on `#announcements`.** Chat publish is a default-deny allow-list minted
    per-channel — `provision.ts:355`:
    `const allowPublish = opts.allowPublish ?? []; // post ACL — DEFAULT-DENY (publish must be declared)`
    and `provision.ts:365-367`: "Default-deny: ONLY the declared allowPublish channels (none by
-   default) get a chat-publish grant." Workers, lacking `general` in `allowPublish`, are rejected
+   default) get a chat-publish grant." Workers, lacking `announcements` in `allowPublish`, are rejected
    by the broker. Same contract on the connector side —
    `extensions/connector-core/src/config.ts:151-152`: "Post ACL is default-DENY: only what's
    explicitly declared … The broker enforces it under auth".
@@ -268,7 +270,7 @@ per-agent ACLs)"). What the minted creds actually enforce:
   (flags override)").
 
 The operator (Matt) needs no agent cred to post announcements: the CLI's one-shot
-`cotal send msg general "…"` connects with transient **manager-profile** creds
+`cotal send msg announcements "…"` connects with transient **manager-profile** creds
 (`implementations/cli/src/lib/transient.ts:19-25`: "else the running mesh's minted manager creds"
 → `connectOrExit(values, "manager")`), and the manager profile is allow-all
 (`provision.ts:285`: `if (profile === "manager") return {}; // privileged: allow-all defaults`).
@@ -285,7 +287,7 @@ persona prompts), not because of Cotal auth:
 | Invariant | Enforced by |
 | --- | --- |
 | 3 — supervisor-only spawn/persona | **Cotal auth creds** (capability → privileged-subject grant; tool gate) |
-| `#general` supervisor-authored | **Cotal auth creds** (post ACL default-deny) |
+| `#announcements` supervisor-authored | **Cotal auth creds** (post ACL default-deny) |
 | Read/post scoping generally | **Cotal auth creds** |
 | 1 — tracker is the single assignment authority | **Filesystem ownership + persona prompts** — invisible to the broker |
 | 4 — no self-assign / no pull-queue | **Convention** (there is no queue artifact to pull from; personas forbid it) |
@@ -325,14 +327,16 @@ What still shapes behavior in open mode (why the same files are worth using): pe
 - **All spawns and all task assignment funnel through the supervisor.** Worker personas never
   carry `capabilities`; worker prompts must state the request protocol, not a self-serve one.
 - **Post ACL stays default-deny:** no persona may list a channel in `allowPublish` this record
-  doesn't assign it. `#general` is supervisor-post-only under auth.
+  doesn't assign it. `#announcements` is supervisor-post-only under auth; workers hold only `coordination.>`.
 - **The wave tracker (`~/notes/wave/tracker.md`) is the single assignment authority**, written
   only by the supervisor; no channel content may be treated as assignment state.
 - **Config artifacts only:** this plan creates/edits JSON, Markdown personas, and a README. No
   changes to `packages/`, `extensions/`, or `implementations/` source.
-- **Naming:** channels `general` and `coordination` (concrete names — the wire layer rejects
-  invalid tokens, `config.ts:119-120`); roles `supervisor` and `worker`; persona filenames
-  kebab-case matching `agentFilePath` resolution (`agent-file.ts:259-262`).
+- **Naming:** the standing channel `announcements` and the per-issue subtree `coordination.<issue>`
+  (concrete names — the wire layer rejects invalid tokens, `config.ts:119-120`; workers hold the
+  `coordination.>` wildcard in their ACL, join concrete `coordination.<issue>` on demand); roles
+  `supervisor` and `worker`; persona filenames kebab-case matching `agentFilePath` resolution
+  (`agent-file.ts:259-262`).
 
 ## Plan
 
@@ -340,17 +344,20 @@ What still shapes behavior in open mode (why the same files are worth using): pe
 > (`zireael`), alongside the cotal build** — NOT in the Cotal fork's `examples/` (they're our
 > operational config, not an upstream Cotal contribution) — and copied into the wave workspace's
 > `.cotal/` at bring-up by the nix activation (`installCotalOmpExtension`, `shared/dev.nix`).
-> Workers get `allowPublish: [coordination]`; requests default to `anycast(role: supervisor)`.
-> `#coordination` replay is OFF; `#general` replays 24h. One long-lived `wave` space rooted at
+> Workers get `allowSubscribe: [announcements, coordination.>]` + `allowPublish: [coordination.>]`
+> (boot `subscribe: [announcements]` only, `cotal_join` per-issue channels on demand); requests
+> default to `anycast(role: supervisor)`. `#coordination.<issue>` replay is OFF; `#announcements`
+> replays 24h. One long-lived `wave` space rooted at
 > `~/agents/workspaces`. Matt does not join the mesh (Cotal is the agent-to-agent layer; he
 > directs agents through their own sessions). Paths below are `nix-config/agents/cotal/…`.
 
 ### T1 — Channel registry seed (`channels.json`)
 
-Author the wave channel registry: two entries. `general` (`replayWindow: "24h"`; description +
-instructions: announcements only, supervisor-authored, assignments never here); `coordination`
-(`replay: false`; description + instructions: worker↔worker details, never assignments or status).
-Nothing else.
+Author the wave channel registry: **one entry** — `announcements` (`replay: true`,
+`replayWindow: "24h"`; description + instructions: announcements only, supervisor-authored,
+assignments never here). Per-issue `coordination.<issue>` channels are NOT seeded — they're created
+live by `cotal_join` (their intent rides the first message, not a registry description), and
+`defaults: { replay: false }` gives any unregistered channel the right no-replay default. Nothing else.
 
 - **Interfaces:**
   - File: `nix-config/agents/cotal/channels.json` (copied to `<workspace>/.cotal/channels.json` at bring-up).
@@ -362,31 +369,31 @@ Nothing else.
     `cotal channels set <name> [--replay|--no-replay] [--desc <s>] [--instructions <s>]`
     (`implementations/cli/src/commands/channels.ts:20-22`).
 - **Test cycle:** on a scratch dir, `cotal up --open --channels <file>`; `cotal channels list`
-  shows both entries with descriptions/window; a joined session's `cotal_channel_info general`
+  shows the `announcements` entry with description/window; a joined session's `cotal_channel_info announcements`
   renders the instructions.
 - **Model hint:** small.
 
 ### T2 — Supervisor persona (`.cotal/agents/supervisor.md`)
 
-Author the generic supervisor persona. Required frontmatter (`model:` is pinned to `opus` per
-Resolved Decision #6 — deterministic supervisor behavior; any other optional key from
-`agent-file.ts:31-63` is allowed):
+Author the generic supervisor persona. Required frontmatter (`model:` is pinned to
+`litellm/claude-opus:xhigh` per Resolved Decision #6 — the exact id the OMP model registry exposes,
+not a bare `opus` alias; any other optional key from `agent-file.ts:31-63` is allowed):
 
 ```yaml
 name: supervisor
 role: supervisor
 description: Routes all work and owns all spawns for the wave.
 capabilities: [spawn]
-subscribe: [general, coordination]
-allowSubscribe: [general, coordination]
-allowPublish: [general, coordination]
-model: opus
+subscribe: [announcements]
+allowSubscribe: [announcements, coordination.>]
+allowPublish: [announcements, coordination.>]
+model: litellm/claude-opus:xhigh
 ```
 
 Body (system prompt) must state: tracker ownership (single assignment authority at
 `~/notes/wave/tracker.md`; write it before any assignment DM); the assignment protocol (assign by
 DM with task id/scope/file zone/acceptance — never via a channel); the spawn protocol (workers
-request agents; supervisor decides, `cotal_spawn`, records in tracker, announces on `#general`;
+request agents; supervisor decides, `cotal_spawn`, records in tracker, announces on `#announcements`;
 define missing personas with `cotal_persona` first); scheduling by presence (watch the roster,
 never poll); teardown (despawn own children when done); and the detail-plane rule verbatim from
 the orchestrator example ("route who acts next, not the details" — no relaying technical
@@ -404,7 +411,7 @@ contracts).
     (`tool-specs.ts:476-495`) → manager `startAgent` (`manager.ts:477`).
 - **Test cycle:** under an auth mesh, spawn it (`cotal start --name supervisor` or
   `supervise --spawn supervisor`); its `cotal_orientation` lists `cotal_spawn` and
-  `cotal_persona`; it can post to `#general`; it can spawn and then despawn a worker
+  `cotal_persona`; it can post to `#announcements`; it can spawn and then despawn a worker
   (own-child scope, `manager.ts:329-333`).
 - **Model hint:** the body is judgment-bearing prose — draft on a strong model.
 
@@ -412,23 +419,24 @@ contracts).
 
 Author `_worker-template.md` (documented template, underscore-prefixed like
 `examples/03-personas/agents/_template.md`) plus one concrete instance (e.g. `worker-impl.md`)
-proving the template fills in. Frontmatter exactly (template values in brackets):
+proving the template fills in. Required frontmatter (template values in brackets):
 
 ```yaml
 name: [worker-name]
 role: worker
 description: [one line — specialty]
-subscribe: [general, coordination]
-allowSubscribe: [general, coordination]
-allowPublish: [coordination]
+subscribe: [announcements]
+allowSubscribe: [announcements, coordination.>]
+allowPublish: [coordination.>]
 ```
 
 No `capabilities` key — ever. Body must state: the request protocol (`need-work` via
 `anycast(role: supervisor)` when idle; `done:`/`blocked:` by DM to the supervisor with evidence;
 `need-agent: <persona> <why>` by DM — never spawn, never ask a peer to); presence discipline
 (`cotal_status` before/after each task, honest `working`/`idle`/`waiting`); the detail plane
-(settle interfaces and file zones directly with peers via DM or `#coordination`); the
-prohibitions (never write the tracker; never self-assign; `#general` is read-only for you;
+(`cotal_join` the issue's `#coordination.<issue>` and settle interfaces/file zones there with peers,
+or DM one-on-one); the
+prohibitions (never write the tracker; never self-assign; `#announcements` is read-only for you;
 announcements are the supervisor's).
 
 - **Interfaces:**
@@ -442,22 +450,30 @@ announcements are the supervisor's).
   - Self-despawn on completion: `cotal_despawn` no-name form, self-service tier
     (`provision.ts:370`; `manager.ts:335-346`).
 - **Test cycle:** spawn under auth; worker `cotal_orientation` shows **no**
-  `cotal_spawn`/`cotal_persona`; a post to `#general` is broker-denied while a post to
-  `#coordination` succeeds; `anycast(role: supervisor)` and DM both reach the supervisor session.
+  `cotal_spawn`/`cotal_persona`; a post to `#announcements` is broker-denied; `cotal_join`ing
+  `#coordination.smoke-1` (within the `coordination.>` ACL) succeeds and a post there is delivered;
+  a `cotal_join` outside the ACL is refused; `anycast(role: supervisor)` and DM both reach the supervisor session.
 - **Model hint:** small-to-medium.
 
 ### T4 — Wave runbook README (bring-up, cred flow, open-mode quick-start, enforcement table)
 
 Author `nix-config/agents/cotal/README.md` covering:
 
-1. **Auth bring-up (target):** the copy of `nix-config/agents/cotal/*` into `<workspace>/.cotal/`
-   is wired by the nix activation `home.activation.installCotalOmpExtension`
-   (`zireael nix-config/shared/dev.nix:719`; the `cotal` CLI shim is `dev.nix:152-160` and the
-   omp `extensions:` wiring is `nix-config/agents/config.yml:21-24`). Then `cotal up` (auth is the
-   no-flag default, `up.ts:127`) with `--channels`; start the manager `cotal supervise --spawn
-   supervisor` (pty default; `commands.ts:410-413`) or rely on the detached manager
-   (`manager-proc.ts:89-93`); the supervisor spawns workers on demand — per-worker creds are
-   minted automatically at spawn (`manager.ts:578-591`), no manual mint per worker.
+1. **Auth bring-up (target):** the `cotal` CLI shim and omp `extensions:` wiring are installed by
+   the nix activation `home.activation.installCotalOmpExtension` (`zireael nix-config/shared/dev.nix:719`;
+   shim `dev.nix:152-160`; `extensions:` `nix-config/agents/config.yml:21-24`). **That activation does
+   NOT yet copy `agents/cotal/*` into `<workspace>/.cotal/`** — wiring that copy (channels.json +
+   `agents/*.md` → each wave workspace's `.cotal/`, which is gitignored + resolves only at runtime,
+   `agent-file.ts:259-262`) is itself an execution step of this record (extend
+   `installCotalOmpExtension`, or a sibling activation). Until it lands the copy is manual. Then
+   `cotal up --space wave` (auth is the no-flag default, `up.ts:127`; the `wave` space is Decision #8,
+   rooted at `~/agents/workspaces`) with `--channels`. **The supervisor must be spawned on both paths:**
+   `cotal supervise --spawn supervisor` (pty default; `commands.ts:410-413`) foregrounds it; on the
+   detached-manager path (`manager-proc.ts:89-93`) the manager comes up with no role consumer, so the
+   supervisor must still be started explicitly (`cotal start --name supervisor --space wave`) — a bare
+   `cotal up` leaves the mesh with channels + auth but no assignment authority. Once it's up the
+   supervisor spawns workers on demand — per-worker creds are minted automatically at spawn
+   (`manager.ts:578-591`), no manual mint per worker.
 2. **Out-of-band creds:** when to run `cotal mint <name> --profile agent`
    (`mint.ts:57`) — only for a hand-launched supervisor (manager-spawned workers are minted
    automatically); ACLs+role derive from the persona file (`mint.ts:79-85`). Matt does not join
@@ -471,8 +487,10 @@ Author `nix-config/agents/cotal/README.md` covering:
    ownership/convention enforces), copied so it lives with the configs.
 6. **Teardown:** worker self-despawn / supervisor own-child despawn / `cotal down`.
 
-- **Interfaces:** file paths above; commands `cotal up`, `cotal supervise`, `cotal mint`,
-  `cotal channels`, `cotal send`, `cotal down` as cited; no new mechanisms.
+- **Interfaces:** file paths above; commands `cotal up`, `cotal supervise`, `cotal start`,
+  `cotal mint`, `cotal channels`, `cotal send`, `cotal down` as cited. One **new** wiring:
+  extend `installCotalOmpExtension` (or a sibling activation) to copy `agents/cotal/*` →
+  `<workspace>/.cotal/` (step 1) — the only mechanism this record adds.
 - **Test cycle:** a fresh checkout follows the README on a scratch dir end-to-end in both modes
   without consulting anything else.
 - **Model hint:** small.
@@ -484,8 +502,8 @@ enforced property on a live auth mesh — the red/green gate for the whole struc
 
 1. Worker orientation lacks `cotal_spawn`/`cotal_persona`; supervisor's has them
    (`tool-specs.ts:641`).
-2. Worker publish to `#general` → broker denial; to `#coordination` → delivered
-   (`provision.ts:355,365-367`).
+2. Worker publish to `#announcements` → broker denial; `cotal_join` + publish to a
+   `#coordination.<issue>` (within the `coordination.>` ACL) → delivered (`provision.ts:355,365-367`).
 3. Worker `cotal_join` outside `allowSubscribe` → refused (`tool-specs.ts:427-430`).
 4. Worker DM + `anycast(role: supervisor)` → delivered with zero channel grants
    (`provision.ts:368-369`).
@@ -502,12 +520,13 @@ enforced property on a live auth mesh — the red/green gate for the whole struc
 
 ## Tasks
 
-- [ ] T1 — Channel registry seed `channels.json` (`general` + `coordination`, descriptions,
-      instructions, bounded coordination replay)
-- [ ] T2 — Supervisor persona `supervisor.md` (`capabilities: [spawn]`, post `general`+
-      `coordination`, routing/tracker/spawn protocol in body)
+- [ ] T1 — Channel registry seed `channels.json` (single `announcements` entry + `defaults.replay:false`;
+      per-issue `coordination.<issue>` created live, not seeded)
+- [ ] T2 — Supervisor persona `supervisor.md` (`capabilities: [spawn]`, `subscribe: [announcements]`,
+      `allowSubscribe/allowPublish: [announcements, coordination.>]`, routing/tracker/spawn protocol in body)
 - [ ] T3 — Worker persona template `_worker-template.md` + concrete `worker-impl.md` (no
-      capabilities, post `coordination` only, request protocol in body)
+      capabilities, `subscribe: [announcements]`, `allowSubscribe: [announcements, coordination.>]`,
+      post `coordination.>` only, request protocol in body)
 - [ ] T4 — Runbook README (auth bring-up, cred flows, operator surface, open-mode quick-start
       with non-enforcement list, enforcement-split table, teardown)
 - [ ] T5 — Auth-mode verification checklist (six assertions, red→green)
@@ -522,8 +541,9 @@ reflects them. Recorded here for the frozen contract:
    the wave workspace's `.cotal/` at bring-up by the nix activation (`installCotalOmpExtension`,
    `shared/dev.nix`). Not in the Cotal fork's `examples/`. (`.cotal/` is gitignored + resolves only at
    `<root>/.cotal/agents/` — `agent-file.ts:259-262` — so committed source ≠ runtime location.)
-2. **Worker post scope:** `allowPublish: [coordination]` — workers multicast on `#coordination`;
-   post ACL default-deny elsewhere.
+2. **Worker post scope:** `allowPublish: [coordination.>]` — workers post lateral detail on the
+   per-issue channels they join (`#coordination.<issue>`); no `announcements` grant; post ACL
+   default-deny elsewhere.
 3. **Request addressing:** `anycast(role: supervisor)` for work/agent requests (role-stable,
    durable queue, survives rename), DM for threaded follow-ups. No `#requests` channel.
 4. **Backlog:** Linear (team "Sealed Security"; projects Compass / Engineering Platform / Seal /
@@ -533,11 +553,14 @@ reflects them. Recorded here for the frozen contract:
    restating the playbook.
 5. **Matt's session does NOT join the mesh.** Cotal is the agent-to-agent layer; Matt directs
    agents through their own sessions and they relay. No observer console / CLI-join in bring-up.
-6. **Supervisor model:** pinned to `opus` in persona frontmatter (`agent-file.ts:56-57`); workers
-   per-spawn.
-7. **Replay:** `#coordination` **off** (live-only — no backward-history query exists, so replay is
-   pure per-spawn push cost and the tracker is the durable authority); `#general` **24h** (a late
-   worker sees the current directive, not a week of them).
+6. **Supervisor model:** pinned to `litellm/claude-opus:xhigh` in persona frontmatter (the exact id
+   the OMP model registry exposes — `nix-config/agents/config.yml` `modelRoles.default` — not a bare
+   `opus` alias, which the OMP harness would not resolve); workers per-spawn.
+7. **Replay:** per-issue `#coordination.<issue>` **off** (live-only — no backward-history query
+   exists, so replay is pure per-spawn push cost and the tracker is the durable authority);
+   `#announcements` **24h** (a late worker sees the current directive, not a week of them). Workers
+   boot `subscribe: [announcements]` and `cotal_join` issue channels on demand, so an uninvolved
+   agent never receives another issue's chatter.
 8. **Space:** one **long-lived `wave` space across waves**, rooted at `~/agents/workspaces` (auth
    binds space→root, `up.ts:128-130`). Not per-wave; persists as agents join/leave. Not torn down
    at the end of a wave.
