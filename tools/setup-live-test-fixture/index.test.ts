@@ -244,6 +244,20 @@ describe("runOnce idempotent branches", () => {
 		expect(logs).toContain("opening fixture PR ...");
 	});
 
+	test("post-create relist empty (eventual-consistency) → throws, never closes PR #0", async () => {
+		const { deps, calls } = harness({
+			repoExists: true,
+			branchExists: true,
+			prListJson: "[]",
+			prListJsonAfterCreate: "[]",
+		});
+		await expect(runOnce(deps, ["acme"])).rejects.toThrow(
+			/isn't listed yet|eventual-consistency|re-run/,
+		);
+		expect(hasGh(calls, "pr", "create")).toBe(true);
+		expect(hasGh(calls, "pr", "close", "0")).toBe(false);
+	});
+
 	test("no arg → resolves owner via gh api user", async () => {
 		const { deps, calls } = harness({
 			authUser: "authbot",

@@ -271,7 +271,16 @@ async function runOnce(deps: Deps, argv: string[]): Promise<number> {
 			]);
 			must(relisted, "gh pr list");
 			const created = parseExistingPr(relisted.stdout);
-			prNumber = created?.number ?? 0;
+			// A just-created PR can be missing from the very next `gh pr list` due
+			// to GitHub eventual-consistency. Fail loud rather than fall back to
+			// PR #0 (which would send `gh pr close 0` at a bogus/absent PR); a
+			// re-run — the tool is idempotent — then finds the now-indexed PR.
+			if (created === null) {
+				throw new Error(
+					`gh pr create succeeded but the new PR for ${PERSISTENT_BRANCH} isn't listed yet (GitHub eventual-consistency); re-run to pick it up.`,
+				);
+			}
+			prNumber = created.number;
 			prState = "OPEN";
 		} else {
 			prNumber = existing.number;
