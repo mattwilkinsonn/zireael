@@ -202,7 +202,7 @@ channel-scope keys and "allowPublish — post ACL … (omit ⇒ none — default
 | DM / anycast | always available | always available (needs no grant — see below) |
 | Control plane | privileged tier: `start` (spawn), own-child `stop`, `definePersona`; **not** `purge`/`launch` (admin-only) | self-service tier only: no-name self-despawn (`manager.ts:335-346`, `opStopSelf` — "structurally incapable of hitting another agent") |
 | Visible tools | full set incl. `cotal_spawn` / `cotal_persona` | `cotal_spawn`/`cotal_persona` hidden under auth (tool gate below) |
-| `model:` | pin recommended (deterministic supervisor behavior) | per-task choice at spawn (`cotal_spawn` takes a `model` override — `tool-specs.ts:486-489`) |
+| `model:` | pinned to `opus` (Resolved Decision #6 — deterministic supervisor behavior) | per-task choice at spawn (`cotal_spawn` takes a `model` override — `tool-specs.ts:486-489`) |
 
 `capabilities` is operator-granted, never self-granted (`agent-file.ts:58-63`: "Granting
 authority is operator-level (`definePersona` is itself privileged), so no peer can self-grant via
@@ -368,8 +368,8 @@ Nothing else.
 
 ### T2 — Supervisor persona (`.cotal/agents/supervisor.md`)
 
-Author the generic supervisor persona. Required frontmatter (a `model:` pin is recommended per the
-capability matrix above — deterministic supervisor behavior — and any other optional key from
+Author the generic supervisor persona. Required frontmatter (`model:` is pinned to `opus` per
+Resolved Decision #6 — deterministic supervisor behavior; any other optional key from
 `agent-file.ts:31-63` is allowed):
 
 ```yaml
@@ -380,7 +380,7 @@ capabilities: [spawn]
 subscribe: [general, coordination]
 allowSubscribe: [general, coordination]
 allowPublish: [general, coordination]
-model: <pin>
+model: opus
 ```
 
 Body (system prompt) must state: tracker ownership (single assignment authority at
