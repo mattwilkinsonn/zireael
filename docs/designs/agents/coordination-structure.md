@@ -83,15 +83,16 @@ against the invariants:
 | `general` | `replayWindow: "24h"` | everyone | supervisor (+ operator via CLI) | Announcements only. Supervisor-authored. Assignments never happen here — they arrive by DM; state lives in the tracker. |
 | `coordination` | **off** (`replay: false`) | everyone | supervisor + all workers | Worker↔worker details: file zones, interfaces, handoffs. Never assignments, never status reports. |
 
-The registry file format is mirrored from `examples/01-lateral-coordination/channels.json:1-13`:
+The registry file format (schema shape only) mirrors
+`examples/01-lateral-coordination/channels.json:1-13`. The **descriptions below are this design's
+actual two channels** (per T1), not the upstream example's placeholder text:
 
 ```json
 {
-  "defaults": { "replay": true },
+  "defaults": { "replay": false },
   "channels": {
-    "general": { "description": "Open coordination — anyone, anything." },
-    ...
-    "decisions": { "replay": true, "replayWindow": "7d", "description": "Durable record of what was decided and why." }
+    "general": { "replayWindow": "24h", "description": "Announcements only, supervisor-authored." },
+    "coordination": { "replay": false, "description": "Lateral worker coordination — details, not assignments." }
   }
 }
 ```
@@ -127,6 +128,7 @@ flowchart LR
     W1 -->|"need-work / done / blocked / need-agent (DM or anycast role:supervisor)"| S
     W2 -->|"need-work / done / blocked / need-agent"| S
     S -->|cotal_spawn / cotal_despawn / cotal_persona| MGR[manager daemon - cotal supervise]
+    MGR -->|spawns, mints scoped creds| W1
     MGR -->|spawns, mints scoped creds| W2
     W1 <-->|"DM + #coordination (details only)"| W2
     S -->|announcements| G[#general]
@@ -196,11 +198,11 @@ channel-scope keys and "allowPublish — post ACL … (omit ⇒ none — default
 | `capabilities:` | `[spawn]` | **absent** |
 | `subscribe:` | `[general, coordination]` | `[general, coordination]` |
 | `allowSubscribe:` | `[general, coordination]` | `[general, coordination]` |
-| `allowPublish:` | `[general, coordination]` | `[coordination]` only (OQ-2 offers the stricter `[]`) |
+| `allowPublish:` | `[general, coordination]` | `[coordination]` only (the stricter `[]` — post-nothing, request-only via DM/anycast — was weighed and rejected: workers need `#coordination` for lateral detail) |
 | DM / anycast | always available | always available (needs no grant — see below) |
 | Control plane | privileged tier: `start` (spawn), own-child `stop`, `definePersona`; **not** `purge`/`launch` (admin-only) | self-service tier only: no-name self-despawn (`manager.ts:335-346`, `opStopSelf` — "structurally incapable of hitting another agent") |
 | Visible tools | full set incl. `cotal_spawn` / `cotal_persona` | `cotal_spawn`/`cotal_persona` hidden under auth (tool gate below) |
-| `model:` | pin recommended (OQ-6) | per-task choice at spawn (`cotal_spawn` takes a `model` override — `tool-specs.ts:486-489`) |
+| `model:` | pin recommended (deterministic supervisor behavior) | per-task choice at spawn (`cotal_spawn` takes a `model` override — `tool-specs.ts:486-489`) |
 
 `capabilities` is operator-granted, never self-granted (`agent-file.ts:58-63`: "Granting
 authority is operator-level (`definePersona` is itself privileged), so no peer can self-grant via
