@@ -368,7 +368,9 @@ Nothing else.
 
 ### T2 — Supervisor persona (`.cotal/agents/supervisor.md`)
 
-Author the generic supervisor persona. Frontmatter exactly:
+Author the generic supervisor persona. Required frontmatter (a `model:` pin is recommended per the
+capability matrix above — deterministic supervisor behavior — and any other optional key from
+`agent-file.ts:31-63` is allowed):
 
 ```yaml
 name: supervisor
@@ -378,6 +380,7 @@ capabilities: [spawn]
 subscribe: [general, coordination]
 allowSubscribe: [general, coordination]
 allowPublish: [general, coordination]
+model: <pin>
 ```
 
 Body (system prompt) must state: tracker ownership (single assignment authority at
