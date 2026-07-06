@@ -39,13 +39,15 @@ rules) lives in `skill://github-pr-review` — this skill adds the **loop** and 
 
    **Then mark the PR ready — `gt submit` opens it as a _draft_, and the
    review bots do not review a draft PR.** After submitting, flip it out of
-   draft (`gh pr ready <n>`, or the GitHub MCP) and confirm `isDraft:false`
-   before Step 2 — otherwise the wait in Step 2 sits on bots that were never
-   invited and only ever returns at the backstop with everything still
-   `pending`. Draft→ready is the event that triggers the auto-reviewers; if a
-   bot that reviews every ready PR in the repo still hasn't fired a few minutes
-   after the flip, nudge it with its comment trigger (e.g. `@greptileai
-   review` / `@coderabbitai review`).
+   draft **via the GitHub MCP** (`mcp__litellm_github_update_pull_request`
+   with `draft: false` — the same call that sets title/body, so metadata +
+   ready in one; `gh pr ready <n>` only as fallback when the MCP is
+   unavailable) and confirm `isDraft:false` before Step 2 — otherwise the wait
+   in Step 2 sits on bots that were never invited and only ever returns at the
+   backstop with everything still `pending`. Draft→ready is the event that
+   triggers the auto-reviewers; if a bot that reviews every ready PR in the
+   repo still hasn't fired a few minutes after the flip, nudge it with its
+   comment trigger (e.g. `@greptileai review` / `@coderabbitai review`).
 2. **Wait for the bots — always as a background task.** Launch `wait-for-reviews <pr>` through `bash` with **`async: true`** (never a blocking/foreground call) and a generous `timeout` (**≥1500s** — the primitive backstops itself at 1200s, so leave ≥300s of headroom for the harness to deliver the wake; don't set it near 1200s or the caller timeout races the backstop result), then **yield** — do other work or end the turn; the harness wakes you with the result when it returns. **Don't busy-poll it** (no `job`-poll loop). **Scope `WAIT_BOTS` to the bots that actually review _this_ repo** (env: `WAIT_BOTS="greptile-apps coderabbitai"` etc.) — the default lists all four, so an unscoped wait on a repo where cubic/Codex never fire just `pending`s on them until the backstop. Check which bots reviewed recent merged PRs in the repo to set the scope. It returns when every scoped bot has reviewed the head, is rate/usage-limited, or reviewed an earlier commit and didn't re-trigger within the grace window; a backstop is the final fallback. No webhook/cron needed.
 3. **Triage** all four surfaces per `skill://github-pr-review`; enumerate every
    reviewer (CodeRabbit / Greptile / cubic / Codex + any human). **Read the PR

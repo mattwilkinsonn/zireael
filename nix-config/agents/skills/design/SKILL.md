@@ -67,8 +67,10 @@ implementation exists. Once the subagent has drafted the record (`docs/designs/<
 - **Its own branch/PR, separate from the implementation** — commit the record
   (`docs(<domain>): <change>` subject + `Co-Authored-By: seal` trailer), so the
   design is reviewed as pure design with zero code noise.
-- `gt submit`, then drive `skill://autonomous-review` — un-draft, let the bots
-  review, triage findings, iterate.
+- **`gt submit`** (never `gh pr create` — that opens under the bot account
+  outside the Graphite stack; `gt submit` is the only sanctioned PR-open path,
+  `rule://commit-conventions`), then drive `skill://autonomous-review` —
+  un-draft (via the GitHub MCP), let the bots review, triage findings, iterate.
 - **The merge is the freeze.** The design PR merging to `main` is what freezes
   the contract; execution starts from the merged record. Matt merges — you never
   do.

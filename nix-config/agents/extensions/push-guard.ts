@@ -103,17 +103,35 @@ function repoFlagOwner(seg: string): string | null {
 	return null;
 }
 
-// A `gh` command that *creates* an issue or PR — `gh issue create`, `gh pr
-// create`, or the `gh issue new` alias. A bare one with no allowlisted `-R`
-// files on whatever repo the cwd resolves to, an OSS upstream included (the
-// spam-bot vector), so require an explicit allowlisted `-R`. The verb must be
-// the token right after the noun, so `gh issue list --label create` and `gh pr
-// comment 123 --body create` (create as a flag value) are not treated as one.
-function ghCreateWithoutAllowedOwner(cmd: string): boolean {
+// `gh pr create` / `gh pr new` — ALWAYS blocked (allowlisted `-R` or not):
+// opening a PR must go through `gt submit`, which authors under the seal-bot
+// identity and tracks the branch in the Graphite stack. `gh pr create` opens
+// under the `gh` account outside the stack, so it's redirected unconditionally.
+// The verb must be the token right after `pr`, so `gh pr comment 123 --body
+// create` (create as a flag value) is not treated as one.
+function ghPrCreate(cmd: string): boolean {
 	for (const seg of cmd.split(/[\n;|&]+/)) {
 		const args = ghArgs(seg);
 		if (!args) continue;
-		const noun = args.findIndex((a) => a === "issue" || a === "pr");
+		const noun = args.indexOf("pr");
+		if (noun === -1) continue;
+		const verb = args[noun + 1];
+		if (verb === "create" || verb === "new") return true;
+	}
+	return false;
+}
+
+// A `gh issue create` / `gh issue new` with no allowlisted `-R`. A bare one
+// with no explicit `-R` files on whatever repo the cwd resolves to, an OSS
+// upstream included (the spam-bot vector), so require an explicit allowlisted
+// `-R`. (PR-create is handled separately by ghPrCreate — always blocked.) The
+// verb must be the token right after the noun, so `gh issue list --label
+// create` (create as a flag value) is not treated as one.
+function ghIssueCreateWithoutAllowedOwner(cmd: string): boolean {
+	for (const seg of cmd.split(/[\n;|&]+/)) {
+		const args = ghArgs(seg);
+		if (!args) continue;
+		const noun = args.indexOf("issue");
 		if (noun === -1) continue;
 		const verb = args[noun + 1];
 		if (verb !== "create" && verb !== "new") continue;
@@ -210,14 +228,23 @@ export function evaluate(toolName: string, input: Record<string, unknown>): Bloc
 			};
 		}
 
-		if (ghCreateWithoutAllowedOwner(cmd)) {
+		if (ghPrCreate(cmd)) {
 			return {
 				block: true,
 				reason:
-					"GitHub issue/PR create blocked: pass an allowlisted `-R <owner>/<repo>` " +
-					"(mattwilkinsonn, sealedsecurity). A bare `gh issue create` / `gh pr create` files " +
-					"on whatever repo the cwd resolves to — an OSS upstream included. " +
-					"See rule://commit-conventions.",
+					"PR create blocked: open PRs with `gt submit` (Graphite), never `gh pr create` — " +
+					"it opens under the bot account outside the stack, so the PR lands under the wrong " +
+					"user and Graphite can't track it. See skill://gt + rule://commit-conventions.",
+			};
+		}
+
+		if (ghIssueCreateWithoutAllowedOwner(cmd)) {
+			return {
+				block: true,
+				reason:
+					"GitHub issue create blocked: pass an allowlisted `-R <owner>/<repo>` " +
+					"(mattwilkinsonn, sealedsecurity). A bare `gh issue create` files on whatever repo " +
+					"the cwd resolves to — an OSS upstream included. See rule://commit-conventions.",
 			};
 		}
 
