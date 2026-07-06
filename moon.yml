@@ -15,6 +15,14 @@ tasks:
   actionlint:
     command: 'actionlint'
     inputs: ['/.github/workflows/*.yml', '/.github/workflows/*.yaml']
+  # biome over the agent-extension TypeScript (push-guard, notify) under
+  # nix-config/agents/extensions/. That tree is not a bun tool project (no
+  # per-dir moon.yml), so nothing else lints it — root owns it, resolving the
+  # repo-root biome.json. Keeps the extensions format-clean the way the tools/
+  # projects self-lint theirs.
+  agents-biome:
+    command: 'bunx biome check nix-config/agents/extensions'
+    inputs: ['/nix-config/agents/extensions/*.ts', '/biome.json']
   # Root-level *.nix (devenv.nix). maxdepth 1 so it doesn't recurse into
   # nix-config/ (its own project gates those) or .devenv/ (the nix store).
   nixfmt:
@@ -24,7 +32,7 @@ tasks:
     script: "find . -maxdepth 1 -name '*.nix' -print0 | xargs -0 deadnix --fail"
     inputs: ['/*.nix']
   ci:
-    deps: ['markdownlint', 'actionlint', 'nixfmt', 'deadnix']
+    deps: ['markdownlint', 'actionlint', 'agents-biome', 'nixfmt', 'deadnix']
     options:
       cache: false
 
