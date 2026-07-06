@@ -25,6 +25,12 @@ export default function selfCompact(pi: ExtensionAPI): void {
 	let pendingCompaction = false;
 	// Remembers the model's stated reason so the settle-time log has context.
 	let requestedReason: string | undefined;
+	// Bounds the defer loop below: if every settle keeps hitting a continuation /
+	// queued message, we re-arm at most this many times, then give up loudly
+	// rather than silently carrying the request forever (idle-compaction is still
+	// the backstop). Reset whenever we actually reach the compact() call.
+	let deferCount = 0;
+	const MAX_DEFERS = 8;
 
 	pi.registerTool({
 		name: "compact_self",
@@ -81,20 +87,41 @@ export default function selfCompact(pi: ExtensionAPI): void {
 		// a queued message will own the next turn). Compacting now would race that
 		// turn's context rebuild — defer by re-arming; the next clean settle runs it.
 		if (event.stop_hook_active || ctx.hasPendingMessages()) {
+			if (deferCount >= MAX_DEFERS) {
+				// Give up re-arming so the state doesn't linger silently; surface it
+				// and let idle-compaction (config.yml) pick the session up instead.
+				deferCount = 0;
+				pi.logger.warn(
+					"compact_self gave up deferring (session never settled cleanly)",
+					{
+						maxDefers: MAX_DEFERS,
+						reason,
+					},
+				);
+				return;
+			}
+			deferCount++;
 			pendingCompaction = true;
 			requestedReason = reason;
 			return;
 		}
+		deferCount = 0;
 
 		try {
 			await ctx.compact();
 			pi.logger.debug("compact_self ran at turn settle", { reason });
 		} catch (err) {
-			// "Nothing to compact (session too small)" / "Already compacted" are
-			// benign — the goal state (small context) already holds. Anything else
-			// is worth a warning but must not crash the settle path.
+			// A no-op compaction is benign — the goal state (small context) already
+			// holds. compact() currently phrases these as "Nothing to compact
+			// (session too small)" and "Already compacted"; match loosely (key
+			// tokens, not the exact sentence) so a minor upstream wording change
+			// keeps them at debug instead of escalating to spurious warns.
 			const message = err instanceof Error ? err.message : String(err);
-			if (/nothing to compact|already compacted/i.test(message)) {
+			if (
+				/nothing to compact|already compacted|too small|session too small|compaction skipped/i.test(
+					message,
+				)
+			) {
 				pi.logger.debug("compact_self no-op", { message });
 			} else {
 				pi.logger.warn("compact_self failed", { message });
