@@ -50,9 +50,13 @@ Otherwise the owner is **dormant** — parked, presence `idle`, waking only on i
   `subscribe` (active read set), so a dormant owner is *listening* from boot and an @mention wakes
   it (mention-wake) without any runtime `cotal_join`. Non-owners do **not** subscribe standing;
   they `cotal_join` a `#svc.<name>` only for the duration of a mid-fix (below), then leave.
-- Replay: `#svc.<name>` replays a modest window (owner catches up on what it missed while parked —
-  a PR-posted-since-last-wake shouldn't be lost). Unlike `#coordination.<issue>` (live-only,
-  ephemeral), a service channel is durable context for its owner.
+- **Replay: `#svc.<name>` channels are registry-seeded with `replay: true`, `replayWindow: "7d"`**
+  — a parked owner catches up on PR-posts/incidents it missed while dormant (a week covers a
+  typical dormancy). This is the opposite of `#coordination.<issue>` (live-only, ephemeral): a
+  service channel is durable context for its owner. **These are standing channels** (one per
+  known service), so unlike per-issue channels they DO get registry entries — T-map seeds them into
+  `channels.json` (overriding the coordination record's `defaults: { replay: false }`), or they'd
+  inherit replay-off and an owner would silently miss anything posted while parked.
 
 ### Routing rules
 
@@ -101,7 +105,10 @@ This layer is **additive** to `coordination-structure.md`:
 ### T-map — glob → service → owner map
 
 Author the authoritative mapping (drives the CI-hook, the PR-post rule, and the supervisor's
-incident routing). Grounded against the `sealed/` tree (2026-07-06 live batch — 11 owners):
+incident routing) **and seed the standing `#svc.<name>` channels into `channels.json`** (each with
+`replay: true`, `replayWindow: "7d"`, so a dormant owner catches up — these override the
+coordination record's `defaults: { replay: false }`). Grounded against the `sealed/` tree
+(2026-07-06 live batch — 11 owners):
 
 | Path glob | Service | `#svc` channel |
 | --- | --- | --- |
@@ -222,7 +229,9 @@ hardens it.
 
 - [ ] T-map — glob → service → owner map as `service-map.json` (11 owners; each entry `{service,
       channel, globs, exclude?, priority, spec}` — code globs + its `docs/specs/<service>` path;
-      most-specific-wins precedence resolves the nix-infra/ci-build ⊃ woodpecker overlap; cross-repo caveats)
+      most-specific-wins precedence resolves the nix-infra/ci-build ⊃ woodpecker overlap; cross-repo
+      caveats) **+ seed the 11 `#svc.<name>` channels into `channels.json` with `replay: true`,
+      `replayWindow: "7d"`**
 - [ ] T-persona — owner persona template `_service-owner-template.md` + one concrete owner (role
       `service-owner`, `subscribe: [announcements, svc.<svc>]`, `svc.>`+`coordination.>` ACLs,
       three-duties body)
@@ -255,3 +264,7 @@ hardens it.
 7. **The CI backstop covers `sealed/` only.** Fork repos (omp / cotal / woodpecker fork) have no
    `sealed/` path for the resolver, so they rely on the agent-posts-on-start path (or a fork-local
    hook); the record documents per-fork which, so no owner expects a backstop it won't get.
+8. **`#svc.<name>` channels replay (`replay: true`, `replayWindow: "7d"`).** They're standing +
+   registry-seeded (unlike ephemeral per-issue `#coordination.<issue>`), so a dormant owner catches
+   up on PR-posts/incidents it missed while parked — without this override of the coordination
+   record's `defaults: { replay: false }`, owners would silently miss anything posted while asleep.
