@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { basename } from "node:path";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
 // Native macOS desktop notifications for omp. Under Zellij, omp's OSC 9/777
 // notifications are consumed by the multiplexer and never reach Ghostty, so we
@@ -30,7 +30,10 @@ export default function notifier(pi: ExtensionAPI): void {
 	// Turn settled — your turn. Skip aborts/errors (match omp's own gating).
 	pi.on("session_stop", (event, ctx) => {
 		const m = event.last_assistant_message;
-		const stopReason = m && typeof m === "object" && "stopReason" in m ? String(m.stopReason) : "";
+		const stopReason =
+			m && typeof m === "object" && "stopReason" in m
+				? String(m.stopReason)
+				: "";
 		if (stopReason === "aborted" || stopReason === "error") return;
 		notify(ctx, "Done — your turn");
 	});
