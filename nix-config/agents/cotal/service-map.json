@@ -1,0 +1,16 @@
+{
+  "_comment": "Glob -> service -> owner map for the per-service ownership layer (docs/designs/agents/service-owners.md). Consumed by: the PR-post rule (which #svc channel(s) a PR touches), the T-CI backstop hook, and the supervisor's incident routing. RESOLUTION: a changed path matches a service when it matches any entry in that service's `globs` OR equals its `spec` path (spec-update PRs route to the owning service, not a 'docs' service) AND is not caught by `exclude`; most-specific-wins by `priority` (higher wins) resolves overlaps (woodpecker's nix/ci paths outrank nix-infra/ci-build); a path notifies exactly one service, then the multi-service all-channels rule applies across DISTINCT services. Fork services (omp/cotal/woodpecker) carry `repos` and empty `globs`: they match by REPO (a PR opened in that fork), have no sealed/ path so the sealed CI backstop never fires for them (backstop:agent-posts-only) -> agent-posts-on-start is their only route. Every consumer MUST check `repos` (fork match) and `spec` (spec-update match), not `globs` alone.",
+  "services": [
+    { "service": "petrel",    "channel": "svc.petrel",    "priority": 10, "globs": ["oss/petrel/**"], "spec": "docs/specs/tools/petrel.md" },
+    { "service": "tern",      "channel": "svc.tern",      "priority": 10, "globs": ["oss/tern/**"], "spec": "docs/specs/tools/tern.md" },
+    { "service": "compass",   "channel": "svc.compass",   "priority": 10, "globs": ["oss/compass/**"], "spec": "docs/specs/product/compass.md" },
+    { "service": "seal",      "channel": "svc.seal",      "priority": 10, "globs": ["oss/seal/**"], "spec": "docs/specs/product/seal.md" },
+    { "service": "pulumi",    "channel": "svc.pulumi",    "priority": 10, "globs": ["infra/pulumi/**"], "spec": "docs/specs/platform/infrastructure.md" },
+    { "service": "web",       "channel": "svc.web",       "priority": 10, "globs": ["apps/**"], "spec": "docs/specs/tools/docs-publish.md" },
+    { "service": "ci-build",  "channel": "svc.ci-build",  "priority": 5,  "globs": ["ci/**", ".moon/**", "package.json", "bun.lock", "moon.yml"], "exclude": ["ci/woodpecker/**"], "spec": "docs/specs/platform/build-and-ci.md" },
+    { "service": "nix-infra", "channel": "svc.nix-infra", "priority": 5,  "globs": ["infra/nix/**"], "exclude": ["infra/nix/**/woodpecker*"], "spec": "docs/specs/platform/technology-stack.md" },
+    { "service": "woodpecker", "channel": "svc.woodpecker", "priority": 20, "globs": ["infra/nix/**/woodpecker*", "ci/woodpecker/**"], "repos": ["woodpecker-fork"], "spec": "docs/specs/platform/woodpecker.md" },
+    { "service": "omp",       "channel": "svc.omp",       "priority": 10, "globs": [], "repos": ["oh-my-pi-fork"], "backstop": "agent-posts-only", "spec": "oh-my-pi:docs/spec.md" },
+    { "service": "cotal",     "channel": "svc.cotal",     "priority": 10, "globs": [], "repos": ["cotal-fork"], "backstop": "agent-posts-only", "spec": "cotal:SPEC.md" }
+  ]
+}

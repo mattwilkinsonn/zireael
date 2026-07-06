@@ -35,6 +35,12 @@ in
     ".agents/AGENTS.md".source = linkAgent "AGENTS.md";
     ".agents/rules".source = linkAgent "rules";
     ".agents/skills".source = linkAgent "skills";
+    # Cotal wave coordination config (channels.json, personas, service-map.json). Out-of-store like
+    # the rest so edits land without a rebuild. This is the CANONICAL home; `cotal up --channels
+    # ~/.cotal-config/channels.json` reads it and each wave workspace's runtime `.cotal/` is copied
+    # from here at bring-up (see agents/cotal/README.md). Runtime resolution is per-workspace
+    # `<root>/.cotal/`, which no single $HOME link covers — hence a canonical source + per-workspace copy.
+    ".cotal-config".source = linkAgent "cotal";
     ".omp/agent/extensions".source = linkAgent "extensions";
     ".omp/agent/mcp.json".source = linkAgent "mcp.json";
     ".omp/agent/agents".source = linkAgent "agents";

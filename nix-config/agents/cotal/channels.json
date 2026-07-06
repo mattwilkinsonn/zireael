@@ -1,0 +1,77 @@
+{
+  "defaults": { "replay": false },
+  "channels": {
+    "announcements": {
+      "replay": true,
+      "replayWindow": "24h",
+      "description": "Announcements only, supervisor-authored.",
+      "instructions": "Supervisor-authored announcements only (wave start/stop, new teammate, zone freezes). Assignments never happen here — they arrive by DM; state lives in the tracker. Read-only for workers."
+    },
+    "svc.petrel": {
+      "replay": true,
+      "replayWindow": "7d",
+      "description": "Petrel service channel — owner is first point-of-contact, reviewer, spec-owner.",
+      "instructions": "@mention the petrel owner for a petrel incident/bugfix; post a PR touching oss/petrel/** here on start. The owner (dormant) wakes on mention."
+    },
+    "svc.tern": {
+      "replay": true,
+      "replayWindow": "7d",
+      "description": "Tern service channel — owner is first point-of-contact, reviewer, spec-owner.",
+      "instructions": "@mention the tern owner for a tern incident/bugfix; post a PR touching oss/tern/** here on start. The owner (dormant) wakes on mention."
+    },
+    "svc.compass": {
+      "replay": true,
+      "replayWindow": "7d",
+      "description": "Compass service channel — owner is first point-of-contact, reviewer, spec-owner.",
+      "instructions": "@mention the compass owner for a compass incident/bugfix; post a PR touching oss/compass/** here on start. The owner (dormant) wakes on mention."
+    },
+    "svc.seal": {
+      "replay": true,
+      "replayWindow": "7d",
+      "description": "Seal service channel — owner is first point-of-contact, reviewer, spec-owner.",
+      "instructions": "@mention the seal owner for a seal incident/bugfix; post a PR touching oss/seal/** here on start. The owner (dormant) wakes on mention."
+    },
+    "svc.pulumi": {
+      "replay": true,
+      "replayWindow": "7d",
+      "description": "Pulumi (IaC) service channel — owner is first point-of-contact, reviewer, spec-owner.",
+      "instructions": "@mention the pulumi owner for an infra/pulumi incident/bugfix; post a PR touching infra/pulumi/** here on start. The owner (dormant) wakes on mention."
+    },
+    "svc.nix-infra": {
+      "replay": true,
+      "replayWindow": "7d",
+      "description": "nix-infra (fleet/hosts) service channel — owner is first point-of-contact, reviewer, spec-owner.",
+      "instructions": "@mention the nix-infra owner for an infra/nix fleet/host incident/bugfix; post a PR touching infra/nix/** (except woodpecker paths) here on start. The owner (dormant) wakes on mention."
+    },
+    "svc.ci-build": {
+      "replay": true,
+      "replayWindow": "7d",
+      "description": "ci-build service channel — owner is first point-of-contact, reviewer, spec-owner.",
+      "instructions": "@mention the ci-build owner for a CI/build incident; post a PR touching ci/**, .moon/**, or the root bun workspace here on start. The owner (dormant) wakes on mention."
+    },
+    "svc.web": {
+      "replay": true,
+      "replayWindow": "7d",
+      "description": "web (site + docs) service channel — owner is first point-of-contact, reviewer, spec-owner.",
+      "instructions": "@mention the web owner for a site/docs incident; post a PR touching apps/** here on start. The owner (dormant) wakes on mention."
+    },
+    "svc.omp": {
+      "replay": true,
+      "replayWindow": "7d",
+      "description": "omp (oh-my-pi fork) service channel — owner is first point-of-contact, reviewer, spec-owner.",
+      "instructions": "@mention the omp owner for an oh-my-pi incident; post a PR in the oh-my-pi fork here on start (agent-posts path — no sealed/ CI backstop). The owner (dormant) wakes on mention."
+    },
+    "svc.cotal": {
+      "replay": true,
+      "replayWindow": "7d",
+      "description": "cotal (connector/mesh fork) service channel — owner is first point-of-contact, reviewer, spec-owner.",
+      "instructions": "@mention the cotal owner for a connector/mesh incident; post a PR in the Cotal fork here on start (agent-posts path — no sealed/ CI backstop). The owner (dormant) wakes on mention."
+    },
+    "svc.woodpecker": {
+      "replay": true,
+      "replayWindow": "7d",
+      "description": "woodpecker (CI service, cross-repo) service channel — owner is first point-of-contact, reviewer, spec-owner.",
+      "instructions": "@mention the woodpecker owner for a woodpecker/config-ext incident; post a PR touching the woodpecker fork, infra/nix/**/woodpecker*, or ci/woodpecker/** here on start. The owner (dormant) wakes on mention."
+    }
+  }
+}
