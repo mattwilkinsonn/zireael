@@ -39,9 +39,10 @@ cotal up --space wave --channels ~/.cotal-config/channels.json
 ```
 
 The `wave` space is long-lived and rooted at `~/agents/workspaces` (persists across waves). This
-seeds `#announcements` + the `#svc.<name>` channels. Each wave workspace's runtime `.cotal/`
-(where personas resolve, `<root>/.cotal/agents/`) is copied from `~/.cotal-config` at bring-up
-(§Nix wiring).
+seeds `#announcements` + the `#svc.<name>` channels. Personas resolve **per wave workspace** from
+`<root>/.cotal/agents/` (gitignored), which no single `$HOME` symlink covers — so each workspace's
+`.cotal/` is seeded by a **manual copy** from the canonical `~/.cotal-config` at bring-up (there is
+no activation step that fans out into workspaces — see §Nix wiring for the one-liner).
 
 ## 2. Launching agents (manual — no manager)
 
@@ -57,6 +58,13 @@ COTAL_NAME=<name> omp                        # launch the session; the connector
 
 Per-worker/owner creds are minted from the persona file's ACLs. Matt does **not** join the mesh
 (the mesh is the agent-to-agent layer), so no operator agent cred is minted.
+
+**Persona files shipped here:** `supervisor.md` (the one standing persona), `worker-impl.md` (a
+concrete worker), and `tern.md` (a concrete owner) — plus the two `_`-prefixed templates. The other
+ten service owners are **not** pre-shipped: author each from `_service-owner-template.md` (replace
+`svc-name` throughout, pin its spec path from `service-map.json`) the first time that service needs
+a standing owner, then `cotal mint <svc> --profile agent`. `service-map.json` is the authoritative
+list of the eleven services + their channels/specs; the persona files catch up to it on demand.
 
 ## 3. Operator surface
 

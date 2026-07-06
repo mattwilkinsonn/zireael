@@ -1,7 +1,7 @@
 ---
-name: [worker-name]
+name: worker-name
 role: worker
-description: [one line — this worker's specialty, in their voice]
+description: One line — this worker's specialty, in their voice.
 subscribe: [announcements]
 allowSubscribe: [announcements, coordination.>, svc.>]
 allowPublish: [coordination.>, svc.>]
@@ -10,7 +10,7 @@ allowPublish: [coordination.>, svc.>]
 # Worker persona (template)
 
 <!--
-Worker persona template. Copy to agents/<name>.md and fill the bracketed frontmatter + the
+Worker persona template. Copy to agents/<name>.md, replace the placeholder frontmatter scalars + the
 body specifics (lane, repo, task). Frontmatter parser takes scalars + inline lists only — no
 nesting, NO trailing # comments on a value line. NEVER add a `capabilities` key to a worker.
 This file is self-contained: it replaces any separate prompt file. Cite skill://rule:// for

@@ -1,22 +1,23 @@
 ---
-name: [svc-name]
+name: svc-name
 role: service-owner
-description: [one line — owner of the <svc> service]
-subscribe: [announcements, svc.<svc>]
+description: One line — owner of the svc-name service.
+subscribe: [announcements, svc.svc-name]
 allowSubscribe: [announcements, svc.>, coordination.>]
 allowPublish: [svc.>, coordination.>]
-model: [pin per the owner's judgment/mechanical mix — e.g. litellm/claude-opus:xhigh for judgment-heavy, a smaller model for a mechanical service]
+model: litellm/claude-opus:xhigh
 ---
 
 # Service owner persona (template)
 
 <!--
-Service-owner persona template. Copy to agents/<svc>.md, replace <svc> with the service name in
-BOTH the `subscribe` entry (svc.<svc>) and the body, and fill the bracketed frontmatter + body
-specifics (which spec file it owns, its repo/paths from service-map.json). Frontmatter parser
-takes scalars + inline lists only — no nesting, NO trailing # comments on a value line. NEVER add
-a `capabilities` key. `subscribe` MUST include `svc.<svc>` (the owner's own channel) so a dormant
-owner listens from boot and an @mention wakes it — that is the auto-join, no runtime cotal_join.
+Service-owner persona template. Copy to agents/<svc>.md and replace `svc-name` with the service
+name throughout — the `name` scalar, the `svc.svc-name` subscribe channel, the description, and
+the body's `[svc-name]` markers — then fill the body specifics (spec file it owns, repo/paths from
+service-map.json) and pin `model` per the owner's judgment/mechanical mix. Frontmatter takes
+scalars + inline lists only — no nesting, NO trailing # comments, every channel a real NATS-safe
+name. NEVER add a `capabilities` key. `subscribe` MUST include the owner's own `svc.<name>` channel
+so a dormant owner listens from boot and an @mention wakes it (auto-join, no runtime cotal_join).
 Self-contained: cite skill://rule:// for procedure, never a prompt path. Delete these comments.
 -->
 
