@@ -34,7 +34,6 @@ compaction:
 extensions: 
   - ~/.omp/agent/extensions/push-guard.ts
   - ~/.omp/agent/extensions/notify.ts
-  - ~/.omp/agent/extensions/self-compact.ts
   # cotal-mesh: built from the Cotal fork by installCotalOmpExtension (shared/dev.nix).
   # A COTAL_NAME (+ optional COTAL_LINK/COTAL_AGENT_FILE) in the session env activates it;
   # no identity → inert, so a plain omp never joins the mesh.
