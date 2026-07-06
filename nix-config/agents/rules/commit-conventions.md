@@ -39,6 +39,8 @@ These stay hard limits, enforced by the push-guard:
 
 - **Never push or force-push `main`; never merge** — merge is the human gate.
 - **Owner allowlist:** push, open PRs, and file issues only on `mattwilkinsonn/*` and `sealedsecurity/*` — never an upstream/OSS repo (e.g. `can1357/*`).
+- **`gh pr create` is hard-blocked** (allowlisted owner or not) — the push-guard redirects it to `gt submit`. Opening a PR is the one GitHub op that goes through `gt`, not the MCP or `gh`.
+- **GitHub API calls go MCP-first, `gh` last-resort.** `gh` burns the shared GraphQL bucket the whole wave depends on. Read PR state via `mcp__litellm_tern_get_review_state`; set PR metadata/ready via `mcp__litellm_github_update_pull_request`; other ops via `mcp__litellm_github_*`. Use `gh` only when the MCP tool is genuinely unavailable — and say so.
 
 ## PR title + description
 

@@ -21,6 +21,7 @@ Use this for every VCS operation in your per-agent git clone. Agents work in a p
 - **Always non-interactive.** Pass `--no-interactive` and `-m "msg"` to `create` / `modify` / `submit`; a bare invocation opens an editor or TUI and hangs a headless agent. For the same reason, never use the patch (`-p`) or `--interactive-rebase` flags.
 - **Never `--ai`.** It regenerates the PR title/description non-deterministically on every submit, clobbering your prose and dropping issue links. You author the PR title + description yourself (`rule://commit-conventions`).
 - **Open PRs with `gt submit` — never `gh pr create`.** `gh pr create` authors the PR under the `gh` CLI account (`seal-agent`), not the seal-bot identity `gt submit` uses, so the PR lands under the wrong user *and* Graphite never learns about it (no stack tracking, no re-submit). `gt submit` is the *only* way to open a PR. `gh` is edit-only on an already-open PR (`gh pr edit`/`ready`/`checks`), and even then the MCP is preferred (see below).
+- **GitHub API calls go through the MCP first; `gh` is last-resort.** `gh` uses the scarce GraphQL bucket broadly under the hood, so it drains the shared token the whole wave depends on. Read PR state via `mcp__litellm_tern_get_review_state` (cached); set PR metadata/ready via `mcp__litellm_github_update_pull_request`; other reads/writes via the `mcp__litellm_github_*` tools. Use `gh` **only** when the MCP tool is genuinely unavailable — and say so when you do. (Opening a PR is the one inversion: that's `gt submit`, never `gh pr create` — see above.)
 - **Review fixes are a NEW commit, never an amend.** Use `gt modify --commit` (`-c`) for a fix on a pushed branch. Amending or squashing a pushed commit rewrites history and fails to re-trigger the review bots (`skill://autonomous-review`).
 - **Never push/force-push `main`; never merge.** Merge is the human gate. Feature branches on `mattwilkinsonn/*` + `sealedsecurity/*` only.
 - **Commit as Matt** (per-repo email) with the `Co-Authored-By: seal <noreply@sealedsecurity.com>` trailer.
@@ -51,18 +52,20 @@ gt submit --no-interactive                           # push + open the PR
 
 - **`gt sync`** pulls the latest `main`, rebases your open branches onto it, and prompts to delete merged/closed branches (`--no-restack` skips the rebase, `-f` skips prompts). Run it at the start of a change.
 - **`gt create [name]`** creates a new branch stacked on the current branch and commits staged changes. `--update` (`-u`) stages tracked changes first; `--all` (`-a`) also stages untracked files. `-m` is repeatable — pass the subject, body, and `Co-Authored-By: seal <…>` trailer as separate `-m` values (each becomes a paragraph). **Stage before you create** — a `gt create` with nothing staged makes an *empty* branch, so use `-u` / `-a` (or a prior `git add`).
-- **`gt submit`** force-pushes (with lease) your branch and opens/updates its PR. In `--no-interactive` mode it skips the metadata prompt and creates the PR in **draft**; author the title/description yourself and mark it ready:
+- **`gt submit`** force-pushes (with lease) your branch and opens/updates its PR. In `--no-interactive` mode it skips the metadata prompt and creates the PR in **draft**; author the title/description yourself and mark it ready. **Set metadata + flip ready via the GitHub MCP first** — one call does both:
 
-```sh
-gh pr edit <n> --title "type(scope): summary" --body-file <file>
-gh pr ready <n>
+```text
+mcp__litellm_github_update_pull_request  <n>  title, body, draft: false
 ```
 
-MCP-native (preferred): `mcp__litellm_github_update_pull_request` with `title`,
-`body`, and `draft: false` sets the metadata **and** marks the PR ready in one
-call. MCP tools route through the LiteLLM gateway as `mcp__litellm_<server>_<op>`
-and many are behind tool-search — run `search_tool_bm25` to activate one that
-isn't already live.
+This sets the title/description **and** marks the PR ready in one call, and routes through the LiteLLM gateway (`mcp__litellm_<server>_<op>`) instead of GitHub's scarce GraphQL bucket. MCP tools are often behind tool-search — run `search_tool_bm25` to activate one that isn't already live.
+
+**`gh` CLI is the fallback only** — reach for it strictly when the MCP tool is unavailable (gateway down / not activatable), and say so:
+
+```sh
+gh pr edit <n> --title "type(scope): summary" --body-file <file>   # fallback: MCP unavailable
+gh pr ready <n>                                                     # fallback: MCP unavailable
+```
 
 `--no-stack` skips the prompt to also submit **upstack** branches; it does **not** drop the **downstack** base (a bare `gt submit` force-pushes every branch from trunk to yours). A single change off `main` needs nothing extra — `gt submit` pushes just your branch. **`gt` does not hoist the co-author trailer or issue links into the PR body**, and Graphite's merge-queue squash builds the `main` commit from the PR title + description — so **end the PR description with `Co-Authored-By: seal <noreply@sealedsecurity.com>` as its last line** (issue refs `Refs #N` / `Closes #N` on the lines just above it, nothing after the trailer), or co-authorship is lost on merge (`rule://commit-conventions`). Keep the description accurate as review commits land.
 

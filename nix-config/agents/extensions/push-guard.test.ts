@@ -53,10 +53,8 @@ test("blocks a bare gh issue/pr create with no allowlisted target", () => {
 	expect(bash("gh issue create --body https://github.com/mattwilkinsonn/zireael")?.block).toBe(true); // URL in body is not a target
 });
 
-test("allows gh create with an allowlisted -R, and non-create reads", () => {
+test("allows gh issue create with an allowlisted -R, and non-create reads", () => {
 	expect(bash("gh issue create -R mattwilkinsonn/zireael -t bug")).toBeNull();
-	expect(bash("gh pr create -R sealedsecurity/sealed --fill")).toBeNull();
-	expect(bash('gh pr create -R "sealedsecurity/sealed" --fill')).toBeNull(); // quoted target
 	expect(bash("gh issue create --repo github.com/mattwilkinsonn/zireael -t bug")).toBeNull(); // host-qualified
 	expect(bash("gh issue list --label create")).toBeNull(); // "create" is a flag value, not the verb
 	expect(bash("gh pr comment 123 --body create")).toBeNull();
@@ -67,8 +65,30 @@ test("allows gh create with an allowlisted -R, and non-create reads", () => {
 
 test("allows pushes / writes to allowlisted owners", () => {
 	expect(bash("git push https://github.com/mattwilkinsonn/zireael my-branch")).toBeNull();
-	expect(bash("gh pr create -R sealedsecurity/sealed")).toBeNull();
+	expect(bash("gh issue create -R sealedsecurity/sealed -t bug")).toBeNull();
 	expect(bash("gh pr view -R can1357/oh-my-pi 42")).toBeNull(); // read of upstream is fine
+});
+
+test("hard-blocks gh pr create even with an allowlisted -R; issue create + gt submit still allowed", () => {
+	// PR create is ALWAYS redirected to gt submit, allowlisted target or not.
+	expect(bash("gh pr create -R sealedsecurity/sealed --fill")?.block).toBe(true);
+	expect(bash('gh pr create -R "sealedsecurity/sealed" --fill')?.block).toBe(true); // quoted target
+	expect(bash("gh pr create -R mattwilkinsonn/zireael")?.block).toBe(true);
+	expect(bash("gh pr new -R sealedsecurity/sealed")?.block).toBe(true); // `new` alias
+	expect(bash("gh pr create --fill")?.block).toBe(true); // bare, no -R
+	// Flags BEFORE the verb must not hide it — the verb is resolved past `-R o/r`
+	// (Greptile P2). The allowlisted form has no owner-check safety net, so this
+	// is the case the split must catch on its own.
+	expect(bash("gh pr -R sealedsecurity/sealed create --fill")?.block).toBe(true);
+	expect(bash("gh pr -R can1357/oh-my-pi create")?.block).toBe(true); // non-allowlisted too
+	expect(bash("gh pr --repo mattwilkinsonn/zireael new")?.block).toBe(true);
+	// Issue create with an allowlisted -R stays allowed (only PR-create redirects to gt).
+	expect(bash("gh issue create -R sealedsecurity/sealed -t bug")).toBeNull();
+	// gt submit — the sanctioned PR-open path — is never blocked.
+	expect(bash("gt submit --no-interactive")).toBeNull();
+	expect(bash("gt submit")).toBeNull();
+	// Not a create verb: pr comment / view with "create" elsewhere stays allowed.
+	expect(bash("gh pr comment 123 --body create")).toBeNull();
 });
 
 test("github MCP: writes honour the owner allowlist, reads do not", () => {
