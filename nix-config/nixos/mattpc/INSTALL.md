@@ -14,7 +14,7 @@ held the WSL `ext4.vhdx`); **Windows stays on Disk 1, untouched**.
 Both are the **identical model**, so the installer targets Disk 0 by
 `/dev/disk/by-id` (serial), never `/dev/nvmeXn1`.
 
-Layout (disko): 1 GiB ESP (vfat `/boot`) · 64 GiB swap (= RAM, hibernate) ·
+Layout (disko): 2 GiB ESP (vfat `/boot`) · 64 GiB swap (= RAM, hibernate) ·
 btrfs root with `@` → `/`, `@home` → `/home`, `@nix` → `/nix` (zstd).
 
 ## 0. Pre-flight (before touching the disk)
