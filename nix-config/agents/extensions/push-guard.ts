@@ -22,7 +22,8 @@ const PUSH =
 	/\bgit(?:\s+-\S+(?:\s+[^-]\S*)?)*\s+push\b|\bjj(?:\s+-\S+(?:\s+[^-]\S*)?)*\s+git\s+push\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*(?:submit|ss?)\b/;
 // Merge — the human gate, blocked for every repo. Also a `jj-gt`/`gt submit`
 // with `--merge-when-ready`/`-m`, which hands Graphite the merge after checks.
-const MERGE = /\bgh\b[^\n;|&]*\bmerge\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*merge\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*(?:submit|ss?)\b[^\n;|&]*(?:--merge-when-ready\b|\s-m\b)/;
+const MERGE =
+	/\bgh\b[^\n;|&]*\bmerge\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*merge\b|\b(?:jj-gt|gt)\s+(?:[\w.@/-]+\s+)*(?:submit|ss?)\b[^\n;|&]*(?:--merge-when-ready\b|\s-m\b)/;
 // A `gh` mutation: a write verb anywhere in the `gh` segment (so flags between
 // the noun and the verb — `gh pr -R owner/repo create` — don't slip past).
 const GH_WRITE_CMD =
@@ -37,7 +38,10 @@ function ghApiWriteBlocked(cmd: string): boolean {
 	for (const seg of cmd.split(/[\n;|&]+/)) {
 		if (!ghArgs(seg)?.includes("api")) continue; // a real `gh api` command (any flag order), not text in a message
 		if (/(?:^|\s)(?:-X|--method)[=\s]+GET\b/i.test(seg)) continue; // explicit read
-		const write = /(?:^|\s)(?:-X|--method)[=\s]+(?:POST|PUT|PATCH|DELETE)\b|(?:^|\s)(?:-f|-F|--field|--raw-field|--input)\b/i.test(seg);
+		const write =
+			/(?:^|\s)(?:-X|--method)[=\s]+(?:POST|PUT|PATCH|DELETE)\b|(?:^|\s)(?:-f|-F|--field|--raw-field|--input)\b/i.test(
+				seg,
+			);
 		if (!write) continue;
 		const m = seg.match(/\brepos\/([^/\s]+)\//);
 		if (m && ALLOWED_OWNERS[m[1].toLowerCase()] !== true) return true;
@@ -50,13 +54,18 @@ const PUSH_UPSTREAM = /\bpush\b(?:\s+-\S+)*\s+upstream\b/;
 // `main` as a push target — `<remote> main`, `-b main`, `:main`, `HEAD:main`, on
 // ANY remote. The bare-`main` arm is anchored to `push` so a later
 // `git checkout main` in a compound command isn't a false positive.
-const PUSH_MAIN = /:(?:refs\/heads\/)?main(?![\w-])|\brefs\/heads\/main(?![\w-])|(?:^|\s)(?:-b|--bookmark|--branch)\s+main(?![\w-])|\bpush\b(?:\s+-\S+)*\s+[\w.-]+\s+(?:-\S+\s+)*main(?![\w-])/;
+const PUSH_MAIN =
+	/:(?:refs\/heads\/)?main(?![\w-])|\brefs\/heads\/main(?![\w-])|(?:^|\s)(?:-b|--bookmark|--branch)\s+main(?![\w-])|\bpush\b(?:\s+-\S+)*\s+[\w.-]+\s+(?:-\S+\s+)*main(?![\w-])/;
 
 // Explicit GitHub owners named in a command: full URLs + `gh -R owner/repo`.
 function namedOwners(cmd: string): string[] {
 	const owners = new Set<string>();
-	for (const m of cmd.matchAll(/github\.com[/:]([\w.-]+)\/[\w.-]+/g)) owners.add(m[1].toLowerCase());
-	for (const m of cmd.matchAll(/(?:-R|--repo)[=\s]+["']?(?:[\w.-]+\/)?([\w.-]+)\/[\w.-]+/g)) owners.add(m[1].toLowerCase());
+	for (const m of cmd.matchAll(/github\.com[/:]([\w.-]+)\/[\w.-]+/g))
+		owners.add(m[1].toLowerCase());
+	for (const m of cmd.matchAll(
+		/(?:-R|--repo)[=\s]+["']?(?:[\w.-]+\/)?([\w.-]+)\/[\w.-]+/g,
+	))
+		owners.add(m[1].toLowerCase());
 	return [...owners];
 }
 
@@ -64,7 +73,20 @@ function namedOwners(cmd: string): string[] {
 // `timeout 30 gh …`): the args after `gh`, or null when `gh` isn't the command
 // (so `git commit -m "… gh issue create …"` — gh only inside a message — is
 // ignored).
-const GH_WRAPPERS = new Set(["env", "timeout", "nice", "ionice", "stdbuf", "nohup", "setsid", "sudo", "doas", "command", "exec", "time"]);
+const GH_WRAPPERS = new Set([
+	"env",
+	"timeout",
+	"nice",
+	"ionice",
+	"stdbuf",
+	"nohup",
+	"setsid",
+	"sudo",
+	"doas",
+	"command",
+	"exec",
+	"time",
+]);
 function ghArgs(seg: string): string[] | null {
 	const toks = seg.trim().split(/\s+/).filter(Boolean);
 	let i = 0;
@@ -81,12 +103,20 @@ function ghArgs(seg: string): string[] | null {
 			while (i < toks.length && /^-/.test(toks[i])) i++; // direnv's own flags
 		} else if (GH_WRAPPERS.has(base)) {
 			i++; // the wrapper, then its own flags / a duration / -n NUM
-			while (i < toks.length && (/^-/.test(toks[i]) || /^\d+[smhd]?$/.test(toks[i]) || /^[A-Za-z_]\w*=/.test(toks[i]))) i++;
+			while (
+				i < toks.length &&
+				(/^-/.test(toks[i]) ||
+					/^\d+[smhd]?$/.test(toks[i]) ||
+					/^[A-Za-z_]\w*=/.test(toks[i]))
+			)
+				i++;
 		} else {
 			break;
 		}
 	}
-	return i < toks.length && /(?:^|\/)gh$/.test(toks[i]) ? toks.slice(i + 1) : null;
+	return i < toks.length && /(?:^|\/)gh$/.test(toks[i])
+		? toks.slice(i + 1)
+		: null;
 }
 
 // The owner from a real `-R`/`--repo <[HOST/]OWNER/REPO>` selector (quotes and a
@@ -95,9 +125,15 @@ function ghArgs(seg: string): string[] | null {
 function repoFlagOwner(seg: string): string | null {
 	for (const tok of seg.split(/\s+/).map((t, i, a) => [t, a[i + 1]] as const)) {
 		const eq = tok[0].match(/^(?:-R|--repo)=(.+)$/);
-		const val = eq ? eq[1] : tok[0] === "-R" || tok[0] === "--repo" ? tok[1] : undefined;
+		const val = eq
+			? eq[1]
+			: tok[0] === "-R" || tok[0] === "--repo"
+				? tok[1]
+				: undefined;
 		if (val === undefined) continue;
-		const o = val.replace(/^["']/, "").match(/^(?:[\w.-]+\/)?([\w.-]+)\/[\w.-]+/);
+		const o = val
+			.replace(/^["']/, "")
+			.match(/^(?:[\w.-]+\/)?([\w.-]+)\/[\w.-]+/);
 		if (o) return o[1].toLowerCase();
 	}
 	return null;
@@ -117,7 +153,12 @@ function ghSubcommandVerb(args: string[], noun: string): string | undefined {
 		if (tok.startsWith("-")) {
 			// `-R`/`--repo` and other value-taking flags consume the next token;
 			// `--flag=value` and bare boolean flags consume only themselves.
-			if (!tok.includes("=") && i + 1 < args.length && !args[i + 1].startsWith("-")) i++;
+			if (
+				!tok.includes("=") &&
+				i + 1 < args.length &&
+				!args[i + 1].startsWith("-")
+			)
+				i++;
 			continue;
 		}
 		return tok; // first bare positional = the subcommand verb
@@ -168,7 +209,9 @@ function ghIssueCreateWithoutAllowedOwner(cmd: string): boolean {
 function hasBroadKill(cmd: string): boolean {
 	for (const seg of cmd.split(/[\n;&|]+/)) {
 		const toks = seg.trim().split(/\s+/).filter(Boolean);
-		const idx = toks.findIndex((t) => /(?:^|\/)(?:pkill|killall|kill)$/.test(t));
+		const idx = toks.findIndex((t) =>
+			/(?:^|\/)(?:pkill|killall|kill)$/.test(t),
+		);
 		if (idx === -1) continue;
 		if (!/(?:^|\/)kill$/.test(toks[idx])) return true; // pkill / killall
 		let k = idx + 1;
@@ -196,14 +239,21 @@ const GH_MCP = /^mcp__(?:litellm_)?github_/;
 // optional `litellm_`) so the shared `pull_request_` infix doesn't misclassify
 // reads. Everything else (pull_request_read, get_*) is a read, allowed on any
 // repo incl. an upstream PR you're triaging.
-const GH_MCP_WRITE = /^mcp__(?:litellm_)?github_(?:create|update|delete|add|fork|push|dispatch|request|merge)_|_write\b/;
+const GH_MCP_WRITE =
+	/^mcp__(?:litellm_)?github_(?:create|update|delete|add|fork|push|dispatch|request|merge)_|_write\b/;
 
 // Pure decision: a block, or null to allow. Unit-tested in push-guard.test.ts.
-export function evaluate(toolName: string, input: Record<string, unknown>): Block | null {
+export function evaluate(
+	toolName: string,
+	input: Record<string, unknown>,
+): Block | null {
 	if (CMD_TOOLS[toolName] === true) {
 		// bash/ssh carry the command in `command`; any other shape falls back to
 		// the whole input so a push/merge in any field is still caught.
-		const cmd = typeof input.command === "string" ? input.command : JSON.stringify(input ?? {});
+		const cmd =
+			typeof input.command === "string"
+				? input.command
+				: JSON.stringify(input ?? {});
 
 		if (LOCAL_TOOLS[toolName] === true && hasBroadKill(cmd)) {
 			return {
@@ -297,7 +347,8 @@ export function evaluate(toolName: string, input: Record<string, unknown>): Bloc
 			};
 		}
 		if (GH_MCP_WRITE.test(toolName)) {
-			const owner = typeof input.owner === "string" ? input.owner.toLowerCase() : "";
+			const owner =
+				typeof input.owner === "string" ? input.owner.toLowerCase() : "";
 			if (ALLOWED_OWNERS[owner] !== true) {
 				return {
 					block: true,
@@ -318,7 +369,10 @@ export default function pushGuard(pi: ExtensionAPI): void {
 	pi.setLabel("push-guard");
 
 	pi.on("tool_call", async (event) => {
-		const result = evaluate(event.toolName, (event.input ?? {}) as Record<string, unknown>);
+		const result = evaluate(
+			event.toolName,
+			(event.input ?? {}) as Record<string, unknown>,
+		);
 		return result ?? undefined;
 	});
 }
