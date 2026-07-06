@@ -15,8 +15,12 @@ projects:
   # Rust workspace members (tools/jj-hooks, tools/jj-gt).
   jj-hooks: 'tools/jj-hooks'
   jj-gt: 'tools/jj-gt'
-  # bun/TypeScript tool (its own bun.lock — not a hoisted root workspace).
+  # bun/TypeScript dev + release tooling (own bun.lock each). Converted from
+  # bash (SEA-932): the release cutter, debug installer, and jj-gt fixture setup.
   akiflow-cli: 'tools/akiflow-cli'
+  release: 'tools/release'
+  install-debug: 'tools/install-debug'
+  setup-live-test-fixture: 'tools/setup-live-test-fixture'
   # bun/TypeScript agent tools under nix-config (own bun.lock each). Converted
   # from bash (SEA-932): the autonomous-review wait primitive + its API router.
   wait-for-reviews: 'nix-config/tools/wait-for-reviews'

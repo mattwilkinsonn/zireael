@@ -1,0 +1,20 @@
+{
+	"name": "setup-live-test-fixture",
+	"version": "0.1.0",
+	"description": "One-time setup for the jj-gt live-test fixture repo (creates the GitHub repo + a persistent fixture PR).",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/mattwilkinsonn/zireael.git",
+		"directory": "tools/setup-live-test-fixture"
+	},
+	"license": "MIT",
+	"module": "index.ts",
+	"type": "module",
+	"bin": {
+		"setup-live-test-fixture": "./index.ts"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5"
+	}
+}

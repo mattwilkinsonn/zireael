@@ -31,12 +31,13 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
 ### Changed — build + CI
 
 - Unified the local + CI gate on `moon ci` (moon + proto + devenv), replacing `just`, `hk`'s per-tool step list, and the per-tool GitHub workflows. `.prototools` pins bun/node/moon; `devenv.nix` provides the toolchain; `direnv allow` is the whole dev bootstrap.
-- Retired the `Justfile`; `release` and `install-debug` moved to `scripts/` (`moon run root:release` / `root:install-debug`).
+- Retired the `Justfile`; `release` and `install-debug` are `moon run root:release` / `root:install-debug`.
+- Converted the `release`, `install-debug`, and jj-gt `setup-live-test-fixture` dev/release scripts from bash to bun/TypeScript (`tools/{release,install-debug,setup-live-test-fixture}`), each a bun package with a construction/execution split and `bun test` coverage. The `root:release`/`root:install-debug` moon tasks now `bun run` the `.ts`; behavior is unchanged.
 
 ### Changed — nix-config
 
 - Converted the `wait-for-reviews` and `gh-route` agent scripts from bash to bun/TypeScript (`nix-config/tools/{wait-for-reviews,gh-route}`), each a bun package with a construction/execution split and `bun test` coverage; nix packages them via a `writeShellScriptBin` wrapper that `exec`s `bun run` on the `.ts`. Behavior is unchanged (identical CLI, output, and exit codes).
-- Added a `no-bash-gate` CI task (`nix-config/tools/no-bash-gate`) that fails on any committed bash outside an explicit, shrinking allowlist — enforcing the "TypeScript over bash" rule for new scripts.
+- Added a `no-bash-gate` CI task (`nix-config/tools/no-bash-gate`) that scans the whole repo and fails on any committed bash outside an explicit, shrinking allowlist (now just nix bootstrap that predates bun + yabai shell hooks) — enforcing the "TypeScript over bash" rule repo-wide.
 
 ### Fixed — jj-hooks
 

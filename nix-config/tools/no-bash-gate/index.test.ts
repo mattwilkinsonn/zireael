@@ -86,7 +86,7 @@ describe("runOnce", () => {
 	test("all allowlisted → exit 0", async () => {
 		// Only files that are actually in the real ALLOWLIST.
 		const { d, out } = deps({
-			lsFiles: async () => ["dotfiles/yabai/rules.sh", "index.ts"],
+			lsFiles: async () => ["nix-config/dotfiles/yabai/rules.sh", "index.ts"],
 		});
 		expect(await runOnce(d)).toBe(0);
 		expect(out.some((l) => l.includes("OK"))).toBe(true);

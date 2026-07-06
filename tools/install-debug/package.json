@@ -1,0 +1,20 @@
+{
+	"name": "install-debug",
+	"version": "0.1.0",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/mattwilkinsonn/zireael.git",
+		"directory": "tools/install-debug"
+	},
+	"license": "MIT",
+	"module": "index.ts",
+	"type": "module",
+	"bin": {
+		"install-debug": "./index.ts"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5"
+	},
+	"description": "Build debug binaries and install them to ~/.cargo/bin (dev convenience)."
+}

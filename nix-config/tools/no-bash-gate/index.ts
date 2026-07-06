@@ -26,28 +26,36 @@ import { $ } from "bun";
 // Paths are repo-relative, POSIX-separated, as `git ls-files` emits them.
 // Each entry MUST carry a reason: why this is still bash. Shrink toward zero.
 export const ALLOWLIST: Record<string, string> = {
-	// nix bootstrap — runs before bun/nix exist on a fresh host.
-	"nixos/scripts/mattpc-wsl-bootstrap.sh": "nix bootstrap, pre-bun",
-	"shared/scripts/bootstrap-common.sh": "nix bootstrap, pre-bun",
-	"shared/scripts/migrate-from-dotfiles.sh": "one-shot nix migration, pre-bun",
-	"darwin/scripts/mac-setup.sh": "macOS bootstrap, pre-bun (Xcode CLT / brew)",
-	"darwin/scripts/nix-switch-all.sh": "nix bootstrap wrapper, pre-bun",
-	"darwin/scripts/sync-ventoy.sh": "macOS-only disk util, pre-bun",
-	// yabai — the window manager execs these hooks directly as shell.
-	"dotfiles/yabai/aw-layout.sh": "yabai shell hook",
-	"dotfiles/yabai/columns.sh": "yabai shell hook",
-	"dotfiles/yabai/cycle-display.sh": "yabai shell hook",
-	"dotfiles/yabai/display-event.sh": "yabai shell hook",
-	"dotfiles/yabai/display-setup.sh": "yabai shell hook",
-	"dotfiles/yabai/g9-layout.sh": "yabai shell hook",
-	"dotfiles/yabai/move-to-display.sh": "yabai shell hook",
-	"dotfiles/yabai/reset-splits.sh": "yabai shell hook",
-	"dotfiles/yabai/rules.sh": "yabai shell hook",
-	"dotfiles/yabai/yabairc": "yabai config, execed as shell by yabai",
-	// bash test harnesses for the remaining bash scripts above. These retire
-	// when their subjects convert.
-	"shared/scripts/tests/bootstrap-args.test.sh": "tests bootstrap-common.sh",
-	"shared/scripts/tests/fnm-path-repair.test.sh": "tests a bootstrap path fix",
+	// nix bootstrap — runs on a fresh host BEFORE home-manager installs bun,
+	// or orchestrates nixos-rebuild / cross-host SSH, so bun isn't available.
+	"nix-config/nixos/scripts/mattpc-wsl-bootstrap.sh": "nix bootstrap, pre-bun",
+	"nix-config/shared/scripts/bootstrap-common.sh": "nix bootstrap, pre-bun",
+	"nix-config/shared/scripts/migrate-from-dotfiles.sh":
+		"one-shot nix migration, pre-bun",
+	"nix-config/darwin/scripts/mac-setup.sh":
+		"macOS bootstrap, pre-bun (Xcode CLT / brew)",
+	"nix-config/darwin/scripts/nix-switch-all.sh":
+		"nix-switch orchestration, pre-bun on target hosts",
+	"nix-config/darwin/scripts/sync-ventoy.sh":
+		"macOS-only USB bootstrap staging, pre-bun",
+	// yabai — the window manager execs these hooks/config directly as shell;
+	// there is no bun entry point for a yabai signal action.
+	"nix-config/dotfiles/yabai/aw-layout.sh": "yabai shell hook",
+	"nix-config/dotfiles/yabai/columns.sh": "yabai shell hook",
+	"nix-config/dotfiles/yabai/cycle-display.sh": "yabai shell hook",
+	"nix-config/dotfiles/yabai/display-event.sh": "yabai shell hook",
+	"nix-config/dotfiles/yabai/display-setup.sh": "yabai shell hook",
+	"nix-config/dotfiles/yabai/g9-layout.sh": "yabai shell hook",
+	"nix-config/dotfiles/yabai/move-to-display.sh": "yabai shell hook",
+	"nix-config/dotfiles/yabai/reset-splits.sh": "yabai shell hook",
+	"nix-config/dotfiles/yabai/rules.sh": "yabai shell hook",
+	"nix-config/dotfiles/yabai/yabairc": "yabai config, execed as shell by yabai",
+	// bash test harnesses for the retained bootstrap bash above. These retire
+	// only when their (unconvertible) subjects do.
+	"nix-config/shared/scripts/tests/bootstrap-args.test.sh":
+		"tests bootstrap-common.sh",
+	"nix-config/shared/scripts/tests/fnm-path-repair.test.sh":
+		"tests a bootstrap path fix",
 };
 
 export type Scan = {
