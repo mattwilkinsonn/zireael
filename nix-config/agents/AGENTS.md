@@ -16,7 +16,7 @@ For any change past the fast-path bar — more than a one-liner/config tweak/ren
 
 ## Tests are not optional
 
-Every feature, bugfix, or non-trivial change gets tests, run before you call it done. "Builds clean" ≠ "tested." Bugfixes get a regression test that fails before the fix and passes after. Verify against the exact user-facing invocation, not a reasoned-equivalent. Call out genuinely untestable areas explicitly rather than skipping silently. Full workflow: `rule://red-green-testing`.
+Every feature, bugfix, or non-trivial change gets tests, run before you call it done. "Builds clean" ≠ "tested." Bugfixes get a regression test that fails before the fix and passes after. Verify against the exact user-facing invocation, not a reasoned-equivalent. Call out genuinely untestable areas explicitly rather than skipping silently. **No retries, ever** — a flaky test is a real bug: make it deterministic (event-gate, virtual time), never paper over it with `retries=N`; full policy in `rule://no-retries`. Full workflow: `rule://red-green-testing`.
 
 ## Correctness and modernity
 
@@ -69,5 +69,5 @@ Durable instructions live here (`~/.agents/AGENTS.md`, tool-agnostic canonical l
 
 Available on demand:
 
-- Rules (read `rule://<name>` when the work matches): `red-green-testing`, `planning-evidence`, `pre-finish-checks`, `commit-conventions`, `enumerate-pr-review-surfaces`. Always-applied: `process-safety`.
+- Rules (read `rule://<name>` when the work matches): `red-green-testing`, `planning-evidence`, `pre-finish-checks`, `commit-conventions`, `enumerate-pr-review-surfaces`. Always-applied: `process-safety`. Auto-firing (TTSR trigger on retry config/calls): `no-retries`.
 - Skills (read `skill://<name>` when relevant): `gt`, `github-pr-review`, `autonomous-review`, `ci-failure-triage`, `design`, `nix-hosts`, `multi-agent-wave`.
