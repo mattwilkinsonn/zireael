@@ -56,6 +56,7 @@ Repos with an `.envrc` provide their tooling — `moon`, `biome`, language toolc
 - **Markdown** follows markdownlint: blank lines around headings/lists/code fences/tables, language on fences, leading+trailing table pipes, compact table spacing.
 - **Never hand-create symlinks.** (The one exception is nix `mkOutOfStoreSymlink`, which already manages the privatefiles → `$HOME` links.)
 - **IRC reaches only same-session subagents.** The `irc` tool can message subtask agents you spawned within this session; it **cannot** reach agents in other sessions (separate runs/panes) — those sends fail (`Unknown or terminated agent`). Coordinate cross-session work through Matt or shared files (`local://`, the repo), never `irc`.
+- **Self-compact at good breakpoints.** When you finish a task and are about to wait on a gate/review, or you're between tasks, call the `compact` tool as your final action to shed context you no longer need — it schedules the compaction to run once the turn settles (never mid-work: it summarizes older turns away, so calling it with a task in flight discards context you still need). This is the proactive path; idle-compaction (`compaction.idleEnabled`) is the automatic backstop for when you forget. Recognizing a clean breakpoint and compacting yourself keeps per-session token cost down.
 
 ## Correcting mistakes
 
