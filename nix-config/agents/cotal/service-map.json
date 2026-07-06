@@ -1,0 +1,16 @@
+{
+  "_comment": "Glob -> service -> owner map for the per-service ownership layer (docs/designs/agents/service-owners.md). Consumed by: the PR-post rule (which #svc channel(s) a PR touches), the T-CI backstop hook, and the supervisor's incident routing. Resolution: most-specific-wins by `priority` (higher wins); a path notifies exactly one service, then the multi-service all-channels rule applies across DISTINCT services. `exclude` is the equivalent negative form. Fork services (omp/cotal/woodpecker) have no sealed/ path -> agent-posts-on-start only, no sealed CI backstop. `spec` is the service's owned spec file (spec-update PRs route here too).",
+  "services": [
+    { "service": "petrel",    "channel": "svc.petrel",    "priority": 10, "globs": ["oss/petrel/**"], "spec": "docs/specs/tools/petrel.md" },
+    { "service": "tern",      "channel": "svc.tern",      "priority": 10, "globs": ["oss/tern/**"], "spec": "docs/specs/tools/tern.md" },
+    { "service": "compass",   "channel": "svc.compass",   "priority": 10, "globs": ["oss/compass/**"], "spec": "docs/specs/product/compass.md" },
+    { "service": "seal",      "channel": "svc.seal",      "priority": 10, "globs": ["oss/seal/**"], "spec": "docs/specs/product/seal.md" },
+    { "service": "pulumi",    "channel": "svc.pulumi",    "priority": 10, "globs": ["infra/pulumi/**"], "spec": "docs/specs/platform/infrastructure.md" },
+    { "service": "web",       "channel": "svc.web",       "priority": 10, "globs": ["apps/**"], "spec": "docs/specs/tools/docs-publish.md" },
+    { "service": "ci-build",  "channel": "svc.ci-build",  "priority": 5,  "globs": ["ci/**", ".moon/**", "package.json", "bun.lock", "moon.yml"], "exclude": ["ci/woodpecker/**"], "spec": "docs/specs/platform/build-and-ci.md" },
+    { "service": "nix-infra", "channel": "svc.nix-infra", "priority": 5,  "globs": ["infra/nix/**"], "exclude": ["infra/nix/**/woodpecker*"], "spec": "docs/specs/platform/technology-stack.md" },
+    { "service": "woodpecker", "channel": "svc.woodpecker", "priority": 20, "globs": ["infra/nix/**/woodpecker*", "ci/woodpecker/**"], "repos": ["woodpecker-fork"], "spec": "docs/specs/platform/woodpecker.md" },
+    { "service": "omp",       "channel": "svc.omp",       "priority": 10, "globs": [], "repos": ["oh-my-pi-fork"], "backstop": "agent-posts-only", "spec": "oh-my-pi:docs/spec.md" },
+    { "service": "cotal",     "channel": "svc.cotal",     "priority": 10, "globs": [], "repos": ["cotal-fork"], "backstop": "agent-posts-only", "spec": "cotal:SPEC.md" }
+  ]
+}
