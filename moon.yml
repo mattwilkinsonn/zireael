@@ -22,7 +22,7 @@ tasks:
   # projects self-lint theirs.
   agents-biome:
     command: 'bunx biome check nix-config/agents/extensions'
-    inputs: ['/nix-config/agents/extensions/*.ts', '/biome.json']
+    inputs: ['/nix-config/agents/extensions/**/*.ts', '/biome.json']
   # Root-level *.nix (devenv.nix). maxdepth 1 so it doesn't recurse into
   # nix-config/ (its own project gates those) or .devenv/ (the nix store).
   nixfmt:
