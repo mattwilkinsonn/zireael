@@ -123,9 +123,17 @@ incident routing). Grounded against the `sealed/` tree (2026-07-06 live batch �
   carry each service's spec path alongside its code globs (the spec-ownership duty, per Global
   Constraints, requires the owner see spec-update PRs). A `docs/**` change with no resolvable
   service (cross-cutting docs) matches nothing and posts nowhere — that's correct, not a gap.
-- **woodpecker caveat:** not a single directory — a CI service spanning the woodpecker fork repo
-  plus `infra/nix/**/woodpecker*` + `ci/woodpecker/**`. Its "glob" is a cross-repo subset, not a
-  clean prefix; the owner spans repos.
+- **woodpecker caveat + the nix-infra overlap:** woodpecker is not a single directory — it spans
+  the woodpecker fork repo plus `infra/nix/**/woodpecker*` + `ci/woodpecker/**`. Those nix/ci paths
+  are **subsets of** nix-infra's `infra/nix/**` and ci-build's `ci/**`, so a naive all-match would
+  fire BOTH the specific owner and the broad one. The resolver therefore uses **most-specific-wins
+  precedence**: each service-map entry carries a `priority`, and a path notifies only the
+  highest-priority entry whose globs match (woodpecker's `infra/nix/**/woodpecker*` outranks
+  nix-infra's `infra/nix/**`). Equivalently, the broad entry may carry an `exclude` (nix-infra:
+  `exclude: ["infra/nix/**/woodpecker*"]`, ci-build: `exclude: ["ci/woodpecker/**"]`). The
+  "post to ALL matched channels" rule (multi-service) applies across **distinct** services after
+  precedence resolves each path to its one owning service — it never double-fires the same path to
+  a specific + its superset owner.
 - **Fork repos (omp / cotal / woodpecker fork) have no `sealed/` path**, so the T-CI resolver
   (which reads a `sealed/` PR's changed paths) **cannot fire for a PR opened inside a fork**. Those
   services rely on the **agent-posts-on-start path only** (no CI backstop) — unless a fork-local CI
@@ -134,7 +142,7 @@ incident routing). Grounded against the `sealed/` tree (2026-07-06 live batch �
 - **Interfaces:** the map is data consumed by T-persona (which channel an owner subscribes),
   T-CI (which channel(s) a PR posts to), and the supervisor's routing. **Single home:**
   `nix-config/agents/cotal/service-map.json` — one file both the CI hook and the prose cite (not
-  duplicated inline; the runbook links it). Each entry: `{ service, channel, globs: [...], spec: <path> }`.
+  duplicated inline; the runbook links it). Each entry: `{ service, channel, globs: [...], exclude?: [...], priority: <int>, spec: <path> }` — `priority` (or `exclude`) resolves the nix-infra/ci-build ⊃ woodpecker overlap, most-specific wins.
 - **Model hint:** small.
 
 ### T-persona — owner persona template (`_service-owner-template.md`)
@@ -212,8 +220,9 @@ hardens it.
 
 ## Tasks
 
-- [ ] T-map — glob → service → owner map as `service-map.json` (11 owners; each entry carries code
-      globs **+ its `docs/specs/<service>` path**; woodpecker/omp/cotal cross-repo caveats)
+- [ ] T-map — glob → service → owner map as `service-map.json` (11 owners; each entry `{service,
+      channel, globs, exclude?, priority, spec}` — code globs + its `docs/specs/<service>` path;
+      most-specific-wins precedence resolves the nix-infra/ci-build ⊃ woodpecker overlap; cross-repo caveats)
 - [ ] T-persona — owner persona template `_service-owner-template.md` + one concrete owner (role
       `service-owner`, `subscribe: [announcements, svc.<svc>]`, `svc.>`+`coordination.>` ACLs,
       three-duties body)
@@ -237,10 +246,12 @@ hardens it.
    reviews, and spec — it doesn't assign work or spawn.
 5. **Spec ownership is standing:** each owner keeps its service's `docs/specs/` file current; a
    contract-changing PR updates the spec in the same PR.
-6. **Multi-service PRs post to ALL matched channels.** A PR spanning N services notifies each of
-   the N owners (routing rule 2 + T-CI); never a single "primary" service, which would leave the
-   others blind. Spec/design paths resolve to the service they document (`docs/specs/<service>/**`
-   → that `#svc`), not a "docs" service.
+6. **Multi-service PRs post to ALL matched channels — after precedence resolves each path to one
+   owner.** A PR spanning N *distinct* services notifies each of the N owners (routing rule 2 +
+   T-CI); never a single "primary" service. But a single path resolves to exactly one service by
+   most-specific-wins (`priority`/`exclude`), so an overlapping subset (woodpecker ⊂ nix-infra) does
+   NOT double-fire to both the specific and the superset owner. Spec/design paths resolve to the
+   service they document (`docs/specs/<service>/**` → that `#svc`), not a "docs" service.
 7. **The CI backstop covers `sealed/` only.** Fork repos (omp / cotal / woodpecker fork) have no
    `sealed/` path for the resolver, so they rely on the agent-posts-on-start path (or a fork-local
    hook); the record documents per-fork which, so no owner expects a backstop it won't get.
