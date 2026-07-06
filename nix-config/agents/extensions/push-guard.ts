@@ -103,19 +103,39 @@ function repoFlagOwner(seg: string): string | null {
 	return null;
 }
 
+// The `gh pr` / `gh issue` subcommand verb — the first bare positional token
+// after the noun, skipping flags and their values (`-R owner/repo`, `--fill`),
+// so a selector between the noun and the verb (`gh pr -R o/r create`) doesn't
+// hide it. Returns undefined when no positional verb follows. A flag *value*
+// like `--body create` is skipped (it's consumed as the flag's argument), so
+// `gh pr comment 123 --body create` resolves the verb as `comment`, not create.
+function ghSubcommandVerb(args: string[], noun: string): string | undefined {
+	const at = args.indexOf(noun);
+	if (at === -1) return undefined;
+	for (let i = at + 1; i < args.length; i++) {
+		const tok = args[i];
+		if (tok.startsWith("-")) {
+			// `-R`/`--repo` and other value-taking flags consume the next token;
+			// `--flag=value` and bare boolean flags consume only themselves.
+			if (!tok.includes("=") && i + 1 < args.length && !args[i + 1].startsWith("-")) i++;
+			continue;
+		}
+		return tok; // first bare positional = the subcommand verb
+	}
+	return undefined;
+}
+
 // `gh pr create` / `gh pr new` — ALWAYS blocked (allowlisted `-R` or not):
 // opening a PR must go through `gt submit`, which authors under the seal-bot
 // identity and tracks the branch in the Graphite stack. `gh pr create` opens
 // under the `gh` account outside the stack, so it's redirected unconditionally.
-// The verb must be the token right after `pr`, so `gh pr comment 123 --body
-// create` (create as a flag value) is not treated as one.
+// The verb is resolved past any flags (`gh pr -R o/r create` is caught), while a
+// `create` that is a flag value (`gh pr comment 123 --body create`) is not.
 function ghPrCreate(cmd: string): boolean {
 	for (const seg of cmd.split(/[\n;|&]+/)) {
 		const args = ghArgs(seg);
 		if (!args) continue;
-		const noun = args.indexOf("pr");
-		if (noun === -1) continue;
-		const verb = args[noun + 1];
+		const verb = ghSubcommandVerb(args, "pr");
 		if (verb === "create" || verb === "new") return true;
 	}
 	return false;
@@ -125,15 +145,13 @@ function ghPrCreate(cmd: string): boolean {
 // with no explicit `-R` files on whatever repo the cwd resolves to, an OSS
 // upstream included (the spam-bot vector), so require an explicit allowlisted
 // `-R`. (PR-create is handled separately by ghPrCreate — always blocked.) The
-// verb must be the token right after the noun, so `gh issue list --label
-// create` (create as a flag value) is not treated as one.
+// verb is resolved past any flags (so `gh issue -R o/r create` is caught), while
+// a `create` that is a flag value (`gh issue list --label create`) is not.
 function ghIssueCreateWithoutAllowedOwner(cmd: string): boolean {
 	for (const seg of cmd.split(/[\n;|&]+/)) {
 		const args = ghArgs(seg);
 		if (!args) continue;
-		const noun = args.indexOf("issue");
-		if (noun === -1) continue;
-		const verb = args[noun + 1];
+		const verb = ghSubcommandVerb(args, "issue");
 		if (verb !== "create" && verb !== "new") continue;
 		const owner = repoFlagOwner(seg);
 		if (owner !== null && ALLOWED_OWNERS[owner] === true) continue; // explicit allowlisted target

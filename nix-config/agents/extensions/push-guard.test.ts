@@ -76,6 +76,12 @@ test("hard-blocks gh pr create even with an allowlisted -R; issue create + gt su
 	expect(bash("gh pr create -R mattwilkinsonn/zireael")?.block).toBe(true);
 	expect(bash("gh pr new -R sealedsecurity/sealed")?.block).toBe(true); // `new` alias
 	expect(bash("gh pr create --fill")?.block).toBe(true); // bare, no -R
+	// Flags BEFORE the verb must not hide it — the verb is resolved past `-R o/r`
+	// (Greptile P2). The allowlisted form has no owner-check safety net, so this
+	// is the case the split must catch on its own.
+	expect(bash("gh pr -R sealedsecurity/sealed create --fill")?.block).toBe(true);
+	expect(bash("gh pr -R can1357/oh-my-pi create")?.block).toBe(true); // non-allowlisted too
+	expect(bash("gh pr --repo mattwilkinsonn/zireael new")?.block).toBe(true);
 	// Issue create with an allowlisted -R stays allowed (only PR-create redirects to gt).
 	expect(bash("gh issue create -R sealedsecurity/sealed -t bug")).toBeNull();
 	// gt submit — the sanctioned PR-open path — is never blocked.
