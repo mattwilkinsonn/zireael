@@ -7,25 +7,33 @@ description: "Matt's nix-config flake — host configs, shared modules, secret l
 
 Matt's machines are declared in one flake under the `nix-config/` directory
 inside the `~/repos/zireael` monorepo (`~/repos/zireael/nix-config/flake.nix`);
-`nix-config` is not a separate repository checkout. It tracks `nixos-25.11`
+`nix-config` is not a separate repository checkout. It tracks `nixos-26.05`
 plus a `nixos-unstable` channel; the dev hosts pull every package through
 unstable via `shared/unstable-wholesale.nix`, and home-manager follows its
 `master` branch.
 
 ## Hosts
 
-Two hosts exist in `flake.nix` — do not assume others.
+Three host configurations exist in `flake.nix` — do not assume others.
 
 | Host | Output | Platform | Stack |
 | --- | --- | --- | --- |
 | `Matts-MacBook-Pro` | `darwinConfigurations` | `aarch64-darwin` | nix-darwin + home-manager |
 | `mattpc-wsl` | `nixosConfigurations` | `x86_64-linux` | NixOS-WSL2 + home-manager |
+| `mattpc` | `nixosConfigurations` | `x86_64-linux` | bare-metal NixOS (disko + Hyprland) + home-manager |
 
 - `Matts-MacBook-Pro` is the Apple Silicon MacBook Pro. User `mattwilkinson`.
 - `mattpc-wsl` is the NixOS-WSL2 distro on the gaming PC; Windows 11 is the
   bare-metal OS and this is the Linux dev environment under WSL2. User `mattw`.
   SSH runs on port 2222 inside WSL to avoid Windows OpenSSH on 22; Tailscale
   runs on the Windows host (mirrored networking), so no daemon inside the distro.
+- `mattpc` is the SAME physical gaming PC as `mattpc-wsl`, configured as a
+  bare-metal NixOS daily driver that dual-boots Windows (games only). The config
+  **evals** but the machine is **not yet installed** — the disk partition/install
+  is a pending, approval-gated operation, so no running `mattpc` host exists yet.
+  disko owns Disk 0 (the 2 TB NVMe that held the WSL vhdx); Hyprland on Wayland;
+  SSH boot-select via systemd-boot + edk2 chainload. User `mattw`. See
+  `nixos/mattpc/INSTALL.md`.
 
 ## Shared modules (`shared/`)
 
@@ -56,6 +64,9 @@ Composed per host via home-manager `imports`:
   the `nix-switch` alias.
 - `nixos/common.nix` — shared NixOS config.
 - `nixos/mattpc-wsl/{system.nix,home.nix}` — WSL host overlay.
+- `nixos/mattpc/{system.nix,home.nix}` — bare-metal host overlay (bootloader,
+  GPU, Hyprland, networking); `nixos/mattpc/disko.nix` +
+  `hardware-configuration.nix` complete it.
 
 ## Converge: `nix-switch`
 
@@ -63,6 +74,8 @@ Composed per host via home-manager `imports`:
 
 - Mac → `darwin-rebuild switch --flake ~/repos/zireael/nix-config#Matts-MacBook-Pro`.
 - WSL → `nixos-rebuild switch` against the `mattpc-wsl` flake output.
+- mattpc (bare-metal, once installed) → `sudo nixos-rebuild switch --flake
+  ~/repos/zireael/nix-config#mattpc`.
 
 Run it after editing any module. Because the privatefiles symlinks are
 out-of-store, edits to the linked content (not the flake) take effect with no
