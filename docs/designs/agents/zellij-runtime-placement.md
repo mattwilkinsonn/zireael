@@ -4,28 +4,43 @@
 - **Scope:** the watchable multiplexed-runtime + mesh-native spawn path that
   [`coordination-structure.md`](./coordination-structure.md) (line 7) defers to "a **separate**
   design record" — how the Cotal `zellij` runtime places wave agents into named/stacked tabs, how a
-  full-session KDL layout mirrors Matt's live multi-tab arrangement, and how `cotal up -f
+  full-session KDL layout mirrors Matt's live multi-tab arrangement (his config), and how `cotal up -f
   --runtime zellij` stands up the whole wave through the zellij spawner in one command (the
   post-OMP-update restart).
-- **Deliverables of this plan (data vs mechanism split):**
-  - **Mechanism → the Cotal fork** (`sealedsecurity/Cotal`, zellij extension on branch
-    `zheng-zellij-runtime`, committed `21eb389`): the `Placement` seam, driver pane primitives, the
-    layout-map **schema + KDL generator**, and the manifest `runtime: zellij` + per-agent
-    `placement` fields. Every mechanism cited below exists in that fork today or is a named
-    extension of a cited symbol.
-    Its user-facing product docs (`docs/manifest.md`) gain the new fields when the impl lands — the
-    Cotal repo carries no design records (its `docs/` is product/protocol only), so this record
-    lives here.
-  - **Config/data → this repo** (`nix-config/agents/cotal/`, beside `channels.json` /
-    `service-map.json`): Matt's actual wave `cotal.yaml` (with per-agent `placement`) and the
-    layout-map values seeded from his live layout. No wave-specific config lands in the Cotal repo.
+- **Deliverables (mechanism vs config):** the split is the spine of this record — see the
+  **Boundary** section below. The manager *mechanism* ships to the Cotal fork; the *tab-layout
+  config* lives here.
+
+## Boundary — Cotal zellij manager (mechanism) vs Matt's config (data)
+
+The Cotal zellij manager is a **tenant-agnostic mechanism**: it knows how to place a pane into a
+*named* tab with a shape, and how to turn a *layout map* into a full-session KDL layout. It
+hardcodes **no** tab names, no lane→tab groupings, no pane counts, no stack shape — nothing
+wave-specific. Every one of those is **Matt's config**, which the manager only *executes*. The
+live 8-tab wave shape in *Problem* below is an **example of that config**, never something the
+manager knows.
+
+| **Cotal zellij manager — mechanism** (`sealedsecurity/Cotal`) | **Matt's config — data** (`nix-config/agents/cotal/`) |
+| --- | --- |
+| `Placement` seam, driver pane primitives, `ZellijRuntime.spawn` placement branch | *which* tab each agent lands in and its shape (`stacked`/`floating`/split) — per-agent `placement` **values** |
+| layout-map **schema** + **KDL generator** (`seedFromDump`, `generateKdl`) | layout-map **values** — tabs, names, lane groupings, pane counts (seeded from the live dump) |
+| `runtime: zellij` enablement + `placement` field **plumbing** through the manifest chain | `runtime: zellij` selection + the actual agent list, in the wave `cotal.yaml` |
+
+**Mechanism → the Cotal fork** (zellij extension, branch `zheng-zellij-runtime`, committed
+`21eb389`): every mechanism cited below exists in that fork today or is a named extension of a
+cited symbol; its product docs (`docs/manifest.md`) gain the new fields when the impl lands, and
+the Cotal repo carries no design records (`docs/` is product/protocol) — so this record lives here.
+**Config → this repo** (`nix-config/agents/cotal/`, beside `channels.json` / `service-map.json`):
+the wave `cotal.yaml` (per-agent `placement`) and the layout-map values. No wave-specific config
+ever lands in the Cotal repo.
 
 ## Problem / Intent
 
 The Cotal `zellij` runtime spawns **one agent → one fresh tab** — a mechanical port of the tmux
 one-window-per-agent shape (`ZellijRuntime.spawn`, `extensions/zellij/src/runtime.ts:47-107`;
 `openTab(...focus:false)` at `:62`). Matt's live wave groups lanes into **tabs** and **stacks**
-many agents inside one tab (live capture: 8 tabs — `sealed/zireael` STACKED 14 panes,
+many agents inside one tab — **that grouping is Matt's config, not the manager's** (live capture:
+8 tabs — `sealed/zireael` STACKED 14 panes,
 `services` STACKED 11, `upstream` STACKED 3, `woodpecker`/`compass` STACKED 2, `omp`/`supervisor`/
 `backend` single). Three needs the current shape can't meet:
 
@@ -263,9 +278,11 @@ source. Lands on this branch; the mechanism (T1–T7) must be on the fork first 
   --runtime zellij` + placement (fresh sessions, re-orient from the tracker) in this work. Real
   transcript-resume is a **separate later feature**, bounded by the resume ground truth above
   (fork #159); it does not change the routing model.
-- **D2 — Data vs mechanism split.** Schema + generator + seam ship in the Cotal fork; the wave map +
-  `cotal.yaml` data live here in `nix-config/agents/cotal/` beside `channels.json`. No wave-specific
-  config in the Cotal repo; no design records in the Cotal repo (its `docs/` is product/protocol).
+- **D2 — Tenant-agnostic manager; the tab layout is config.** The zellij manager ships a *generic*
+  placement seam + layout-map schema + KDL generator to the Cotal fork and hardcodes no tab names,
+  groupings, or pane counts. The actual tab layout — the wave map + `cotal.yaml` — is Matt's config,
+  here in `nix-config/agents/cotal/` beside `channels.json`. No wave-specific config or design
+  records in the Cotal repo (its `docs/` is product/protocol). Full split: see **Boundary** above.
 
 ## Open questions
 
