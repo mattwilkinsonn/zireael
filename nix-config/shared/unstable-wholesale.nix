@@ -57,7 +57,7 @@
           lib.optionalAttrs prev.stdenv.hostPlatform.isDarwin {
             graphite-cli = prev.graphite-cli.overrideAttrs (old: {
               dontFixup = true;
-              postInstall = "export HOME=$(mktemp -d)\n" + old.postInstall;
+              postInstall = "export HOME=$(mktemp -d)\n" + (old.postInstall or "");
             });
           }
         )
