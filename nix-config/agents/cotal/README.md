@@ -15,7 +15,9 @@ copied into each wave workspace's `.cotal/` (gitignored, resolves only at runtim
 
 | File | What |
 | --- | --- |
-| `channels.json` | Channel registry: `announcements` (24h replay) + the 11 `#svc.<name>` service channels (7d replay). Per-issue `#coordination.<issue>` channels are created live, not seeded. |
+| `channels.json` | Channel registry: `announcements` (24h replay) + the 11 `#svc.<name>` service channels (7d replay). Per-issue `#coordination.<issue>` channels are created live, not seeded. Read by the manual bring-up (`cotal up --channels`); its cards are mirrored into `cotal.yaml`'s `channels:` for the manifest path. |
+| `cotal.yaml` | Wave mesh **manifest** (`kind: Mesh`, `runtime: zellij`) for the one-command zellij-spawner restart — `cotal up -f cotal.yaml` stands up the broker, the same channel set, and the standing agents, each placed into its lane tab. The config half of `docs/designs/agents/zellij-runtime-placement.md` (T8). A seed Matt edits, never frozen. |
+| `layout-map.json` | Fresh-boot zellij layout seed (the `LayoutMap` the fork's `generateKdl` turns into a full-session `zellij --layout` file), generated from the live `dump-layout` via `seedFromDump`. 8 tabs mirroring the live wave. |
 | `agents/supervisor.md` | The generic supervisor persona (routes work, owns the tracker, authors personas). |
 | `agents/_worker-template.md` | Worker persona template (copy → `agents/<name>.md`). |
 | `agents/worker-impl.md` | One concrete worker proving the template fills in. |
@@ -82,7 +84,32 @@ Same files, **no minting**. Open mode enforces **no ACLs** — channel scoping a
 gate are advisory only (any session can post/join anything). Use it to validate the *flow*; only
 auth mode validates the *fence*.
 
-## 5. What auth mode enforces vs what convention enforces
+## 5. Manifest bring-up — one-command zellij-spawner wave restart
+
+`cotal.yaml` is the wave as a single manifest, for the zellij-spawner restart from
+`docs/designs/agents/zellij-runtime-placement.md`. After an OMP update, instead of minting +
+launching each session by hand (§2), stand up the whole wave into its lane-tab layout at once:
+
+```sh
+cotal up -f ~/.cotal-config/cotal.yaml            # broker + channels + every agent, placed
+cotal up -f ~/.cotal-config/cotal.yaml --dry-run  # validate + print the plan, change nothing
+```
+
+`runtime: zellij` makes the manager spawn each agent through the zellij runtime — every agent lands
+in its `placement.tab` (created on demand) as a stacked pane, rather than one fresh tab per agent.
+`layout-map.json` beside it is the fresh-boot layout seed (`generateKdl` → `zellij --layout`).
+
+**Posture note:** this path uses the **manager-driven spawn** (`cotal up -f` boots the agents),
+unlike §2's manual mint+launch — the two are alternate bring-ups of the same wave, not both live at
+once. The manifest is a **seed Matt edits freely** (the tab set is fluid; placement groups lanes
+into tabs many-to-one; ad-hoc tabs keep working) — never a frozen roster. Add service owners (one
+per `svc.<name>`, from `_service-owner-template.md`) and workers under `agents:` as the wave grows.
+
+**Keep in sync:** `cotal.yaml`'s `channels:` block mirrors `channels.json` (same cards + replay
+knobs) — edit both when a channel's card changes, or the two bring-ups drift. The channel set is
+the shared contract; only the *agent-launch* half differs between them.
+
+## 6. What auth mode enforces vs what convention enforces
 
 | Invariant | Enforced by |
 | --- | --- |
@@ -94,7 +121,7 @@ auth mode validates the *fence*.
 | 2 — supervisor never polls | **Convention + presence design** (status is ambient). |
 | Presence honesty, message grammar | **Convention** (prompt-facing, advisory). |
 
-## 6. Per-service owners
+## 7. Per-service owners
 
 Eleven long-lived, mostly-dormant owner agents (one per service) sit in `#svc.<name>` channels as
 first point-of-contact + reviewer + spec-owner for their service. Routing (`service-map.json`):
@@ -110,10 +137,11 @@ first point-of-contact + reviewer + spec-owner for their service. Routing (`serv
 Path resolution is most-specific-wins by `priority` (woodpecker's nix/ci paths outrank
 nix-infra/ci-build), so a path resolves to exactly one owner before the all-channels rule applies.
 
-## 7. Teardown
+## 8. Teardown
 
-An agent ends by its session exiting (no mesh despawn — no manager). `cotal down` tears down the
-mesh.
+Under the manual bring-up (§2) an agent ends by its session exiting — there is no manager, so no
+mesh despawn. Under the manifest bring-up (§5) the manager that `cotal up -f` started owns the
+agents, so it despawns them on teardown. Either way, `cotal down` tears down the whole mesh.
 
 ## Nix wiring — canonical `~/.cotal-config` + per-workspace `.cotal/`
 
