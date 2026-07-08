@@ -711,7 +711,11 @@ in
   '';
 
   # cotal: our fork of the Cotal mesh (https://github.com/sealedsecurity/Cotal, branch
-  # zheng-connector-oh-my-pi). Build-from-source gives BOTH halves of using Cotal with oh-my-pi:
+  # sealed-fork). sealed-fork is our long-lived INTEGRATION/DEPLOY branch — it octomerges our
+  # upstream-shaped feature branches (zheng-connector-upstream = the oh-my-pi connector,
+  # zheng-zellij-runtime = per-agent placement) so this build gets every feature at once. The
+  # feature branches open into upstream Cotal-AI/Cotal individually; sealed-fork is never PR'd
+  # upstream. Build-from-source gives BOTH halves of using Cotal with oh-my-pi:
   #   1. the `cotal` CLI (`cotal up --open`, `join`, …) — the mesh you connect to. Shimmed onto
   #      PATH below (writeShellScriptBin "cotal") since the repo has no packaged bin; it runs via
   #      `tsx bin/cotal.ts`.
@@ -724,7 +728,7 @@ in
   # Iteration while it settles: edit in the fork → commit+push the branch → nix-switch rebuilds.
   home.activation.installCotalOmpExtension = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
     CO_REPO="https://github.com/sealedsecurity/Cotal.git"
-    CO_BRANCH="zheng-connector-oh-my-pi"
+    CO_BRANCH="sealed-fork"
     CO_SRC="$HOME/.local/src/cotal"
     CO_BUNDLE="$CO_SRC/extensions/connector-oh-my-pi/dist/extension.bundle.js"
     mkdir -p "$HOME/.local/src"
