@@ -40,6 +40,28 @@
 {
   _module.args.pkgs = lib.mkForce (
     import inputs.nixpkgs-unstable {
+      overlays = [
+        # graphite-cli 1.8.6 is broken on darwin two ways (nixpkgs ships a
+        # prebuilt vercel/pkg binary since 1.8): fixupPhase strips the binary
+        # and corrupts its appended virtual filesystem (runtime "Pkg: Error
+        # reading from file."), and the `gt completion` run in postInstall
+        # exits 1 with no output because gt creates ~/.config on startup and
+        # the sandbox HOME is unwritable — the resulting zero-size completion
+        # file fails installShellCompletion and the whole build. The package
+        # is unfree so Hydra never builds it; it's compiled locally on every
+        # Mac nix-switch and thus always hits this. Fix mirrors upstream
+        # nixpkgs PR #538544 (skip fixup, give completion gen a writable
+        # HOME); drop this overlay once that merges into nixpkgs-unstable.
+        (
+          _: prev:
+          lib.optionalAttrs prev.stdenv.hostPlatform.isDarwin {
+            graphite-cli = prev.graphite-cli.overrideAttrs (old: {
+              dontFixup = true;
+              postInstall = "export HOME=$(mktemp -d)\n" + (old.postInstall or "");
+            });
+          }
+        )
+      ];
       inherit system;
       config = {
         allowUnfree = true;
