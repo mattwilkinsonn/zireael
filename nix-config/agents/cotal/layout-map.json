@@ -236,10 +236,8 @@
       "label": "backend",
       "panes": [
         {
-          "command": "node",
+          "command": "cotal",
           "args": [
-            "/home/mattw/.local/src/cotal/node_modules/.bin/../tsx/dist/cli.mjs",
-            "/home/mattw/.local/src/cotal/bin/cotal.ts",
             "up",
             "--open"
           ]
