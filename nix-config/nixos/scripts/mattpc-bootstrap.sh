@@ -163,8 +163,8 @@ Next steps:
      Create the owner keys, converge to sign, enroll with Microsoft's keys,
      then turn Secure Boot on in firmware. Leave it off until then.
   3. Remote OS-select for the Windows dual-boot (from any tailnet host):
-       efibootmgr -v                          # one-time: find "Windows Boot Manager" Boot#### number
-       sudo efibootmgr --bootnext <N> && sudo reboot
+       efibootmgr -v            # one-time: find "Windows Boot Manager", e.g. Boot0003* Windows Boot Manager
+       sudo efibootmgr --bootnext 0003 && sudo reboot   # 0003 = its Boot#### hex digits, no "Boot" prefix
      --bootnext is a UEFI one-shot: the next boot goes to Windows, then the
      firmware reverts to NixOS. A normal Windows restart afterward returns to
      NixOS (INSTALL.md §8).

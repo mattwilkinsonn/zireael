@@ -218,19 +218,22 @@ entry that boots under Secure Boot once Microsoft keys are enrolled (§7). Selec
 it with a genuine UEFI one-shot — no console needed:
 
 ```bash
-efibootmgr -v                                 # one-time: find the "Windows Boot Manager" Boot#### number
-sudo efibootmgr --bootnext <N> && sudo reboot
+efibootmgr -v    # one-time: find the "Windows Boot Manager" line, e.g. Boot0003* Windows Boot Manager
+sudo efibootmgr --bootnext 0003 && sudo reboot   # 0003 = the four Boot#### hex digits, no "Boot" prefix
 ```
 
-The firmware consumes `--bootnext` on the *next* boot only, then reverts to
-`BootOrder` (NixOS). So after the gaming session a normal Windows restart lands
-back in NixOS — the "game, then back to NixOS" flow, over SSH from anywhere on
-the tailnet.
+`--bootnext` takes the boot entry's `Boot####` id as its four hex digits (the
+`Boot0003*` in the `efibootmgr -v` listing → `0003`), not a decimal index. The
+firmware consumes it on the *next* boot only, then reverts to `BootOrder`
+(NixOS). So after the gaming session a normal Windows restart lands back in
+NixOS — the "game, then back to NixOS" flow, over SSH from anywhere on the
+tailnet.
 
 - **Manual fallback:** the firmware boot menu (**F11** at POST on this board)
   lists both disks / boot managers directly.
 - **Persistent default swap** (rarely needed): `sudo efibootmgr --bootorder
-  <N>,<rest…>` reorders the boot sequence; restore the NixOS-first order after.
+  0003,<rest…>` (same `Boot####` hex digits) reorders the boot sequence;
+  restore the NixOS-first order after.
 - systemd-boot's own menu and `bootctl` still switch between **NixOS
   generations** as before.
 

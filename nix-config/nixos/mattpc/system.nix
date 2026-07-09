@@ -23,8 +23,8 @@
   # so it boots under Secure Boot once Microsoft keys are enrolled). Pick
   # it over SSH with a genuine UEFI one-shot that reverts to NixOS after:
   #
-  #     efibootmgr -v                          # one-time: find its entry number
-  #     sudo efibootmgr --bootnext <N> && sudo reboot
+  #     efibootmgr -v                          # one-time: find the "Windows Boot Manager" line
+  #     sudo efibootmgr --bootnext 0003 && sudo reboot   # 0003 = its Boot#### hex digits
   #
   # The firmware consumes --bootnext on the next boot, then reverts to
   # BootOrder (NixOS) — the "game, then back to NixOS" flow. See INSTALL.md.
