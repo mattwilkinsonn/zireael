@@ -93,5 +93,5 @@ Durable instructions live here (`~/.agents/AGENTS.md`, tool-agnostic canonical l
 
 Available on demand:
 
-- Rules (read `rule://<name>` when the work matches): `red-green-testing`, `planning-evidence`, `pre-finish-checks`, `commit-conventions`, `enumerate-pr-review-surfaces`. Always-applied: `process-safety`. Auto-firing (TTSR trigger on retry config/calls): `no-retries`.
+- Rules (read `rule://<name>` when the work matches): `red-green-testing`, `planning-evidence`, `pre-finish-checks`, `commit-conventions`, `enumerate-pr-review-surfaces`, `never-block`. Always-applied: `process-safety`. Auto-firing (TTSR trigger on retry config/calls): `no-retries`.
 - Skills (read `skill://<name>` when relevant): `gt`, `github-pr-review`, `autonomous-review`, `ci-failure-triage`, `design`, `nix-hosts`, `multi-agent-wave`.
