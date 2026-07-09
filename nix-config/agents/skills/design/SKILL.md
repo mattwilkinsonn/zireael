@@ -58,7 +58,7 @@ questions to the human in a single `ask`** — never a Socratic
 one-question-per-turn loop, which is the main thing that makes heavier flows
 slow. The human answers once; the design is updated and frozen.
 
-## Open Questions: resolve or explicitly defer before the freeze
+## No merge with open questions (the pre-freeze gate)
 
 The merge freezes the record, and executing agents build against it as the
 contract — so an unresolved question in a merged record is an ambiguous
@@ -71,7 +71,7 @@ can merge:
   get the answer, and **fold it into the record as a Decision** — replace the
   question with the decided outcome — *before* the merge-freeze.
 - **Non-load-bearing** — explicitly marked as such, deferred with a rationale
-  (the fix is correct without it; it's an optional later optimization). This is
+  (the design is correct without it; it's an optional later optimization). This is
   a **documented deferral, not a blocker**: the record may merge with it, and
   the merge ratifies the deferral.
 
@@ -79,9 +79,9 @@ So at merge the `## Open Questions` section is empty or holds **only** explicit
 non-load-bearing deferrals — never a live load-bearing question. It's a
 **pre-merge staging area, not part of the frozen contract**.
 
-**There is no folding-in after merge.** The merged record is frozen
-(`sealed/AGENTS.md`: a later change ADDS a new record, never rewrites the merged
-one) — so a load-bearing question that reaches merge unresolved cannot be
+**There is no folding-in after merge.** The merged record is frozen — the sealed
+repo's `AGENTS.md` sets the convention: a later change ADDS a new record, never
+rewrites the merged one — so a load-bearing question that reaches merge unresolved cannot be
 patched in place afterward. Resolve it before the freeze, or defer it
 explicitly.
 
