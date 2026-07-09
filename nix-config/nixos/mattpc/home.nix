@@ -31,7 +31,6 @@
     slurp # region select
     brightnessctl
     playerctl
-    exfatprogs # fsck/mkfs for exfat USB sticks (udiskie mounts them)
   ];
 
   # Automount removable drives (USB sticks). The minimal Hyprland session
