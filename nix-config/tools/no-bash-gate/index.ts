@@ -29,6 +29,7 @@ export const ALLOWLIST: Record<string, string> = {
 	// nix bootstrap — runs on a fresh host BEFORE home-manager installs bun,
 	// or orchestrates nixos-rebuild / cross-host SSH, so bun isn't available.
 	"nix-config/nixos/scripts/mattpc-wsl-bootstrap.sh": "nix bootstrap, pre-bun",
+	"nix-config/nixos/scripts/mattpc-bootstrap.sh": "nix bootstrap, pre-bun",
 	"nix-config/shared/scripts/bootstrap-common.sh": "nix bootstrap, pre-bun",
 	"nix-config/shared/scripts/migrate-from-dotfiles.sh":
 		"one-shot nix migration, pre-bun",
