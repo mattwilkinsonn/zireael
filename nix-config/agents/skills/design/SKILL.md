@@ -48,15 +48,17 @@ artifact. Four short sections:
 - **Plan** — decomposed tasks (see Plan discipline).
 - **Tasks** — a checklist mirroring the plan.
 
-## Clarifications: batched, via the relay
+## Clarifications: batched, asked directly
 
 The `design` subagent is headless — it has **no `ask` tool** and cannot prompt
 the human. So it batches **all** open questions and assumptions into an **Open
 Questions** section of the record (and its returned summary), designing
-against a stated assumption rather than stalling. The **main agent relays those
-questions to the human in a single `ask`** — never a Socratic
-one-question-per-turn loop, which is the main thing that makes heavier flows
-slow. The human answers once; the design is updated and frozen.
+against a stated assumption rather than stalling. The **spawning agent then
+asks the human directly in a single `ask`** — batched and structured, every
+question with a recommendation — never a Socratic one-question-per-turn loop
+(the main thing that makes heavier flows slow), and never routed through a
+supervisor or coordinator (that buries the decision in a coordination
+stream). The human answers once; the design is updated and frozen.
 
 ## No merge with open questions (the pre-freeze gate)
 
@@ -67,7 +69,7 @@ can merge:
 
 - **Load-bearing** — an executor building against the frozen record would hit
   real ambiguity (which API, which value, which of two designs). It **blocks the
-  merge**. Ask the human directly (batched, via the `ask` relay — see above),
+  merge**. Ask the human directly (batched, via the `ask` tool — see above),
   get the answer, and **fold it into the record as a Decision** — replace the
   question with the decided outcome — *before* the merge-freeze.
 - **Non-load-bearing** — explicitly marked as such, deferred with a rationale
