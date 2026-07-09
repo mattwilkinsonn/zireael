@@ -63,6 +63,28 @@ These hold for every agent in a wave, both models:
 - **Never block — stay reachable.** Never sit in a blocking wait on a peer or a job (`irc wait`, `irc send await:true`, a blocking `job poll`) — it makes you deaf to steering, other peers' messages, and reassignment until that one thing lands, and two agents blocking on each other **deadlock** the wave. Instead **end your turn** (the harness delivers peer messages + job completions into your next turn) or poll non-blockingly (`irc inbox` / `job list`) and yield. A backgrounded wait you launch and yield from (e.g. `wait-for-reviews` via `bash async:true`) is fine — a foreground wait that holds the turn open is the banned thing. Full rule: `rule://never-block`.
 - **Hold your lane until it merges.** A PR gated on review/CI/the merge gate is **not** done — "done" = merged (or closed/dropped). It can still bounce back to you (bot re-review posts a P1/P2, CI goes red, the human requests changes), so stay present to auto-fix and re-drive it (`skill://autonomous-review`). Don't context-switch to new work or volunteer for a new lane while any PR you own can still bounce; only offer for new work when **every** lane you own is actually merged. Composes with never-block: yield the turn while you wait, but the gated lane stays yours across those yields. Full rule: `rule://hold-your-lane`.
 
+## Channel routing — where a message goes
+
+Pick the channel by **who must receive it**, not by what's convenient. The
+load-bearing fact: **every persona subscribes to `#announcements` standing**
+(it's in every `subscribe:` list), but `#coordination.>` and other `#svc.<name>`
+channels are only in `allowSubscribe` — an agent receives them **only after it
+`cotal_join`s**. So a channel an agent hasn't joined is invisible to it.
+
+| Message | Channel | Why |
+| --- | --- | --- |
+| Fleet-wide — every agent MUST see it (posture change, standing directive, wave-wide policy, critical CI gotcha, freeze) | **`#announcements`** (supervisor-authored) | The only channel with **universal** subscription. The durable backstop every agent reliably receives. |
+| Service incident / a PR touching a service | **`#svc.<name>`** — @mention the owner | The dormant owner subscribes to its own channel and wakes on mention (`docs/designs/agents/service-owners.md`). |
+| Active hand-off / planning among the agents on one issue | **`#coordination.<issue>`** | Scoped to the participants who joined it — **not** everyone. Ad-hoc per-issue, joined on demand. |
+| One-on-one detail, a question, a merge-ready confirmation, a judgment call for the supervisor | **DM** (or `anycast(role: …)`) | Point-to-point; reaches the target without broadcasting. |
+
+**The failure mode this prevents:** a fleet-wide directive posted to
+`#coordination.general` reaches only the agents already sitting in that channel —
+every agent not subscribed never sees it. `#coordination.general` is for active
+cross-agent coordination among the participants already there, **never** the place
+for "everyone needs to know X." If every agent must see it, it goes to
+`#announcements`.
+
 ## Codenames / personas
 
 Optional, human-facing only. Pick a codename theme with distinct first letters for eye-scanning if it helps you track agents. It is labeling for the supervisor, not a behavioral or memory difference between agents. Keep it out of commit messages, PR titles/descriptions, and code — with **one** deliberate exception: the `<codename>-` **prefix** on the branch name, which is the lane tag the supervisor reads to tell whose work a PR is (see Commit/submit policy above).
