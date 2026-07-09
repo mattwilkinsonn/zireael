@@ -40,9 +40,11 @@ For Matt-owned repos (`mattwilkinsonn/*`, `sealedsecurity/*`, nix-config, dotfil
 
 ## De-AI public prose by default
 
-Anything you write that a human other than Matt will read as Matt's own words — GitHub issues, PRs, review comments, mesh posts, commit bodies — gets a de-AI pass **before** you hand it over. It is not Matt's editing step and not something he should have to ask for. Draft freely, then strip the tells that read machine-written. It matters most on a first contribution to a repo, where the voice sets the impression.
+This is for **outbound** prose — anything a human other than Matt reads as Matt's own words on an **external/upstream** surface: issues, PRs, and comments on a repo he doesn't own, or any public post to strangers. That's where AI-tells cost him, especially on a first contribution where the voice sets the impression. Draft freely, then strip the tells **before** you hand it over. It is not Matt's editing step and not something he should have to ask for.
 
-The pass is a concrete edit, not a vague "write naturally" — that cluster of tells is what reads as AI, so name and cut them:
+**Scope — outbound only.** Internal work is exempt: `sealedsecurity/*` and `mattwilkinsonn/*` repos, nix-config, mesh/IRC posts to other agents, notes-to-self. Those are maintainer/working context (see *Repos: maintainer, not contributor*), not a first impression to a stranger. Don't burn edits de-AI-ing an internal status DM.
+
+The pass is a concrete edit, not a vague "write naturally" — this cluster of tells is what reads as machine-written, so name and cut them:
 
 - Em-dashes used as connective tissue, several to a paragraph. Prefer a period, comma, or parentheses.
 - Performative openers and reactions: "love this", "great question", "wild to watch", "excited to", "happy to".
@@ -53,7 +55,13 @@ The pass is a concrete edit, not a vague "write naturally" — that cluster of t
 - Hedge-and-pivot scaffolding: "That said,", "To be clear,", "Here's the thing,".
 - Restatement closers that repeat the point in a bow.
 
-No single one is banned — a human uses em-dashes and the occasional triad. It is the density and co-occurrence that gives it away. The bar: it reads like Matt wrote it.
+No single one is banned — a human uses em-dashes and the occasional triad. It's the density and co-occurrence that gives it away. Concrete before/after, an upstream PR comment:
+
+> **AI-tell draft:** "Great catch! This is a really elegant fix — clean, minimal, and correct. I love how it sidesteps the whole locking problem. That said, one small thought: could we perhaps add a test? Just to be safe. Either way, awesome work here!"
+>
+> **De-AI'd:** "Nice — sidestepping the lock entirely is cleaner than what I had in mind. Can we add a test for the empty-input case before merging?"
+
+The bar: it reads like Matt wrote it.
 
 ## Version control
 
