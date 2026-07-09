@@ -38,6 +38,23 @@ For Matt-owned repos (`mattwilkinsonn/*`, `sealedsecurity/*`, nix-config, dotfil
 
 **Trackers split by repo owner.** `sealedsecurity/*` work is tracked in **Linear** (team SEA; issues are `SEA-NNN`), **not** GitHub issues — file/update via the Linear MCP (`mcp__litellm_linear_save_issue`) and reference the `SEA-NNN` id in commit subjects and PR bodies (`Refs SEA-123` / `Closes SEA-123`). The push policy's "file issues on `sealedsecurity/*`" means the push-guard *permits* the API call, not that GitHub issues are the sealed tracker — "allowed" ≠ "the right place". Matt's **personal repos** (`mattwilkinsonn/*` — e.g. `zireael`, `oh-my-pi`) use **GitHub issues** (`github-issue_write`) as normal. Unsure which: the owner decides — `sealedsecurity` → Linear, otherwise GitHub.
 
+## De-AI public prose by default
+
+Anything you write that a human other than Matt will read as Matt's own words — GitHub issues, PRs, review comments, mesh posts, commit bodies — gets a de-AI pass **before** you hand it over. It is not Matt's editing step and not something he should have to ask for. Draft freely, then strip the tells that read machine-written. It matters most on a first contribution to a repo, where the voice sets the impression.
+
+The pass is a concrete edit, not a vague "write naturally" — that cluster of tells is what reads as AI, so name and cut them:
+
+- Em-dashes used as connective tissue, several to a paragraph. Prefer a period, comma, or parentheses.
+- Performative openers and reactions: "love this", "great question", "wild to watch", "excited to", "happy to".
+- Bolded phrase-fragments dropped mid-sentence for emphasis. A human bolds sparingly, not for rhythm.
+- Balanced "X, not Y" / "less about A than B" antithesis used as the default sentence shape.
+- Parenthetical flattery: "(nice work)", "(great catch)".
+- Rule-of-three lists where two items say it.
+- Hedge-and-pivot scaffolding: "That said,", "To be clear,", "Here's the thing,".
+- Restatement closers that repeat the point in a bow.
+
+No single one is banned — a human uses em-dashes and the occasional triad. It is the density and co-occurrence that gives it away. The bar: it reads like Matt wrote it.
+
 ## Version control
 
 - **Commit as Matt, push as the bot.** Commit + create branches freely; author/committer = Matt (per-repo email: `matt@sealedsecurity.com` for `sealedsecurity/*`, `mattwilki17@gmail.com` for `mattwilkinsonn/*`) with a `Co-Authored-By: seal <noreply@sealedsecurity.com>` trailer. You **may push/submit your own feature branches** over the seal-bot token and run the review loop to merge-ready (`skill://autonomous-review`) — `gt submit` (no `--ai`; you author the PR title + description). Branch name `<name>-<issue>-<short-desc>` (codename/lane-tag first in multi-agent work; no issue → `<name>-<short-desc>`; no `user/` prefix; solo work drops the codename). **Hard limits, push-guard-enforced: never push or force-push `main`, never merge (the human gate), never push/PR/issue outside `mattwilkinsonn/*` + `sealedsecurity/*`.** Identity + details: `rule://commit-conventions`.
