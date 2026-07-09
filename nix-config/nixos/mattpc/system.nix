@@ -116,5 +116,9 @@
 
   # Desktop niceties.
   services.fwupd.enable = true; # firmware updates
+  # Storage daemon for removable-drive automount. Enabled explicitly (not
+  # just pulled in incidentally) because the udiskie user service (home.nix)
+  # depends on it to mount hotplugged USB sticks in the Hyprland session.
+  services.udisks2.enable = true;
   fonts.enableDefaultPackages = true;
 }
