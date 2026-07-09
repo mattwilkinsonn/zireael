@@ -31,7 +31,21 @@
     slurp # region select
     brightnessctl
     playerctl
+    exfatprogs # fsck/mkfs for exfat USB sticks (udiskie mounts them)
   ];
+
+  # Automount removable drives (USB sticks). The minimal Hyprland session
+  # ships no file manager, so nothing triggers udisks to mount a hotplugged
+  # disk the way the installer ISO's GNOME desktop did — udiskie is that
+  # trigger. Runs as a user service under graphical-session.target; mounts
+  # to /run/media/mattw/<label>, pops a mako notification, no tray icon.
+  # Needs services.udisks2 system-side (system.nix).
+  services.udiskie = {
+    enable = true;
+    automount = true;
+    notify = true;
+    tray = "never";
+  };
 
   # Hyprland session config. `enable` writes ~/.config/hypr/hyprland.conf from
   # `settings`; the compositor + portals are enabled system-side (system.nix).
