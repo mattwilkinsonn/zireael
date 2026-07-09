@@ -53,10 +53,12 @@ artifact. Four short sections:
 The `design` subagent is headless — it has **no `ask` tool** and cannot prompt
 the human. So it batches **all** open questions and assumptions into an **Open
 Questions** section of the record (and its returned summary), designing
-against a stated assumption rather than stalling. The **main agent relays those
-questions to the human in a single `ask`** — never a Socratic
-one-question-per-turn loop, which is the main thing that makes heavier flows
-slow. The human answers once; the design is updated and frozen.
+against a stated assumption rather than stalling. The **spawning agent then
+asks the human directly in a single `ask`** — batched and structured, every
+question with a recommendation — never a Socratic one-question-per-turn loop
+(the main thing that makes heavier flows slow), and never routed through a
+supervisor or coordinator (that buries the decision in a coordination
+stream). The human answers once; the design is updated and frozen.
 
 ## No merge with open questions (the pre-freeze gate)
 
