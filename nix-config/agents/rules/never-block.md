@@ -45,3 +45,13 @@ That is not blocking: you start it, end your turn, and the harness wakes you wit
 the result. The banned thing is a **foreground** wait that holds the turn open and
 blinds you until it returns. If you are still holding the turn to watch something,
 it is a block — background it and yield.
+
+## Composes with `rule://hold-your-lane`
+
+Yielding a turn keeps you reachable, but it does **not** hand off your work. A PR
+you own that's still gated on review/CI/the merge gate stays your responsibility
+across every yield — `hold-your-lane` is the ownership half of the same coin.
+`never-block` is **how** you wait (background it, yield, don't hold the turn open);
+`hold-your-lane` is **what you stay responsible for** (your gated lane, until it
+actually merges). Don't read "end the turn and stay reachable" as "walk away and
+pick up new work."
