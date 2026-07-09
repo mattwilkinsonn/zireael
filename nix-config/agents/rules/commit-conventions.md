@@ -29,6 +29,8 @@ Use inline `code` for identifiers and paths — it renders well on hosted diffs 
 
 Commits are authored **and committed as Matt** — this keeps his contribution graph (co-author trailers don't earn squares; only author/committer do). Per-repo email: `matt@sealedsecurity.com` for `sealedsecurity/*`, `mattwilki17@gmail.com` for personal repos (`mattwilkinsonn/*`). Add an agent-attribution trailer: `Co-Authored-By: seal <noreply@sealedsecurity.com>`.
 
+**Corollary — commit author never signals a human takeover.** Because every agent commit is authored *as Matt*, the author/committer field carries **no** human-vs-agent signal: `Matt Wilkinson` on a PR head is the norm, not evidence Matt took the PR over by hand. To attribute a commit to an agent, read the **branch codename** (canonically the `<codename>-` prefix; some issue-first branches carry it as a `--<codename>` suffix, so check both ends) and/or the reflog in that agent's clone — **never** the author field. Misreading `author=Matt` as a human takeover has made supervisors wrongly stand agents down off their own live lanes.
+
 Issue assignee is **ownership, not edit-actor**. Agents act as Matt, so a wave issue an agent is working is **assigned to Matt** (`matt@sealedsecurity.com`). The `seal` bot user is only the *edit actor* — status changes, comments, and Linear writes land under `seal` (not Matt) so the audit trail is separable — but it is **never an assignee**. Never set `seal` (or any agent codename) as the assignee of an issue; agent↔issue mapping lives in the wave tracker, not the Linear assignee field. File new issues assigned to Matt (or unassigned if genuinely unowned).
 
 ## Push policy
