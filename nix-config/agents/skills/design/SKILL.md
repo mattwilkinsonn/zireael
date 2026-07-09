@@ -58,6 +58,33 @@ questions to the human in a single `ask`** — never a Socratic
 one-question-per-turn loop, which is the main thing that makes heavier flows
 slow. The human answers once; the design is updated and frozen.
 
+## Open Questions: resolve or explicitly defer before the freeze
+
+The merge freezes the record, and executing agents build against it as the
+contract — so an unresolved question in a merged record is an ambiguous
+contract. Screen the **Open Questions** section against one bar before the PR
+can merge:
+
+- **Load-bearing** — an executor building against the frozen record would hit
+  real ambiguity (which API, which value, which of two designs). It **blocks the
+  merge**. Route it to the human (through the supervisor, as one batched list),
+  get the answer, and **fold it into the record as a Decision** — replace the
+  question with the decided outcome — *before* the merge-freeze.
+- **Non-load-bearing** — explicitly marked as such, deferred with a rationale
+  (the fix is correct without it; it's an optional later optimization). This is
+  a **documented deferral, not a blocker**: the record may merge with it, and
+  the merge ratifies the deferral.
+
+So at merge the `## Open Questions` section is empty or holds **only** explicit
+non-load-bearing deferrals — never a live load-bearing question. It's a
+**pre-merge staging area, not part of the frozen contract**.
+
+**There is no folding-in after merge.** The merged record is frozen
+(`sealed/AGENTS.md`: a later change ADDS a new record, never rewrites the merged
+one) — so a load-bearing question that reaches merge unresolved cannot be
+patched in place afterward. Resolve it before the freeze, or defer it
+explicitly.
+
 ## Ship it as a reviewed PR
 
 The design record is reviewed **on a pull request**, not in a local buffer —
