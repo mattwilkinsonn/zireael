@@ -19,14 +19,15 @@ NVIDIA/Hyprland desktop working — all under Secure Boot.
 
 ## Global Constraints
 
-- **lanzaboote pinned to `v1.1.0`** (latest release, verified against the
-  GitHub releases feed on 2026-07-09), added as a flake input that
+- **lanzaboote pinned to `v1.1.0`**, added as a flake input that
   `follows` `nixpkgs-unstable` — matching how `disko` is wired, so its `lzbt`
   and the host's package set share the unstable channel.
 - **`sbctl` must be present in the enrollment environment.** It is not currently
-  in any package set (`shared/home.nix`, `shared/dev.nix`, `nixos/common.nix` —
-  confirmed absent). lanzaboote's own services reference `${pkgs.sbctl}`; the
-  manual key-gen/enroll steps need `sbctl` on the interactive shell too.
+  in any package set (`nix-config/shared/home.nix`, `nix-config/shared/dev.nix`,
+  `nix-config/nixos/common.nix` — confirmed absent). lanzaboote's own services
+  reference `${pkgs.sbctl}`; the manual key-gen/enroll steps need `sbctl` on the
+  interactive shell too, so t2 adds it (with `efibootmgr`) to the `mattpc` host
+  packages.
 - **Microsoft keys MUST be enrolled alongside the machine-owner keys.** Windows'
   `bootmgfw.efi` is Microsoft-signed, and — critically for this box — the **RTX
   4080's UEFI option-ROM / VBIOS is Microsoft-signed too**. Enrolling
@@ -50,7 +51,8 @@ NVIDIA/Hyprland desktop working — all under Secure Boot.
   stays off until the signed chain is in place, or the boot re-bricks.
 - **Attribution / VCS:** design record ships as its own PR, separate from the
   implementation; commit as Matt with the `Co-Authored-By: seal
-  <noreply@sealedsecurity.com>` trailer; `gt` workflow; never merge.
+  <noreply@sealedsecurity.com>` trailer; `gt` workflow. The implementation lands
+  in a later PR after this record is approved; a human performs each merge.
 
 ## Approach
 
@@ -115,7 +117,7 @@ machinery. The `efibootmgr --bootnext` path is strictly simpler and more robust.
 
 - **lanzaboote v1.1.0 module** (`nix/modules/lanzaboote.nix`, read directly):
   `boot.lanzaboote.{enable,pkiBundle,publicKeyFile,privateKeyFile,settings,
-  configurationLimit,allowUnsigned}`; `autoGenerateKeys.enable` runs
+  configurationLimit,allowUnsigned,measuredBoot}`; `autoGenerateKeys.enable` runs
   `${pkgs.sbctl}/bin/sbctl create-keys` (line 536); `autoEnrollKeys.{enable,
   includeMicrosoftKeys=true,autoReboot,allowBrickingMyMachine}` drives
   `sbctl enroll-keys … --microsoft` (line 569); brick-guard assertion line 420;
@@ -131,10 +133,11 @@ machinery. The `efibootmgr --bootnext` path is strictly simpler and more robust.
   (`pkgs/os-specific/linux/kernel/common-config.nix:858`); lanzaboote #319
   maintainer confirmation; the real risk is the Microsoft-signed GPU option-ROM
   at key enrollment, not module loading.
-- **Current repo state:** `nixos/mattpc/system.nix:31-47` (bootloader block);
-  `nixos/mattpc/INSTALL.md` §2, §6-8; `nixos/scripts/mattpc-bootstrap.sh`
-  step 7 (~line 162); `flake.nix:141-175` (`mattpc` nixosConfiguration already
-  imports `inputs.disko.nixosModules.disko` — lanzaboote slots in identically).
+- **Current repo state:** `nix-config/nixos/mattpc/system.nix:31-47` (bootloader
+  block); `nix-config/nixos/mattpc/INSTALL.md` §2, §6-8;
+  `nix-config/nixos/scripts/mattpc-bootstrap.sh` step 7 (~line 162);
+  `nix-config/flake.nix:141-175` (`mattpc` nixosConfiguration already imports
+  `inputs.disko.nixosModules.disko` — lanzaboote slots in identically).
 
 ## Plan
 
@@ -143,7 +146,7 @@ rewrites can't be validated apart from the config change). Tasks:
 
 ### t1 — Add the lanzaboote flake input + wire the module
 
-- Add to `flake.nix` inputs (after `disko`):
+- Add to `nix-config/flake.nix` inputs (after `disko`):
 
   ```nix
   lanzaboote = {
@@ -153,7 +156,7 @@ rewrites can't be validated apart from the config change). Tasks:
   ```
 
 - Add `inputs.lanzaboote.nixosModules.lanzaboote` to the `mattpc`
-  `nixosConfigurations` module list (`flake.nix:147-153`), beside
+  `nixosConfigurations` module list (`nix-config/flake.nix:147-153`), beside
   `inputs.disko.nixosModules.disko`.
 - Interfaces: consumes `inputs.lanzaboote`; produces the `boot.lanzaboote.*`
   option namespace on the `mattpc` host.
@@ -180,13 +183,19 @@ rewrites can't be validated apart from the config change). Tasks:
   Preserve `configurationLimit` intent via `boot.lanzaboote.configurationLimit`
   (defaults to `systemd-boot.configurationLimit`; set to `10` as today, or drop
   to inherit).
+- Add the enrollment/boot-select tools to the `mattpc` host packages —
+  `environment.systemPackages = [ pkgs.sbctl pkgs.efibootmgr ]` in
+  `nix-config/nixos/mattpc/system.nix` (neither is on PATH by default; the
+  manual D1 key flow needs `sbctl`, and the Windows boot-select needs
+  `efibootmgr`).
 - Rewrite the block's comment to describe the signed-chain + firmware-native
   Windows selection on its own terms (no historical "used to chainload"
   narrative in the shipped config).
 - Interfaces: consumes `boot.lanzaboote.{enable,pkiBundle,configurationLimit}`,
   `boot.loader.systemd-boot.enable` (forced off), `boot.loader.efi.canTouchEfiVariables`.
 - Acceptance: `mattpc` config evaluates; no reference to `windows.` /
-  `edk2-uefi-shell` remains; `grep` for them in `nixos/mattpc/` is empty.
+  `edk2-uefi-shell` remains; `grep` for them in `nix-config/nixos/mattpc/` is
+  empty; `sbctl` and `efibootmgr` are on PATH after a `nixos-rebuild switch`.
 
 ### t3 — Rewrite `INSTALL.md` §2 + §6-8 for the key + Secure-Boot sequence
 
@@ -196,6 +205,10 @@ rewrites can't be validated apart from the config change). Tasks:
   `sudo sbctl create-keys`, converge, `sudo sbctl verify`, firmware Setup Mode,
   `sudo sbctl enroll-keys --microsoft`, enable Secure Boot, confirm `bootctl
   status` shows `Secure Boot: enabled`.
+- `sbctl`/`efibootmgr` come from the `mattpc` host packages (t2), so they are on
+  PATH after the first `nixos-rebuild switch`; the D1 key steps run post-converge.
+  If a step is needed from the pre-switch installer, source it with `nix shell
+  nixpkgs#sbctl`.
 - §8: replace the `bootctl set-oneshot windows` remote OS-select flow with the
   `efibootmgr --bootnext <N>` flow (one-time entry discovery + the one-shot
   reboot), keeping the "auto-returns to NixOS" explanation.
