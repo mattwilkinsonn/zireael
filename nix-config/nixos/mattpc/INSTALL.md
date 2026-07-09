@@ -86,7 +86,36 @@ reboot
 
 Set the user password on first login (or via `nixos-install`'s prompt).
 
-## 6. Discover the Windows ESP handle, then the SSH boot-select
+## 6. Provision secrets + first converge
+
+On first boot, log in as `mattw` and run the bootstrap once:
+
+```bash
+bash ~/repos/zireael/nix-config/nixos/scripts/mattpc-bootstrap.sh
+# pass --auth-key <tskey> to skip the interactive tailscale login
+```
+
+It's the bare-metal analogue of `mattpc-wsl-bootstrap.sh` (single-phase — no
+Windows copy, no user migration). Idempotent, so re-run it if a step fails. It:
+
+1. Ensures `~/repos/zireael` (+ `privatefiles`) is cloned and jj-colocated.
+2. Writes both 1Password service-account tokens to
+   `~/.config/op/{service-account-token,team-service-account-token}` (mode
+   600) — **prompts you to paste each one**. These are what
+   `nixos/mattpc/home.nix` exports into the shell env; without them every
+   `op://`-backed secret (API keys, etc.) stays unloaded.
+3. Brings up this host's own tailscaled with `--ssh` (bare metal runs its own
+   daemon; WSL borrowed Windows').
+4. Re-converges (`nixos-rebuild switch --flake …#mattpc`) with the token in
+   env so the op-backed home-manager activations actually fire.
+5. Sets the `mattw` + `root` login/sudo passwords from a **single interactive
+   prompt** — stored nowhere, never in 1Password (the service-account token
+   must never be able to read the login password).
+
+Operator input at run time is exactly: the two service-account tokens, and the
+new login password (each prompted once).
+
+## 7. Discover the Windows ESP handle, then the SSH boot-select
 
 systemd-boot is the default (boots NixOS). Windows Boot Manager lives on Disk
 1's ESP; since that's a *different* disk, systemd-boot chainloads it through the
@@ -101,7 +130,7 @@ bundled edk2 UEFI Shell. The one-time discovery of Disk 1's ESP handle:
    directly boots Windows — a good confirmation.)
 4. Set that handle in `system.nix`:
    `boot.loader.systemd-boot.windows."windows".efiDeviceHandle = "FS1";`
-   (replacing `REPLACE-WITH-EDK2-FS-HANDLE`), then `nix-switch` (§7).
+   (replacing `REPLACE-WITH-EDK2-FS-HANDLE`), then `nix-switch` (§8).
 
 Now **Windows** is a normal entry in the systemd-boot menu. To switch **over
 SSH** without touching the console:
@@ -122,7 +151,7 @@ from anywhere on the tailnet. Default stays NixOS; Windows is a one-shot.
 - **Persistent default swap** (rarely needed): `bootctl set-default windows`
   (or a NixOS generation); `bootctl set-default @saved` clears it.
 
-## 7. Converge afterward
+## 8. Converge afterward
 
 `nix-switch` on this host is aliased to
 `sudo nixos-rebuild switch --flake ~/repos/zireael/nix-config#mattpc`.

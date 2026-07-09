@@ -485,3 +485,27 @@ EOF
 	unset password
 	echo "  mattw + root passwords rotated"
 }
+
+# Set the `mattw` + `root` login/sudo passwords from a single interactive
+# prompt. The password is read once into a local, piped straight to
+# `chpasswd`, and unset — it is stored nowhere and NEVER in 1Password.
+#
+# Deliberately NOT sourced from a 1P op:// reference: the service-account
+# token lives in a 600-perm file that home-manager loads into every
+# shell's env and that the bootstrap's `nixos-rebuild` preserves across
+# sudo (`--preserve-env=OP_SERVICE_ACCOUNT_TOKEN`). Its scope
+# (`op://Dev/...`) would cover a password item stored there, so a token
+# leak → `op read` → sudo/root password would be a trivial full-root
+# privesc. The login/sudo password must never be reachable via that
+# token, so it is prompted per-run and kept out of 1P entirely.
+set_user_root_password_interactive() {
+	step "Setting user + root login/sudo passwords"
+	local pw
+	read -rsp "  New login/sudo password for $USER (and root): " pw
+	echo
+	[ -n "$pw" ] || err "empty password — re-run and enter a password."
+	printf '%s:%s\n' "$USER" "$pw" | sudo chpasswd
+	printf 'root:%s\n' "$pw" | sudo chpasswd
+	unset pw
+	echo "  $USER + root passwords set"
+}
