@@ -1,6 +1,6 @@
 # Design: `mattpc` Secure Boot via lanzaboote
 
-Status: **draft** — open questions pending (see end)
+Status: **draft** — load-bearing questions decided; ready for review
 Domain: platform / bare-metal-boot
 
 ## Problem / Intent
@@ -175,7 +175,9 @@ rewrites can't be validated apart from the config change). Tasks:
   boot.loader.efi.canTouchEfiVariables = true;
   ```
 
-- Preserve `configurationLimit` intent via `boot.lanzaboote.configurationLimit`
+- Per D1, `autoGenerateKeys`/`autoEnrollKeys` are left off (keys are provisioned
+  manually via `sbctl`), so the block above is the complete lanzaboote config.
+  Preserve `configurationLimit` intent via `boot.lanzaboote.configurationLimit`
   (defaults to `systemd-boot.configurationLimit`; set to `10` as today, or drop
   to inherit).
 - Rewrite the block's comment to describe the signed-chain + firmware-native
@@ -190,11 +192,10 @@ rewrites can't be validated apart from the config change). Tasks:
 
 - §2: drop the edk2 `efiDeviceHandle` placeholder step entirely (no longer a
   config placeholder).
-- New §7 (replacing the edk2-handle discovery): the key provisioning + Secure
-  Boot enablement sequence — key generation, sign-verify (`sbctl verify`),
-  firmware Setup Mode, Microsoft-inclusive enrollment, enable Secure Boot,
-  confirm `bootctl status` shows `Secure Boot: enabled`. (Exact manual-vs-module
-  form pending OQ1.)
+- New §7 (replacing the edk2-handle discovery): the manual key sequence (D1) —
+  `sudo sbctl create-keys`, converge, `sudo sbctl verify`, firmware Setup Mode,
+  `sudo sbctl enroll-keys --microsoft`, enable Secure Boot, confirm `bootctl
+  status` shows `Secure Boot: enabled`.
 - §8: replace the `bootctl set-oneshot windows` remote OS-select flow with the
   `efibootmgr --bootnext <N>` flow (one-time entry discovery + the one-shot
   reboot), keeping the "auto-returns to NixOS" explanation.
@@ -209,22 +210,24 @@ rewrites can't be validated apart from the config change). Tasks:
 - Update the closing "Next steps" heredoc (~line 162) from
   `sudo bootctl set-oneshot windows && sudo reboot` to the `efibootmgr
   --bootnext <N>` mechanism, with the one-time entry-number discovery note.
-- If OQ1 selects a bootstrap-driven enrollment, add the key step here; otherwise
-  leave enrollment to INSTALL.md and only fix the Windows-select text.
-- Interfaces: shell text only; no new bootstrap logic unless OQ1 says so. (The
-  file is an allowlisted `.sh`; keep it bash, no new logic that would trip the
-  no-bash gate's intent.)
+- Enrollment stays in INSTALL.md (D1, manual `sbctl`), not the bootstrap — this
+  task only fixes the Windows-select text.
+- Interfaces: shell text only; no new bootstrap logic. (The file is an
+  allowlisted `.sh`; keep it bash, no new logic that would trip the no-bash
+  gate's intent.)
 - Acceptance: no `bootctl set-oneshot windows` in the script; the printed
   instruction matches INSTALL.md §8.
 
 ### t5 — Document the firmware recovery path
 
-- Add a short "Secure Boot recovery" subsection to INSTALL.md: how to disable
-  Secure Boot / clear keys from firmware on this board, and the CMOS-reset last
-  resort, so a POST-brick from enrollment is recoverable at the console.
-- Interfaces: prose; the exact keystroke/menu depends on OQ2 (board model).
-- Acceptance: a reader who bricks POST during enrollment has a documented way
-  back.
+- Add a short "Secure Boot recovery" subsection to INSTALL.md for the **MSI PRO
+  Z690-A** (see D2): enter BIOS with **Del**, **F7** for Advanced Mode, disable
+  Secure Boot / manage keys under **Settings → Security → Secure Boot**; and the
+  last-resort **JBAT1** clear-CMOS jumper (pins 1-2 → 2-3, then back) if
+  enrollment bricks POST.
+- Interfaces: prose; board-specific steps from D2 (MSI PRO Z690-A).
+- Acceptance: a reader who bricks POST during enrollment has a documented,
+  board-specific way back (firmware SB-disable and the JBAT1 reset).
 
 ## Tasks
 
@@ -236,40 +239,42 @@ rewrites can't be validated apart from the config change). Tasks:
 - [ ] t4 — `mattpc-bootstrap.sh` step 7 + heredoc rewritten
 - [ ] t5 — firmware recovery path documented
 
-## Open Questions
+## Decisions
 
-- **OQ1 (load-bearing): manual `sbctl` steps vs lanzaboote's key
-  automation.** The config + INSTALL.md flow differs depending on this.
-  - *Option A — manual (recommended):* leave `autoGenerateKeys`/`autoEnrollKeys`
-    off; INSTALL.md documents explicit `sudo sbctl create-keys`, converge,
-    `sudo sbctl enroll-keys --microsoft` (in firmware Setup Mode), then enable
-    Secure Boot. Transparent, matches lanzaboote's canonical docs, easy to debug
-    a failed enrollment step-by-step. One-time, done at the console during
-    install anyway.
-  - *Option B — module automation:* `boot.lanzaboote.autoGenerateKeys.enable =
-    true; autoEnrollKeys.enable = true;` (`includeMicrosoftKeys` stays default
-    `true`; the brick-guard assertion is active). Fewer manual commands, but
-    enrollment fires from a boot service when the firmware is in Setup Mode,
-    which is less obvious to reason about, and `autoReboot` behavior needs a
-    decision. **Recommendation: A** — one-time cost, maximal clarity, least
-    surprising; keep B's options documented as the alternative.
+- **D1 (was OQ1) — manual `sbctl` key flow.** `autoGenerateKeys` and
+  `autoEnrollKeys` stay **off**. INSTALL.md documents explicit console steps at
+  install time: `sudo sbctl create-keys`, converge (`nixos-rebuild switch` so
+  lanzaboote signs the generation with the new keys), `sudo sbctl verify` to
+  confirm every ESP file is signed, put the firmware in Setup Mode, `sudo sbctl
+  enroll-keys --microsoft` (Microsoft keys included — mandatory for the Windows
+  loader and the RTX 4080 option-ROM), then enable Secure Boot in firmware and
+  confirm `bootctl status` reports `Secure Boot: enabled`. Rationale: one-time,
+  transparent, matches lanzaboote's canonical docs, and a failed enrollment is
+  debuggable step-by-step. The module-automation path
+  (`autoGenerateKeys.enable`/`autoEnrollKeys.enable`) is the documented
+  alternative but is not used.
 
-- **OQ2 (load-bearing): the exact motherboard model**, to write the precise
-  firmware Secure-Boot-disable / clear-keys recovery steps in t5. It's the
-  i9-14900KS + RTX 4080 gaming PC. **Recommendation: confirm the board vendor +
-  model** (e.g. from `sudo dmidecode -s baseboard-product-name` on the running
-  WSL host, or Matt's memory) so t5 documents the real keystroke, not a generic
-  one.
+- **D2 (was OQ2) — board is MSI PRO Z690-A (LGA1700).** The firmware recovery
+  path in t5 is written for this board specifically:
+  - Enter BIOS: **Del** at POST; **F7** toggles Advanced Mode.
+  - Secure Boot: **Settings → Security → Secure Boot** (disable / manage keys
+    here).
+  - Last-resort key/CMOS reset: the **JBAT1** clear-CMOS jumper — move the cap
+    from pins **1-2 to 2-3** briefly, then back (power connector may stay
+    plugged in per MSI). Adjacent to the CMOS battery near the board's bottom
+    edge. This clears Secure Boot state / custom keys if enrollment bricks POST.
 
-- **OQ3 (non-load-bearing, deferred): drop the EDK2 UEFI shell entry entirely.**
-  It is dead under Secure Boot and no longer generated once systemd-boot is
-  forced off, so t2 removes it regardless. No emergency-shell replacement is
-  planned (an unsigned rescue shell can't run under SB anyway; console firmware
-  menu + the USB installer are the rescue path). Documented deferral: the design
-  is correct without a shell entry.
+## Deferrals
 
-- **OQ4 (non-load-bearing, deferred): Measured Boot / TPM sealing**
-  (`boot.lanzaboote.measuredBoot`, PCR policy, LUKS auto-cryptenroll). Out of
+- **Drop the EDK2 UEFI shell entry entirely (non-load-bearing).** It is dead
+  under Secure Boot and no longer generated once systemd-boot is forced off, so
+  t2 removes it regardless. No emergency-shell replacement is planned (an
+  unsigned rescue shell can't run under SB anyway; the console firmware menu +
+  the USB installer are the rescue path). The design is correct without a shell
+  entry.
+
+- **Measured Boot / TPM sealing (non-load-bearing).**
+  (`boot.lanzaboote.measuredBoot`, PCR policy, LUKS auto-cryptenroll.) Out of
   scope — this host's disko layout is unencrypted btrfs, so there's nothing to
-  seal. Documented deferral; a later record can add measured boot if disk
-  encryption is ever introduced.
+  seal. A later record can add measured boot if disk encryption is ever
+  introduced.
