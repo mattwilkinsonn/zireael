@@ -371,3 +371,77 @@ describe("classify", () => {
 		).toBe("done");
 	});
 });
+
+// ─── fail-closed on unresolved head (empty head SHA) ─────────────────────
+// Regression: head === "" made classify()'s `cbody.includes(head)` always
+// true (String.includes("")), so every commenting bot false-matched the head
+// — a false all-clear, the worst output for a review gate. The gate must fail
+// LOUD on an unresolved head, never emit a verdict. Two layers: runOnce aborts
+// before classify (exit 1); classify itself returns the blocking verdict as
+// defense-in-depth. Each test below FAILS on the pre-guard code and PASSES
+// after.
+describe("fail-closed on empty head", () => {
+	// classify — comment-keyed bots (the always-true `includes("")` path): must
+	// NOT be reported done on an empty head. Pre-guard these returned "done".
+	test("coderabbitai with empty head → pending, never done", () => {
+		const comments = [comment("coderabbitai", "Reviewed some commit")];
+		expect(classify("coderabbitai", { reviews: [], comments, head: "" })).toBe(
+			"pending",
+		);
+	});
+
+	test("greptile-apps with empty head → pending, never done", () => {
+		const comments = [comment("greptile-apps", "a review summary")];
+		expect(classify("greptile-apps", { reviews: [], comments, head: "" })).toBe(
+			"pending",
+		);
+	});
+
+	// classify — formal-review bots yield no usable verdict on an empty head
+	// either: a real-head review must not be salvaged into done/stale. Pre-guard
+	// these returned "stale" (revHead=0 against ""), a misleading non-blocking-ish
+	// signal; the guard forces the blocking "pending".
+	test("cubic-dev-ai with empty head → pending even with a review present", () => {
+		const reviews = [review("cubic-dev-ai", "abc1234")];
+		expect(classify("cubic-dev-ai", { reviews, comments: [], head: "" })).toBe(
+			"pending",
+		);
+	});
+
+	test("codex with empty head → pending even with a review present", () => {
+		const reviews = [review("chatgpt-codex-connector", "abc1234")];
+		expect(
+			classify("chatgpt-codex-connector", { reviews, comments: [], head: "" }),
+		).toBe("pending");
+	});
+
+	// runOnce — the load-bearing gate fix: tern off AND gh-route head-sha empty
+	// → abort loud (exit 1), never a false all-clear (pre-guard: looped to the
+	// backstop and returned 0).
+	test("runOnce aborts (exit 1) when tern + gh-route both give empty head", async () => {
+		const { deps, cap } = makeDeps(["305", "--repo=owner/repo"], {
+			ghRoute: async (cmd) => (cmd === "head-sha" ? "" : "[]"),
+		});
+		expect(await runOnce(deps)).toBe(1);
+		expect(cap.err.join("\n")).toContain("failing closed");
+	});
+
+	// runOnce — whitespace-only head is empty after trim: same abort.
+	test("runOnce aborts (exit 1) when gh-route head is whitespace only", async () => {
+		const { deps, cap } = makeDeps(["305", "--repo=owner/repo"], {
+			ghRoute: async (cmd) => (cmd === "head-sha" ? "  \n" : "[]"),
+		});
+		expect(await runOnce(deps)).toBe(1);
+		expect(cap.err.join("\n")).toContain("failing closed");
+	});
+
+	// runOnce — no over-correction (condition #3): tern off but gh-route
+	// resolves a real head → proceed normally, never exit 1.
+	test("runOnce proceeds when gh-route resolves the head (tern off)", async () => {
+		const { deps } = makeDeps(["305", "--repo=owner/repo"], {
+			ghRoute: async (cmd) =>
+				cmd === "head-sha" ? "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef" : "[]",
+		});
+		expect(await runOnce(deps)).not.toBe(1);
+	});
+});

@@ -24,6 +24,7 @@
 //
 // Exit codes:
 //   0 - reviews ready, or backstop reached (proceed either way)
+//   1 - head SHA unresolved (tern + gh-route both empty) — failed closed
 //   2 - bad arguments (usage)
 
 import { $ } from "bun";
@@ -180,6 +181,10 @@ function classify(
 	ctx: { reviews: unknown[]; comments: unknown[]; head: string },
 ): Verdict {
 	const { reviews, comments, head } = ctx;
+	// Fail-closed: an empty head must never yield "done". `cbody.includes("")`
+	// is always true, so without this guard every commenting bot false-matches
+	// the head — a false all-clear. Return the blocking verdict, never "done".
+	if (head === "") return "pending";
 	const byBot = reviews.filter((r) => normLogin(r) === bot);
 	const revAny = byBot.length;
 	const revHead = byBot.filter(
@@ -280,6 +285,18 @@ async function runOnce(deps: Deps): Promise<number> {
 	if (head === "") {
 		head = (await deps.ghRoute("head-sha", pr, repo)).trim();
 		state = null;
+	}
+
+	// Fail-closed: a review-gate tool that cannot resolve the head MUST NOT
+	// emit a verdict. With head === "" the classifier's `cbody.includes(head)`
+	// is always-true (String.includes("")), so every commenting bot would be
+	// misreported "done" — a false all-clear, the worst output for a gate.
+	// tern down AND gh-route head-sha empty → abort loud; never classify() on "".
+	if (head === "") {
+		err(
+			`wait-for-reviews: could not resolve head SHA for ${repo}#${pr} (tern + gh-route both empty); failing closed — ground per-surface review state in the GitHub API on the real head SHA`,
+		);
+		return 1;
 	}
 
 	log(
