@@ -53,4 +53,4 @@ You write the PR title and description yourself — **never `--ai`**. Graphite's
 
 ## Branch naming
 
-`<name>-<issue>-<short-desc>` — codename/lane-tag first in multi-agent work (the **one** place a persona name belongs — never in the subject/body, PR content, or code), then the issue ref, then a short kebab description (e.g. `hudson-sea-865-aws-provider`). No issue → `<name>-<short-desc>` (e.g. `cook-compass-scaffold`). No `user/` prefix; solo work drops the codename.
+`<name>-<issue>-<short-desc>` — codename/lane-tag first in multi-agent work (the **one** place a persona name belongs — never in the subject/body, PR content, or code), then the issue ref, then a short kebab description (e.g. `hudson-sea-865-aws-provider`). No issue → `<name>-<short-desc>` (e.g. `cook-compass-scaffold`). No `user/` prefix; solo work drops the codename. A minority of issue-first branches instead carry the codename as a trailing `--<codename>` suffix (e.g. `sea-865-aws-provider--hudson`); both forms are valid, so when attributing a branch to an agent (per the Attribution corollary above) check **both ends**.
