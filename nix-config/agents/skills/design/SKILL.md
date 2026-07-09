@@ -67,7 +67,7 @@ can merge:
 
 - **Load-bearing** — an executor building against the frozen record would hit
   real ambiguity (which API, which value, which of two designs). It **blocks the
-  merge**. Route it to the human (through the supervisor, as one batched list),
+  merge**. Ask the human directly (batched, via the `ask` relay — see above),
   get the answer, and **fold it into the record as a Decision** — replace the
   question with the decided outcome — *before* the merge-freeze.
 - **Non-load-bearing** — explicitly marked as such, deferred with a rationale
