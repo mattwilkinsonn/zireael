@@ -7,44 +7,42 @@
 {
   networking.hostName = "mattpc";
 
-  # ── Bootloader: systemd-boot + a chainloaded Windows entry ──────────
-  # NixOS owns Disk 0's ESP; systemd-boot is the default (boots NixOS).
-  # Windows' bootloader lives on Disk 1's 200 MB ESP — a *different* disk,
-  # and systemd-boot can't load a binary from another ESP directly. So we
-  # ship edk2-uefi-shell and register a "Windows" entry that chainloads
-  # Disk 1's Windows Boot Manager, giving one unified boot menu.
+  # ── Bootloader: lanzaboote (signed Secure Boot chain) ───────────────
+  # NixOS owns Disk 0's ESP. lanzaboote keeps systemd-boot as the boot
+  # manager but signs systemd-bootx64.efi and installs per-generation
+  # signed UKIs (EFI/Linux/nixos-generation-*.efi) with the machine-owner
+  # keys under pkiBundle, so the firmware accepts the chain under Secure
+  # Boot. Enabling it sets boot.loader.external.enable internally, which
+  # is mutually exclusive with the in-tree systemd-boot installer — hence
+  # systemd-boot.enable = mkForce false. Keys are provisioned manually via
+  # sbctl at install time (INSTALL.md §7); autoGenerateKeys/autoEnrollKeys
+  # stay off.
   #
-  # SSH boot-select (the requirement): default stays NixOS; a one-shot
-  # reboot into Windows that auto-returns afterward:
+  # Windows dual-boot: selected via its own firmware-native "Windows Boot
+  # Manager" UEFI entry on Disk 1's ESP (bootmgfw.efi is Microsoft-signed,
+  # so it boots under Secure Boot once Microsoft keys are enrolled). Pick
+  # it over SSH with a genuine UEFI one-shot that reverts to NixOS after:
   #
-  #     bootctl list                              # confirm the "Windows" entry
-  #     sudo bootctl set-oneshot windows && sudo reboot
+  #     efibootmgr -v                          # one-time: find its entry number
+  #     sudo efibootmgr --bootnext <N> && sudo reboot
   #
-  # set-oneshot applies to the next boot only, so after the gaming session
-  # the default (NixOS) is restored automatically — the "game, then back to
-  # NixOS" flow.
-  #
-  # AT INSTALL: efiDeviceHandle is a placeholder. Boot the edk2 shell entry
-  # once, run `map -c` to list filesystem handles, find the one whose
-  # `\EFI\Microsoft\Boot\bootmgfw.efi` exists (Disk 1's ESP), set
-  # efiDeviceHandle to it (e.g. "FS1"), and rebuild. See INSTALL.md.
-  boot.loader = {
-    systemd-boot = {
-      enable = true;
-      configurationLimit = 10; # cap kept generations (2 GiB ESP; NVIDIA kernels ~150 MB each)
-      windows."windows" = {
-        title = "Windows";
-        # REPLACE at install with the handle from edk2's `map -c` (see above).
-        efiDeviceHandle = "REPLACE-WITH-EDK2-FS-HANDLE";
-        sortKey = "y_windows"; # below NixOS entries, above the edk2 shell
-      };
-      edk2-uefi-shell = {
-        enable = true;
-        sortKey = "z_edk2";
-      };
-    };
-    efi.canTouchEfiVariables = true;
+  # The firmware consumes --bootnext on the next boot, then reverts to
+  # BootOrder (NixOS) — the "game, then back to NixOS" flow. See INSTALL.md.
+  boot.loader.systemd-boot.enable = lib.mkForce false;
+  boot.lanzaboote = {
+    enable = true;
+    pkiBundle = "/var/lib/sbctl";
+    configurationLimit = 10; # cap kept generations (2 GiB ESP; NVIDIA kernels ~150 MB each)
   };
+  boot.loader.efi.canTouchEfiVariables = true;
+
+  # Secure Boot key enrollment (sbctl) + Windows boot-select (efibootmgr).
+  # Neither is on PATH by default; the manual key flow (INSTALL.md §7) and
+  # the --bootnext Windows selection above both need them on the host.
+  environment.systemPackages = [
+    pkgs.sbctl
+    pkgs.efibootmgr
+  ];
 
   # Hibernate resumes from the disko-declared swap (resumeDevice = true).
   boot.kernelParams = [ ];

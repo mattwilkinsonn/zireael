@@ -159,10 +159,16 @@ Next steps:
        ssh mattw@mattpc.tail2be430.ts.net     # via tailnet
      (The personal SSH key is wired declaratively in nixos/common.nix —
      no manual authorized_keys step needed.)
-  2. Remote OS-select for the Windows dual-boot (from any tailnet host):
-       sudo bootctl set-oneshot windows && sudo reboot
-     A normal Windows restart afterward returns to NixOS (INSTALL.md §6).
-  3. (One-time per host) rclone config — set up the 'gdrive' remote so
+  2. Enable Secure Boot (lanzaboote keys + enrollment) — INSTALL.md §7.
+     Create the owner keys, converge to sign, enroll with Microsoft's keys,
+     then turn Secure Boot on in firmware. Leave it off until then.
+  3. Remote OS-select for the Windows dual-boot (from any tailnet host):
+       efibootmgr -v                          # one-time: find "Windows Boot Manager" Boot#### number
+       sudo efibootmgr --bootnext <N> && sudo reboot
+     --bootnext is a UEFI one-shot: the next boot goes to Windows, then the
+     firmware reverts to NixOS. A normal Windows restart afterward returns to
+     NixOS (INSTALL.md §8).
+  4. (One-time per host) rclone config — set up the 'gdrive' remote so
      Berkeley Mono fonts auto-sync. Without it, the syncBerkeleyMono
      activation prints a warning every nix-switch and Berkeley Mono
      falls back to JetBrains Mono.

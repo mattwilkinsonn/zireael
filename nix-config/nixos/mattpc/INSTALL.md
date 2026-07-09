@@ -41,18 +41,16 @@ ls -l /dev/disk/by-id/ | grep -i nvme
 
 Copy Disk 0's stable path, e.g. `/dev/disk/by-id/nvme-Samsung_SSD_980_PRO_2TB_<serial>`.
 
-## 2. Fill the two install-time placeholders
+## 2. Fill the install-time placeholder
 
 Clone the repo in the installer, then edit:
 
 - `nixos/mattpc/disko.nix` → set `device` to Disk 0's by-id path (replaces
   `REPLACE-WITH-DISK0-BY-ID`).
 
-The Windows boot entry's `efiDeviceHandle` is the second placeholder
-(`REPLACE-WITH-EDK2-FS-HANDLE` in `system.nix`), but it can't be filled until
-first boot — you discover it from the edk2 UEFI Shell (§6). Leave it as-is for
-now; the config evaluates with the placeholder, the entry just won't chainload
-until you set the real handle.
+That's the only install-time placeholder. The Windows dual-boot needs no config
+placeholder — it's selected through the firmware-native Windows Boot Manager
+entry (§8), not a chainloaded systemd-boot entry.
 
 ## 3. Partition + format + mount (disko)
 
@@ -86,6 +84,12 @@ reboot
 
 Set the user password on first login (or via `nixos-install`'s prompt).
 
+> **Secure Boot on a from-scratch install:** the flake has lanzaboote enabled,
+> so `nixos-install` signs the first generation and needs the keys present in
+> the target first. Create them into `/mnt` before running the install above —
+> see the reinstall note in §7. (Not needed for the already-installed machine,
+> which converges to lanzaboote in §7 step 2.)
+
 ## 6. Provision secrets + first converge
 
 On first boot, log in as `mattw` and run the bootstrap once:
@@ -115,43 +119,122 @@ Windows copy, no user migration). Idempotent, so re-run it if a step fails. It:
 Operator input at run time is exactly: the two service-account tokens, and the
 new login password (each prompted once).
 
-## 7. Discover the Windows ESP handle, then the SSH boot-select
+> **Next:** Secure Boot is a separate, later step (§7). Leave Secure Boot
+> **off** in firmware until the lanzaboote keys are enrolled, or the signed
+> chain isn't in place yet and the machine won't boot.
 
-systemd-boot is the default (boots NixOS). Windows Boot Manager lives on Disk
-1's ESP; since that's a *different* disk, systemd-boot chainloads it through the
-bundled edk2 UEFI Shell. The one-time discovery of Disk 1's ESP handle:
+## 7. Enable Secure Boot (lanzaboote keys + enrollment)
 
-1. Reboot and pick **EDK2 UEFI Shell** from the systemd-boot menu.
-2. `map -c` — lists the consistent filesystem handles (`FS0`, `FS1`, …).
-3. For each, check for the Windows bootloader at
-   `FS1:\EFI\Microsoft\Boot\bootmgfw.efi`.
-   Run `ls FS1:\EFI` first; the handle whose tree contains
-   `Microsoft\Boot\bootmgfw.efi` is Disk 1's ESP. (Running the `.efi` path
-   directly boots Windows — a good confirmation.)
-4. Set that handle in `system.nix`:
-   `boot.loader.systemd-boot.windows."windows".efiDeviceHandle = "FS1";`
-   (replacing `REPLACE-WITH-EDK2-FS-HANDLE`), then `nix-switch` (§8).
+The `mattpc` config boots through **lanzaboote**: systemd-boot and every NixOS
+generation are signed with machine-owner keys the firmware verifies under Secure
+Boot. Provision the keys, enroll them once (with Microsoft's), then turn Secure
+Boot on. Do this **after** the machine is installed, booted, and bootstrapped
+(§6), with Secure Boot still **off** in firmware.
 
-Now **Windows** is a normal entry in the systemd-boot menu. To switch **over
-SSH** without touching the console:
+> **Order matters — lanzaboote signs on every converge, so the keys must exist
+> before the first one.** On this already-installed machine, step 1 sources
+> `sbctl` transiently and creates the keys *before* step 2's converge (the
+> converge is what puts `sbctl` on PATH permanently and activates the signed
+> chain) — just follow the steps in order. On a *from-scratch reinstall*
+> lanzaboote is in the config from the start, so `nixos-install` itself signs:
+> create the keys into the target before §5 with
+> `nix shell nixpkgs#sbctl --command sudo sbctl create-keys`, then
+> `sudo mkdir -p /mnt/var/lib && sudo cp -a /var/lib/sbctl /mnt/var/lib/`.
+
+1. **Create the machine-owner keys.** `sbctl` isn't on PATH yet — it arrives
+   with the lanzaboote generation in step 2, but that generation can't sign
+   until the keys exist. Source `sbctl` transiently for this one step:
+
+   ```bash
+   nix shell nixpkgs#sbctl --command sudo sbctl create-keys
+   ```
+
+   Keys land in `/var/lib/sbctl` (the private key is root-only). Steps 3/5/7 use
+   the `sbctl` that step 2 puts on PATH permanently.
+
+2. **Converge so lanzaboote signs the current generation** with the new keys.
+   This also replaces the unsigned systemd-boot with the signed chain and puts
+   `sbctl` + `efibootmgr` on PATH:
+
+   ```bash
+   nix-switch    # = sudo nixos-rebuild switch --flake ~/repos/zireael/nix-config#mattpc
+   ```
+
+3. **Verify every ESP boot file is signed.** The kernels under `EFI/nixos/` are
+   expected to show *unsigned* — only the per-generation UKIs and systemd-boot
+   itself are signed:
+
+   ```bash
+   sudo sbctl verify
+   ```
+
+4. **Put the firmware in Setup Mode** (MSI PRO Z690-A): reboot, **Del** at POST,
+   **F7** for Advanced Mode, then **Settings → Security → Secure Boot**. Set
+   *Secure Boot Mode* to **Custom**, then under **Key Management** reset/delete
+   the **Platform Key (PK)** to enter Setup Mode. Leave Secure Boot itself
+   **disabled** for now. **F10** to save, boot back into NixOS.
+
+   > Do **not** choose "Clear/Delete all Secure Boot keys" wholesale — that also
+   > drops the Forbidden Signature Database (dbx). Reset only the PK.
+
+5. **Enroll the keys, including Microsoft's.** Mandatory on this box: Windows'
+   `bootmgfw.efi` *and* the RTX 4080's UEFI option-ROM are Microsoft-signed, and
+   owner-only keys can make the board refuse to POST:
+
+   ```bash
+   sudo sbctl enroll-keys --microsoft
+   ```
+
+6. **Enable Secure Boot** in firmware: reboot → **Del** → **Settings → Security
+   → Secure Boot** → set **Secure Boot** to *Enabled*, **F10** to save.
+
+7. **Confirm** from the booted system:
+
+   ```bash
+   bootctl status | grep -i 'secure boot'     # → Secure Boot: enabled (user)
+   ```
+
+### Secure Boot recovery (MSI PRO Z690-A)
+
+If enrollment leaves the board unable to POST, or NixOS won't boot under Secure
+Boot:
+
+- **Disable Secure Boot in firmware:** **Del** at POST → **F7** (Advanced) →
+  **Settings → Security → Secure Boot** → set **Secure Boot** to *Disabled*. An
+  unsigned NixOS install / USB boots again with Secure Boot off.
+- **Clear the custom keys** from that same **Secure Boot** menu (Key Management
+  → reset to factory defaults / delete custom keys) if the enrolled set is what
+  broke POST.
+- **Last resort — clear CMOS (JBAT1 jumper):** power off, move the **JBAT1** cap
+  from pins **1-2 to 2-3** for a few seconds, then back to **1-2**. JBAT1 is
+  next to the CMOS battery near the board's bottom edge. This resets all firmware
+  settings, including Secure Boot state and custom keys.
+
+## 8. Windows dual-boot: select over SSH
+
+Windows is on Disk 1 with its own ESP and its own Microsoft-signed
+`bootmgfw.efi`, so the firmware keeps a native **Windows Boot Manager** UEFI
+entry that boots under Secure Boot once Microsoft keys are enrolled (§7). Select
+it with a genuine UEFI one-shot — no console needed:
 
 ```bash
-bootctl list                              # confirm the "Windows" entry exists
-sudo bootctl set-oneshot windows          # next boot only → Windows
-sudo reboot
-# …after the gaming session, a normal Windows restart returns to NixOS:
-# set-oneshot is consumed on that single boot, so the default (NixOS) resumes.
+efibootmgr -v                                 # one-time: find the "Windows Boot Manager" Boot#### number
+sudo efibootmgr --bootnext <N> && sudo reboot
 ```
 
-That's the remote OS-selection mechanism: `bootctl set-oneshot windows && reboot`
-from anywhere on the tailnet. Default stays NixOS; Windows is a one-shot.
+The firmware consumes `--bootnext` on the *next* boot only, then reverts to
+`BootOrder` (NixOS). So after the gaming session a normal Windows restart lands
+back in NixOS — the "game, then back to NixOS" flow, over SSH from anywhere on
+the tailnet.
 
-- **Manual fallback:** the systemd-boot menu at power-on lists NixOS, Windows,
-  and the EDK2 UEFI Shell; the firmware menu (F-key) lists both disks directly.
-- **Persistent default swap** (rarely needed): `bootctl set-default windows`
-  (or a NixOS generation); `bootctl set-default @saved` clears it.
+- **Manual fallback:** the firmware boot menu (**F11** at POST on this board)
+  lists both disks / boot managers directly.
+- **Persistent default swap** (rarely needed): `sudo efibootmgr --bootorder
+  <N>,<rest…>` reorders the boot sequence; restore the NixOS-first order after.
+- systemd-boot's own menu and `bootctl` still switch between **NixOS
+  generations** as before.
 
-## 8. Converge afterward
+## 9. Converge afterward
 
 `nix-switch` on this host is aliased to
 `sudo nixos-rebuild switch --flake ~/repos/zireael/nix-config#mattpc`.

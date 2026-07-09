@@ -42,6 +42,13 @@
       url = "github:nix-community/disko";
       inputs.nixpkgs.follows = "nixpkgs-unstable";
     };
+    # Signed Secure Boot chain for the bare-metal host (mattpc): signs
+    # systemd-boot + per-generation UKIs with machine-owner keys. Follows
+    # nixpkgs-unstable so lzbt and the host package set share the channel.
+    lanzaboote = {
+      url = "github:nix-community/lanzaboote/v1.1.0";
+      inputs.nixpkgs.follows = "nixpkgs-unstable";
+    };
     llm-agents.url = "github:numtide/llm-agents.nix";
     hk = {
       url = "github:jdx/hk/v1.48.0";
@@ -146,6 +153,7 @@
         };
         modules = [
           inputs.disko.nixosModules.disko
+          inputs.lanzaboote.nixosModules.lanzaboote
           ./shared/unstable-wholesale.nix
           ./nixos/common.nix
           ./nixos/mattpc/hardware-configuration.nix
