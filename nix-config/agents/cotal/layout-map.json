@@ -2,132 +2,87 @@
   "version": 1,
   "tabs": [
     {
-      "label": "sealed/zireael",
+      "label": "supervisor",
       "panes": [
         {
-          "command": "zsh",
-          "cwd": "agents/workspaces/magellan",
-          "args": [
-            "-l"
-          ]
-        },
+          "command": "omp"
+        }
+      ]
+    },
+    {
+      "label": "compass",
+      "panes": [
+        {},
         {
-          "command": "zsh",
-          "cwd": "repos/sealedsecurity",
-          "args": [
-            "-l"
-          ]
+          "command": "omp",
+          "cwd": "agents/workspaces/cook"
         },
         {
           "command": "omp",
-          "cwd": "agents/workspaces/cousteau/sealed",
-          "args": [
-            "--resume"
-          ]
-        },
-        {
-          "command": "omp",
-          "cwd": "agents/workspaces/nansen/sealed",
-          "args": [
-            "--resume"
-          ]
-        },
-        {
-          "command": "omp",
-          "cwd": "agents/workspaces/erikson/sealed",
-          "args": [
-            "--resume"
-          ]
-        },
-        {
-          "command": "zsh",
-          "cwd": "agents/workspaces/drake",
-          "args": [
-            "-l"
-          ]
-        },
-        {
-          "command": "omp",
-          "cwd": "agents/workspaces",
-          "args": [
-            "--resume"
-          ]
-        },
-        {
-          "command": "omp",
-          "cwd": "agents/workspaces/shackleton/sealed",
-          "args": [
-            "--resume"
-          ]
-        },
-        {
-          "command": "omp",
-          "cwd": "agents/workspaces/amundsen",
-          "args": [
-            "--resume"
-          ]
-        },
-        {
-          "command": "omp",
-          "cwd": "agents/workspaces",
-          "args": [
-            "--resume"
-          ]
-        },
-        {
-          "command": "zsh",
-          "cwd": "agents/workspaces"
-        },
-        {
-          "command": "zsh",
-          "cwd": "agents/workspaces"
-        },
-        {
-          "command": "omp",
-          "cwd": "agents/workspaces",
-          "args": [
-            "--resume"
-          ]
-        },
-        {
-          "command": "omp",
-          "cwd": "agents/workspaces",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/xenophon"
         }
       ],
       "stacked": true
     },
     {
-      "label": "omp",
+      "label": "workers",
       "panes": [
+        {},
         {
-          "command": "zsh",
-          "cwd": "repos/oh-my-pi",
-          "args": [
-            "-l"
-          ]
-        }
-      ]
-    },
-    {
-      "label": "supervisor",
-      "panes": [
-        {
-          "command": "zsh"
-        }
-      ]
-    },
-    {
-      "label": "woodpecker",
-      "panes": [
-        {
-          "command": "zsh",
-          "cwd": "repos/woodpecker"
+          "command": "omp",
+          "cwd": "agents/workspaces/nansen"
         },
         {
-          "command": "zsh"
+          "command": "omp",
+          "cwd": "agents/workspaces/livingstone"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/zheng"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/amundsen"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/vespucci"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/cousteau"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/drake"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/erikson"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/frobisher"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/hudson"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/magellan"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/ross"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/shackleton"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/tasman"
         }
       ],
       "stacked": true
@@ -135,82 +90,84 @@
     {
       "label": "services",
       "panes": [
+        {},
         {
           "command": "omp",
-          "cwd": "agents/services",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/cotal"
         },
         {
           "command": "omp",
-          "cwd": "agents/services",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/ci-build"
         },
         {
           "command": "omp",
-          "cwd": "agents/services",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/compass"
         },
         {
           "command": "omp",
-          "cwd": "agents/services",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/dependencies"
         },
         {
           "command": "omp",
-          "cwd": "agents/services",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/nix-infra"
         },
         {
           "command": "omp",
-          "cwd": "agents/services",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/omp"
         },
         {
           "command": "omp",
-          "cwd": "agents/services",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/petrel"
         },
         {
           "command": "omp",
-          "cwd": "agents/services",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/pulumi"
         },
         {
           "command": "omp",
-          "cwd": "agents/services",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/seal"
         },
         {
           "command": "omp",
-          "cwd": "agents/services",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/skills"
         },
         {
           "command": "omp",
-          "cwd": "agents/services",
-          "args": [
-            "--resume"
-          ]
+          "cwd": "agents/workspaces/tern"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/web"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/woodpecker"
+        }
+      ],
+      "stacked": true
+    },
+    {
+      "label": "omp",
+      "panes": [
+        {},
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/polo"
+        }
+      ],
+      "stacked": true
+    },
+    {
+      "label": "woodpecker",
+      "panes": [
+        {},
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/bering"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/gama"
         }
       ],
       "stacked": true
@@ -218,50 +175,51 @@
     {
       "label": "upstream",
       "panes": [
+        {},
         {
-          "command": "zsh",
-          "cwd": "agents/workspaces"
+          "command": "omp",
+          "cwd": "agents/workspaces/upstream-cotal"
         },
         {
           "command": "omp",
-          "cwd": "agents/workspaces"
+          "cwd": "agents/workspaces/upstream-omp"
         },
         {
-          "command": "omp"
+          "command": "omp",
+          "cwd": "agents/workspaces/upstream-woodpecker"
         }
       ],
       "stacked": true
     },
     {
-      "label": "backend",
+      "label": "nix",
+      "panes": [
+        {},
+        {
+          "cwd": "repos/zireael"
+        }
+      ]
+    },
+    {
+      "label": "cotal-monitor",
       "panes": [
         {
           "command": "cotal",
+          "cwd": "repos/sealedsecurity",
           "args": [
-            "up",
-            "--open"
+            "console"
           ]
         }
       ]
     },
     {
-      "label": "compass",
+      "label": "sysmonitor",
       "panes": [
         {
-          "command": "omp",
-          "args": [
-            "--resume"
-          ]
-        },
-        {
-          "command": "omp",
-          "args": [
-            "--resume"
-          ]
-        },
-        {}
-      ],
-      "stacked": true
+          "command": "btm",
+          "cwd": "repos/sealedsecurity"
+        }
+      ]
     }
   ],
   "cwd": "/home/mattw"
