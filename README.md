@@ -1,9 +1,9 @@
 # zireael
 
-Personal monorepo: CLI tools I maintain + the Nix configuration that
-provisions every machine I run. The CLI tools are listed first because
-they're what most external visitors are here for; `nix-config/` is the
-larger but more personal half.
+Personal monorepo: the public CLI tools I maintain. My personal Nix
+configuration has moved to the `sealed` monorepo (see [Nix configuration](#nix-configuration));
+the [`nix-config/`](./nix-config) tree here is the pre-move copy, kept until
+every host has switched over.
 
 ## CLI tools
 
