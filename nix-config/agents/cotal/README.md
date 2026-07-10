@@ -17,7 +17,7 @@ copied into each wave workspace's `.cotal/` (gitignored, resolves only at runtim
 | --- | --- |
 | `channels.json` | Channel registry: `announcements` (24h replay) + the 11 `#svc.<name>` service channels (7d replay). Per-issue `#coordination.<issue>` channels are created live, not seeded. Read by the manual bring-up (`cotal up --channels`); its cards are mirrored into `cotal.yaml`'s `channels:` for the manifest path. |
 | `cotal.yaml` | Wave mesh **manifest** (`kind: Mesh`, `runtime: zellij`) for the one-command zellij-spawner restart — `cotal up -f cotal.yaml` stands up the broker, the same channel set, and the standing agents, each placed into its lane tab. The config half of `docs/designs/agents/zellij-runtime-placement.md` (T8). A seed Matt edits, never frozen. |
-| `layout-map.json` | Fresh-boot zellij layout seed (the `LayoutMap` the fork's `generateKdl` turns into a full-session `zellij --layout` file), generated from the live `dump-layout` via `seedFromDump`. 8 tabs mirroring the live wave. |
+| `layout-map.json` | Fresh-boot zellij layout seed (the `LayoutMap` the fork's `generateKdl` turns into a full-session `zellij --layout` file), generated from the live `dump-layout` via `seedFromDump`. 10 tabs mirroring the live wave. |
 | `agents/supervisor.md` | The generic supervisor persona (routes work, owns the tracker, authors personas). |
 | `agents/_worker-template.md` | Worker persona template (copy → `agents/<name>.md`). |
 | `agents/worker-impl.md` | One concrete worker proving the template fills in. |
