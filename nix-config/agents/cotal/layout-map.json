@@ -1,0 +1,226 @@
+{
+  "version": 1,
+  "tabs": [
+    {
+      "label": "supervisor",
+      "panes": [
+        {
+          "command": "omp"
+        }
+      ]
+    },
+    {
+      "label": "compass",
+      "panes": [
+        {},
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/cook"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/xenophon"
+        }
+      ],
+      "stacked": true
+    },
+    {
+      "label": "workers",
+      "panes": [
+        {},
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/nansen"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/livingstone"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/zheng"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/amundsen"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/vespucci"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/cousteau"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/drake"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/erikson"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/frobisher"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/hudson"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/magellan"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/ross"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/shackleton"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/tasman"
+        }
+      ],
+      "stacked": true
+    },
+    {
+      "label": "services",
+      "panes": [
+        {},
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/cotal"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/ci-build"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/compass"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/dependencies"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/nix-infra"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/omp"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/petrel"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/pulumi"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/seal"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/skills"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/tern"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/web"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/woodpecker"
+        }
+      ],
+      "stacked": true
+    },
+    {
+      "label": "omp",
+      "panes": [
+        {},
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/polo"
+        }
+      ],
+      "stacked": true
+    },
+    {
+      "label": "woodpecker",
+      "panes": [
+        {},
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/bering"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/gama"
+        }
+      ],
+      "stacked": true
+    },
+    {
+      "label": "upstream",
+      "panes": [
+        {},
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/upstream-cotal"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/upstream-omp"
+        },
+        {
+          "command": "omp",
+          "cwd": "agents/workspaces/upstream-woodpecker"
+        }
+      ],
+      "stacked": true
+    },
+    {
+      "label": "nix",
+      "panes": [
+        {},
+        {
+          "cwd": "repos/zireael"
+        }
+      ]
+    },
+    {
+      "label": "cotal-monitor",
+      "panes": [
+        {
+          "command": "cotal",
+          "cwd": "repos/sealedsecurity",
+          "args": [
+            "console"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "sysmonitor",
+      "panes": [
+        {
+          "command": "btm",
+          "cwd": "repos/sealedsecurity"
+        }
+      ]
+    }
+  ],
+  "cwd": "/home/mattw"
+}
