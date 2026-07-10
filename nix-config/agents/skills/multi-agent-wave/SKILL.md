@@ -64,6 +64,32 @@ These hold for every agent in a wave, both models:
 - **Never block — stay reachable.** Never sit in a blocking wait on a peer or a job (`irc wait`, `irc send await:true`, a blocking `job poll`) — it makes you deaf to steering, other peers' messages, and reassignment until that one thing lands, and two agents blocking on each other **deadlock** the wave. Instead **end your turn** (the harness delivers peer messages + job completions into your next turn) or poll non-blockingly (`irc inbox` / `job list`) and yield. A backgrounded wait you launch and yield from (e.g. `wait-for-reviews` via `bash async:true`) is fine — a foreground wait that holds the turn open is the banned thing. Full rule: `rule://never-block`.
 - **Hold your lane until it merges.** A PR gated on review/CI/the merge gate is **not** done — "done" = merged (or closed/dropped). It can still bounce back to you (bot re-review posts a P1/P2, CI goes red, the human requests changes), so stay present to auto-fix and re-drive it (`skill://autonomous-review`). Don't context-switch to new work or volunteer for a new lane while any PR you own can still bounce; only offer for new work when **every** lane you own is actually merged. Composes with never-block: yield the turn while you wait, but the gated lane stays yours across those yields. Full rule: `rule://hold-your-lane`.
 
+## Overnight mode (unattended window)
+
+When the human supervisor is asleep or otherwise unavailable, the supervisor
+declares **overnight mode** in `#announcements`; it lifts when the human is
+back. It resolves the tension between `rule://never-block` and
+`rule://hold-your-lane` for a window where **no one can merge or answer a
+decision** — so idling at the gate is the wrong terminal state.
+
+- **Don't stop to ask.** The human can't respond, so never sit blocked waiting
+  on a decision — drive each lane to completion.
+- **A genuine question or design fork → design against a stated assumption and
+  PARK it.** Record the assumption in the PR's **Open Questions** and your
+  tracker entry, and DM the supervisor the state (they relay to the human in
+  the morning). **Parked ≠ blocked** — keep moving on everything else in the
+  lane (composes with `rule://never-block`: yield, don't foreground-wait).
+- **Follow-ons are allowed once the current PR is FULLY merge-ready** (all
+  review comments resolved + CI green): start the next thing in-lane — a
+  follow-up issue, the next step in a migration. **Park it instead if that next
+  thing has open questions of its own.** This deliberately **relaxes
+  `rule://hold-your-lane`** for the window: the human can't merge, so
+  **merge-ready + parked is the terminal state**, and a useful follow-on beats
+  idling — but you **still own the bounce**: a bot re-review posting a finding
+  or a CI leg going red wakes you back to that PR first.
+- **One top priority.** The supervisor names the single top overnight priority;
+  its owners queue it first.
+
 ## Channel routing — where a message goes
 
 Pick the channel by **who must receive it**, not by what's convenient. The
