@@ -75,18 +75,23 @@ decision** — so idling at the gate is the wrong terminal state.
 - **Don't stop to ask.** The human can't respond, so never sit blocked waiting
   on a decision — drive each lane to completion.
 - **A genuine question or design fork → design against a stated assumption and
-  PARK it.** Record the assumption in the PR's **Open Questions** and your
-  tracker entry, and DM the supervisor the state (they relay to the human in
-  the morning). **Parked ≠ blocked** — keep moving on everything else in the
-  lane (composes with `rule://never-block`: yield, don't foreground-wait).
-- **Follow-ons are allowed once the current PR is FULLY merge-ready** (all
-  review comments resolved + CI green): start the next thing in-lane — a
-  follow-up issue, the next step in a migration. **Park it instead if that next
-  thing has open questions of its own.** This deliberately **relaxes
+  PARK it.** Record the assumption + the decision context in the PR's **Open
+  Questions** and your tracker entry — the durable place the human rules on it
+  directly (never route the decision *through* the supervisor; see *Ask the
+  human directly* above). DM the supervisor only the **state** — that you
+  parked a fork, and where its context lives — so the board stays live; they
+  relay that a decision is waiting, not the decision itself. **Parked ≠
+  blocked** — keep moving on everything else in the lane (composes with
+  `rule://never-block`: yield, don't foreground-wait).
+- **Follow-ons are allowed once the current PR is FULLY merge-ready** — review
+  comments resolved, CI green, and **no load-bearing Open Question left**
+  unresolved, so only the human's merge remains. Then start the next thing
+  in-lane (a follow-up issue, the next step in a migration); **park that
+  instead if it has open questions of its own.** This deliberately **relaxes
   `rule://hold-your-lane`** for the window: the human can't merge, so
-  **merge-ready + parked is the terminal state**, and a useful follow-on beats
-  idling — but you **still own the bounce**: a bot re-review posting a finding
-  or a CI leg going red wakes you back to that PR first.
+  **merge-ready + waiting at the gate is the terminal state**, and a useful
+  follow-on beats idling — but you **still own the bounce**: a bot re-review
+  posting a finding or a CI leg going red wakes you back to that PR first.
 - **One top priority.** The supervisor names the single top overnight priority;
   its owners queue it first.
 
