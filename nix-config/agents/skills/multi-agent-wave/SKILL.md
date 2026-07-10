@@ -63,6 +63,7 @@ These hold for every agent in a wave, both models:
 - **Your clone is isolated.** Each agent works in its own git clone (own `.git/`), so no sibling's or the supervisor's op can rebase your work mid-edit — you own your VCS state end to end. Commit as you go with `gt` and drive your own branch; coordinate only on overlapping *files*, at PR/merge time (`skill://gt`).
 - **Never block — stay reachable.** Never sit in a blocking wait on a peer or a job (`irc wait`, `irc send await:true`, a blocking `job poll`) — it makes you deaf to steering, other peers' messages, and reassignment until that one thing lands, and two agents blocking on each other **deadlock** the wave. Instead **end your turn** (the harness delivers peer messages + job completions into your next turn) or poll non-blockingly (`irc inbox` / `job list`) and yield. A backgrounded wait you launch and yield from (e.g. `wait-for-reviews` via `bash async:true`) is fine — a foreground wait that holds the turn open is the banned thing. Full rule: `rule://never-block`.
 - **Hold your lane until it merges.** A PR gated on review/CI/the merge gate is **not** done — "done" = merged (or closed/dropped). It can still bounce back to you (bot re-review posts a P1/P2, CI goes red, the human requests changes), so stay present to auto-fix and re-drive it (`skill://autonomous-review`). Don't context-switch to new work or volunteer for a new lane while any PR you own can still bounce; only offer for new work when **every** lane you own is actually merged. Composes with never-block: yield the turn while you wait, but the gated lane stays yours across those yields. Full rule: `rule://hold-your-lane`.
+- **Ground merge-ready on the live head, never a cached verdict.** A background review waiter (`wait-for-reviews`) can return "reviews ready" against a **stale head** — its banner prints the SHA it read (`head=<sha>`); tern's `stale:false` only means "same SHA," not fresh content; and a check labeled `SUCCESS` is "a review ran," not "the verdict passed." So after **any** wait returns, before declaring merge-ready, re-ground on the **current** head: confirm the waiter/snapshot head equals your just-pushed SHA (`tern verify_head` / `gh pr view <n> --json headRefOid`) **and** read the real per-bot verdict + per-thread `isResolved` for that SHA. Head mismatch → ignore the verdict, re-check or re-wait. This is the false-green trap class (stale-head, check-ran≠passed, wrong-repo): always ground on the live head, never trust the cached signal.
 
 ## Overnight mode (unattended window)
 
@@ -78,9 +79,10 @@ decision** — so idling at the gate is the wrong terminal state.
   PARK it.** Record the assumption + the decision context in the PR's **Open
   Questions** and your tracker entry — the durable place the human rules on it
   directly (never route the decision *through* the supervisor; see *Ask the
-  human directly* above). DM the supervisor only the **state** — that you
-  parked a fork, and where its context lives — so the board stays live; they
-  relay that a decision is waiting, not the decision itself. **Parked ≠
+  human directly* above). DM the supervisor only the **state** — that a fork is
+  parked and where its context lives — so the board stays live; the human reads
+  and rules on the decision itself in the PR/tracker, not via a relayed request.
+  **Parked ≠
   blocked** — keep moving on everything else in the lane (composes with
   `rule://never-block`: yield, don't foreground-wait).
 - **Follow-ons are allowed once the current PR is FULLY merge-ready** — review
