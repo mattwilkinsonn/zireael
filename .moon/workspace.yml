@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://moonrepo.dev/schemas/workspace.json
 #
-# moon workspace. One project per tool + the nix-config tree + a root meta
+# moon workspace. One project per tool + a root meta
 # project. Tasks are *system* tasks — they exec the toolchain the devenv shell
 # puts on PATH via proto (bun/node/moon) and nix (the linters), rather than
 # moon managing its own toolchain. This keeps proto (.prototools) the single
@@ -21,14 +21,6 @@ projects:
   release: 'tools/release'
   install-debug: 'tools/install-debug'
   setup-live-test-fixture: 'tools/setup-live-test-fixture'
-  # bun/TypeScript agent tools under nix-config (own bun.lock each). Converted
-  # from bash (SEA-932): the autonomous-review wait primitive + its API router.
-  wait-for-reviews: 'nix-config/tools/wait-for-reviews'
-  gh-route: 'nix-config/tools/gh-route'
-  # CI gate (SEA-932): fails on committed bash outside the shrinking allowlist.
-  no-bash-gate: 'nix-config/tools/no-bash-gate'
-  # NixOS + nix-darwin host configs: nix/shell/toml lints + per-host flake-eval.
-  nix-config: 'nix-config'
   # Homebrew tap: brew style over the formulae.
   tap: 'Formula'
 

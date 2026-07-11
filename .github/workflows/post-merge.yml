@@ -6,10 +6,7 @@ name: post-merge
 # ran against the PR head, not this SHA).
 #
 # `moon ci` here is affected-scoped to the pushed range (before..after),
-# so it runs only what the merge touched — not the whole suite. The
-# darwin flake-eval self-skips on Linux (os:macos); the nightly's macOS
-# leg covers it at 24h cadence, which is sufficient for a post-merge
-# smoke check.
+# so it runs only what the merge touched — not the whole suite.
 
 "on":
   push:

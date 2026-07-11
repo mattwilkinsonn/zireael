@@ -1,9 +1,0 @@
-{
-  // Agent-config markdown (AGENTS.md / rules / skills) is model-facing
-  // reference — skill cheatsheets carry intentionally long prose lines and the
-  // model reads them fine. Line-length (MD013) adds no value here, so it is
-  // disabled for this tree only. Every other markdownlint rule still applies
-  // (inherited from the repo-root config).
-  "extends": "../.markdownlint.jsonc",
-  "MD013": false
-}

@@ -12,12 +12,10 @@ runner.
 
 | Workflow | File | Runs | Triggers | Runner |
 | --- | --- | --- | --- | --- |
-| `ci` | `ci.yml` | `moon ci` (affected) + a darwin-eval leg | PR | ubuntu + macos |
+| `ci` | `ci.yml` | `moon ci` (affected) | PR | ubuntu |
 | `post-merge` | `post-merge.yml` | `moon ci` scoped to the merge diff | push: main | ubuntu |
-| `nightly` | `nightly.yml` | `moon run :ci` (full) + darwin eval + tap-install smoke | cron + dispatch | ubuntu + macos |
+| `nightly` | `nightly.yml` | `moon run :ci` (full) + tap-install smoke | cron + dispatch | ubuntu + macos |
 | `release` | `release.yml` | matrix builds + publish + tap bump + crates publish | push: tags `v*` | per-target |
-| `flake-update-daily` | `flake-update-daily.yml` | `nix flake update llm-agents` → PR | cron + dispatch | ubuntu |
-| `flake-update-weekly` | `flake-update-weekly.yml` | `nix flake update` (all) → PR | cron + dispatch | ubuntu |
 
 ## The moon gate
 
@@ -30,15 +28,11 @@ covers every project:
 | `jj-hooks` | `tools/jj-hooks` | `fmt` + `clippy` + `test` (cargo) |
 | `jj-gt` | `tools/jj-gt` | `fmt` + `clippy` + `test` (cargo; `dependsOn: jj-hooks`) |
 | `akiflow-cli` | `tools/akiflow-cli` | `lint` (biome) + `typecheck` (tsc) + `test` (bun) |
-| `nix-config` | `nix-config` | nixfmt + deadnix + statix + nil + shellcheck + shfmt + taplo + `flake-eval-mattpc-wsl` + `flake-eval-darwin` |
 | `tap` | `Formula` | `brew-style` (guarded when brew absent) |
-| `root` | `.` | `markdownlint` + `actionlint` |
+| `root` | `.` | `markdownlint` + `actionlint` + `nixfmt` + `deadnix` (devenv.nix) |
 
 Non-gate tasks are `runInCI: false`: `jj-gt:test-live` (needs
 `JJ_GT_LIVE_*` creds), `root:release`, `root:install-debug`.
-
-The darwin flake-eval carries `options.os: macos` (nix-darwin attrs don't
-evaluate off-macOS), so it self-skips on Linux and runs on the macOS leg.
 
 ### Toolchain
 
@@ -77,7 +71,7 @@ GitHub-hosted runners throughout.
 | Surface | Runner |
 | --- | --- |
 | Linux x64 (`moon ci`, post-merge, nightly full) | `ubuntu-latest` |
-| macOS (darwin flake-eval, tap, nightly macOS leg) | `macos-latest` |
+| macOS (tap, nightly macOS leg) | `macos-latest` |
 | Linux ARM (release) | `ubuntu-24.04-arm` |
 
 Per-target release matrix: `aarch64-apple-darwin` → `macos-latest`;
@@ -96,9 +90,7 @@ moon scopes `ci` to the diff via `MOON_BASE`/`MOON_HEAD`:
   unconditionally (a fresh runner has no moon cache, so everything
   re-runs, which is the point: catch upstream drift).
 
-The one remaining path filter (`.github/path-filters/nix-config.yml`)
-gates only the **macOS darwin-eval leg** in `ci.yml`, so a non-nix PR
-never spawns a (costly) macOS runner.
+There are no path filters: `moon ci` on Linux is the whole PR gate.
 
 ## Trigger flow per event
 
@@ -110,16 +102,14 @@ leaves the machine.
 ### `pull_request`
 
 - **Optimize CI** (Graphite no-op without token)
-- **Detect nix-config Changes** (paths-filter probe for the darwin leg)
-- **moon ci (linux)** — the full affected gate (darwin eval self-skips)
-- **moon ci (darwin eval)** — macOS, only if nix-config changed
+- **moon ci (linux)** — the full affected gate
 - **moon CI** — the rollup, the single required status check
 
 ### `schedule` (nightly backstop)
 
 06:00 UTC daily + `workflow_dispatch`. Skipped when `main` hasn't advanced
 since the last nightly. Runs `moon run :ci` (full, all projects) on Linux;
-the darwin eval and `tap:ci` on macOS; and the tap-install smoke test
+`tap:ci` on macOS; and the tap-install smoke test
 (`brew install`/`test` each published formula). A `report` job posts the
 aggregate status to the HEAD commit.
 
@@ -173,9 +163,8 @@ Every job has a `timeout-minutes` cap. `cargo nextest` uses
 | File | Job | Cap |
 | --- | --- | --- |
 | `ci.yml` | moon ci (linux) | 30m |
-| `ci.yml` | moon ci (darwin eval) | 30m |
 | `post-merge.yml` | moon ci | 30m |
-| `nightly.yml` | moon run :ci / darwin+tap | 45m |
+| `nightly.yml` | moon run :ci / tap | 45m |
 | `nightly.yml` | validate-tap | 15m |
 | `release.yml` | per-target build | 30m |
 

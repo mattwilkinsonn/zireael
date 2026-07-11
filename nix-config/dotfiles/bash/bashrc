@@ -1,7 +1,0 @@
-export PATH="$HOME/.local/bin:$PATH"
-export PATH="$HOME/.npm-global/bin:$PATH"
-# Linuxbrew on Linux dev hosts. Harmless no-op on Mac (brew lives
-# at /opt/homebrew there and is loaded by zsh's macOS-specific
-# initContent) and on servers without brew installed.
-[ -x /home/linuxbrew/.linuxbrew/bin/brew ] && eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv bash)"
-[ -r "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
