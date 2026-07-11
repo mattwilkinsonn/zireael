@@ -126,11 +126,25 @@ woodpecker-cli pipeline log show sealedsecurity/sealed 911 <step-name-or-pid> | 
 
 ## Scope / boundaries
 
-- **Read-only in practice.** Getting pipelines and logs is the job. The CLI *can*
-  mutate (`pipeline start/stop/approve/decline/create`, `pipeline purge`, `repo`,
-  `secret`, `cron`, `registry`, `admin`) — do **not** run those against
-  `sealedsecurity/sealed` without Matt's explicit go-ahead. Re-running CI is the
-  merge queue's / Matt's call, and secret/registry/admin ops touch shared infra.
+- **Read-only by default, with one self-serve mutation.** Getting pipelines and
+  logs is the job. The CLI *can* mutate (`pipeline start/stop/approve/decline/create`,
+  `pipeline purge`, `repo`, `secret`, `cron`, `registry`, `admin`) — by default do
+  **not** run those against `sealedsecurity/sealed` without Matt's explicit
+  go-ahead; secret/registry/admin ops touch shared infra.
+- **Flake-retry is self-serve (the one carve-out).** If your **own** PR's pipeline
+  failed on a genuine flake (an infra blip or a non-deterministic step), you MAY
+  `pipeline start <id>` on that flaked pipeline to retry it — it restarts the
+  existing pipeline (no new commit, no re-review), cheaper than an empty-commit
+  re-push. **Hard requirement, not optional:** every flake you retry past MUST get
+  a filed Linear issue (team SEA) — pipeline #, step, error signature — and
+  preferably a real fix; a retry with no filed issue is not allowed. This
+  **composes with, and does not override, `rule://no-retries`:** retrying the
+  *pipeline* to unblock your lane is not adding `retries=N` to test code — a flaky
+  *test* still gets a deterministic fix (event-gate / virtual-time), which is the
+  "preferably fix it." **Everything else stays Matt-gated:** `start`/`stop`/
+  `approve`/`decline` on `main` or on someone else's PR, and all
+  secret/registry/admin ops. **Unsure whether it's a flake or a real failure →
+  treat it as real** (diagnose + fix per `skill://ci-failure-triage`), don't retry.
 - **Never print secrets.** `WOODPECKER_TOKEN` is a live credential; don't echo it,
   and don't `secret ls`/`registry` dump into the transcript.
 - `woodpecker-cli exec` runs a `.woodpecker/*.yaml` workflow locally against a

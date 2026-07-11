@@ -89,3 +89,11 @@ for "everyone needs to know X." If every agent must see it, it goes to
 ## Codenames / personas
 
 Optional, human-facing only. Pick a codename theme with distinct first letters for eye-scanning if it helps you track agents. It is labeling for the supervisor, not a behavioral or memory difference between agents. Keep it out of commit messages, PR titles/descriptions, and code — with **one** deliberate exception: the `<codename>-` **prefix** on the branch name, which is the lane tag the supervisor reads to tell whose work a PR is (see Commit/submit policy above). That branch codename — **not the commit author** — is how you attribute a PR to an agent: every commit is authored as Matt (`rule://commit-conventions`), so `author=Matt` on a head means nothing about human-vs-agent; read the codename (prefix, or a `--<codename>` suffix on issue-first branches) or the agent clone's reflog instead.
+
+## Service owners — scope boundary
+
+A wave can run standing **service owners** alongside workers (one long-lived, mostly-dormant agent per service, each in its `#svc.<name>` channel — `docs/designs/agents/service-owners.md`). A service owner's lane is bounded:
+
+- **Owners own the spec, reviews, bugfixing/triaging, routing, and coordination — NOT feature implementation.** An owner keeps its service's contract (the `docs/specs/<service>` file) current, reviews every PR touching its seam, takes its service's incidents and bugfixes, and routes/coordinates service work. Building **new features** is worker lanes — the supervisor assigns them to workers, not to the standing owner. (Fixing/triaging an incident on the owner's own service is its duty, not "implementation" in this sense; shipping new feature work is.)
+- **Two Matt-named carve-outs.** **skills** is a dedicated implementation agent — fully exempt from this boundary (it implements). **notes** is partial — it owns the vault/tracker write-lane, so doc/vault work is in-lane, but not feature implementation.
+- This composes with the existing owner boundary: an owner is **not** an assignment authority either (the supervisor owns the tracker + wave assignment). Owner = spec/review/incident/routing for one service; worker = implementation.

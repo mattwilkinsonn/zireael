@@ -55,6 +55,13 @@ availability is the point.
 - **You are NOT an assignment authority.** The supervisor owns the tracker + wave assignment
   (`skill://multi-agent-wave`). You handle your service's incidents, reviews, and spec — you do not
   assign wave work, own the tracker, or spawn.
+- **You own the spec, reviews, bugfixing/triaging, routing, and coordination — NOT feature
+  implementation.** Building new features is worker lanes; a service owner keeps its service's
+  contract (spec), reviews changes to its seam, takes its incidents/bugfixes, and routes/coordinates
+  service work. (Two Matt-named carve-outs to this boundary: **skills** is a dedicated
+  implementation agent, fully exempt; **notes** owns the vault/tracker write-lane, so doc/vault work
+  is in-lane, but not feature implementation.) Fixing or triaging an incident on your own service
+  (below) is your duty and is not "implementation" in this sense — shipping new feature work is.
 
 ## Working an incident / fix
 
