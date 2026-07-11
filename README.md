@@ -1,9 +1,9 @@
 # zireael
 
-Personal monorepo: CLI tools I maintain + the Nix configuration that
-provisions every machine I run. The CLI tools are listed first because
-they're what most external visitors are here for; `nix-config/` is the
-larger but more personal half.
+Personal monorepo: the public CLI tools I maintain. My personal Nix
+configuration has moved to the `sealed` monorepo (see [Nix configuration](#nix-configuration));
+the [`nix-config/`](./nix-config) tree here is the pre-move copy, kept until
+every host has switched over.
 
 ## CLI tools
 
@@ -56,52 +56,20 @@ Each tagged release attaches `tar.gz` binaries for `darwin-arm64`,
 
 ## Nix configuration
 
-[`nix-config/`](./nix-config) is a multi-host
-[Nix flake](https://nix.dev/concepts/flakes.html) covering my personal
-machines. The sealedsecurity fleet (CI runners + the inference box)
-lives in the company `sealed` repo under `infra/nix/` and consumes
-this flake's `shared/` modules as an input, so `home.nix`, overlays,
-and `nixos/common.nix` stay single-sourced here.
+My personal machine config — a multi-host
+[Nix flake](https://nix.dev/concepts/flakes.html) covering my dev boxes —
+now lives in the company `sealed` monorepo under `personal/matt/nix/`,
+alongside the sealedsecurity fleet config at `infra/nix/`. It moved there
+to keep the whole agent-platform tooling and machine config in one repo.
+The two flakes stay separate: `personal/matt/nix` follows unstable channels
+for the dev boxes, `infra/nix` tracks a stable base for the headless fleet.
+There is no flake-input coupling between them; each owns its baseline.
 
-| Host | Platform | Role | Flake target |
-| --- | --- | --- | --- |
-| Matts-MacBook-Pro | aarch64 darwin | Primary dev box | `darwinConfigurations.Matts-MacBook-Pro` |
-| mattpc-wsl | x86_64 NixOS (WSL2) | Windows-host dev environment | `nixosConfigurations.mattpc-wsl` |
+The [`nix-config/`](./nix-config) tree in this repo is the pre-move copy,
+retired once every host has switched to the sealed path.
 
-Manages the OS configuration ([`nixos/`](./nix-config/nixos),
-[`darwin/`](./nix-config/darwin)) and the user-level home-manager
-configuration ([`shared/home.nix`](./nix-config/shared/home.nix) +
-per-host overrides). Loose dotfiles
-([`nix-config/dotfiles/`](./nix-config/dotfiles)) — bashrc, jj config,
-yabai / skhd scripts, Claude Code settings, etc. — are materialized
-by home-manager as symlinks into `$HOME` at activation.
-
-Windows-side bootstrap ([`nix-config/windows/`](./nix-config/windows))
-covers the WSL host's pre-NixOS provisioning (winget DSC, PowerShell
-profile, WSL config).
-
-Private content (Tailscale ACL, agent instruction files like CLAUDE.md
-/ SEAL.md, sealedsecurity workspace meta files) lives in a separate
-private repo at `~/repos/privatefiles/` and is symlinked into place;
-it is intentionally not under nix-config so this repo can stay public.
-
-### Migrating a host
-
-For hosts already running my older "dotfiles repo at $HOME" layout,
-[`nix-config/shared/scripts/migrate-from-dotfiles.sh`](./nix-config/shared/scripts/migrate-from-dotfiles.sh)
-is the one-shot migration: clones zireael (+ privatefiles for dev
-boxes), authors the symlinks, rebuilds against the new flake path,
-archives the old `~/.git` / `~/.jj` for safe deletion later.
-
-### Bootstrapping a new host
-
-Per-platform bootstrap scripts under
-[`nix-config/{darwin,nixos}/scripts/`](./nix-config) handle fresh
-installs: Determinate Nix installer, gh auth + zireael clone, first
-`darwin-rebuild` / `nixos-rebuild switch`. See the per-host
-`INSTALL.md` files for the click-through walkthroughs (Framework
-laptop, Mac mini, mattserver, mattlinuxpro, rpi4/5, mattpc-wsl,
-Matts-MacBook-Pro).
+This repo now carries the public CLI tools (below); the personal Nix config,
+dotfiles, and private workspace/SSH config are maintained in `sealed`.
 
 ## Development
 
