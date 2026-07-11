@@ -86,7 +86,7 @@ CI shape: one workflow ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)
 + **`designs/<domain>/`** — point-in-time **design records** (the *why*; frozen once decided).
 + **`specs/<domain>/`** — the **living source of truth** for how a component *currently* behaves.
 
-Domains: `platform/` (nix hosts + CI), `tools/` (jj-gt, jj-hooks), `agents/` (push-guard). A behavior change updates the matching `specs/` doc **in the same PR**; see [`docs/README.md`](./docs/README.md).
+Domains: `platform/` (nix hosts + CI), `tools/` (jj-gt, jj-hooks), `agents/` (multi-agent coordination). A behavior change updates the matching `specs/` doc **in the same PR**; see [`docs/README.md`](./docs/README.md).
 
 ## Repository history
 
