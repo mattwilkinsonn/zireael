@@ -54,8 +54,7 @@ jobs:
   # Full moon gate on Linux: every project's `ci` task, unconditionally
   # (`moon run :ci` runs the task in all projects; no affected filtering).
   # A fresh runner has no moon cache, so every task re-runs — which is the
-  # point (catches upstream toolchain drift). The darwin flake-eval
-  # self-skips here (os:macos); the macOS leg below runs it.
+  # point (catches upstream toolchain drift).
   moon-ci:
     name: moon ci (linux, full)
     needs: changes
@@ -70,10 +69,9 @@ jobs:
       - name: moon run :ci
         run: devenv shell -- moon run ':ci'
 
-  # macOS leg: the darwin host's flake-eval (nix-darwin is macOS-only) +
-  # tap brew-style (brew is present on macOS runners).
+  # macOS leg: tap brew-style (brew is present on macOS runners).
   moon-ci-darwin:
-    name: moon ci (darwin eval + tap)
+    name: moon ci (tap)
     needs: changes
     if: needs.changes.outputs.run == 'true'
     runs-on: macos-latest
@@ -83,8 +81,8 @@ jobs:
       - uses: DeterminateSystems/determinate-nix-action@v3
       - name: Install devenv
         run: nix profile install --accept-flake-config nixpkgs#devenv
-      - name: moon run darwin eval + tap
-        run: devenv shell -- moon run nix-config:flake-eval-darwin tap:ci
+      - name: moon run tap:ci
+        run: devenv shell -- moon run tap:ci
 
   # End-to-end tap install smoke test (not a moon task — it exercises the
   # published Homebrew formulae, not the repo build).

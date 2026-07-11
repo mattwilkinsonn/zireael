@@ -1,7 +1,7 @@
 # docs/
 
-Internal docs for zireael — the jj tooling, the nix host platform, and
-the agent config. Two kinds, mirrored by domain:
+Internal docs for zireael — the jj tooling, the nix-host + CI platform,
+and multi-agent coordination. Two kinds, mirrored by domain:
 
 - **`designs/<domain>/`** — point-in-time **design records**: the *why*
   (problem, alternatives, decision, plan). Frozen once decided.
@@ -11,7 +11,7 @@ the agent config. Two kinds, mirrored by domain:
   interface-critical; prose + tables elsewhere.
 
 Domains: `platform/` (nix hosts + CI), `tools/` (jj-gt, jj-hooks),
-`agents/` (the push-guard extension + agent config).
+`agents/` (multi-agent coordination).
 
 ## Living specs — keep them current
 
@@ -22,8 +22,6 @@ living docs is part of the merge-ready bar.
 
 ## Current specs
 
-- [`specs/platform/hosts.md`](specs/platform/hosts.md) — nix host platform.
 - [`specs/platform/ci.md`](specs/platform/ci.md) — CI matrix.
 - [`specs/tools/jj-gt.md`](specs/tools/jj-gt.md) — jj-gt.
 - [`specs/tools/jj-hooks.md`](specs/tools/jj-hooks.md) — jj-hooks.
-- [`specs/agents/push-guard.md`](specs/agents/push-guard.md) — push-guard extension.

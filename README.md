@@ -1,9 +1,7 @@
 # zireael
 
 Personal monorepo: the public CLI tools I maintain. My personal Nix
-configuration has moved to the `sealed` monorepo (see [Nix configuration](#nix-configuration));
-the [`nix-config/`](./nix-config) tree here is the pre-move copy, kept until
-every host has switched over.
+configuration has moved to the `sealed` monorepo (see [Nix configuration](#nix-configuration)).
 
 ## CLI tools
 
@@ -65,9 +63,6 @@ The two flakes stay separate: `personal/matt/nix` follows unstable channels
 for the dev boxes, `infra/nix` tracks a stable base for the headless fleet.
 There is no flake-input coupling between them; each owns its baseline.
 
-The [`nix-config/`](./nix-config) tree in this repo is the pre-move copy,
-retired once every host has switched to the sealed path.
-
 This repo now carries the public CLI tools (below); the personal Nix config,
 dotfiles, and private workspace/SSH config are maintained in `sealed`.
 
@@ -76,12 +71,11 @@ dotfiles, and private workspace/SSH config are maintained in `sealed`.
 ```bash
 direnv allow        # one-time: enters the devenv shell (rust, bun, node, moon, hk, jj, linters)
 moon ci             # run every affected task (the same gate CI + the pre-push hook run)
-moon run <p>:ci     # one project's checks (p = jj-hooks | jj-gt | akiflow-cli | nix-config | tap | root)
+moon run <p>:ci     # one project's checks (p = jj-hooks | jj-gt | akiflow-cli | tap | root)
 ```
 
 CI shape: one workflow ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs `moon ci` in the devenv shell on every PR.
 
-+ A macOS leg runs only the darwin flake-eval, gated on nix-config changes.
 + [`nightly.yml`](./.github/workflows/nightly.yml) runs the full matrix daily; [`post-merge.yml`](./.github/workflows/post-merge.yml) re-runs the affected gate on `main`.
 + Toolchains are pinned in [`.prototools`](./.prototools) (bun/node/moon) + [`rust-toolchain.toml`](./rust-toolchain.toml) and provided by [`devenv.nix`](./devenv.nix).
 
@@ -92,7 +86,7 @@ CI shape: one workflow ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)
 + **`designs/<domain>/`** — point-in-time **design records** (the *why*; frozen once decided).
 + **`specs/<domain>/`** — the **living source of truth** for how a component *currently* behaves.
 
-Domains: `platform/` (nix hosts + CI), `tools/` (jj-gt, jj-hooks), `agents/` (push-guard). A behavior change updates the matching `specs/` doc **in the same PR**; see [`docs/README.md`](./docs/README.md).
+Domains: `platform/` (nix hosts + CI), `tools/` (jj-gt, jj-hooks), `agents/` (multi-agent coordination). A behavior change updates the matching `specs/` doc **in the same PR**; see [`docs/README.md`](./docs/README.md).
 
 ## Repository history
 
@@ -103,10 +97,10 @@ This repo replaces these previous standalone repos:
 + [`mattwilkinsonn/akiflow-cli`](https://github.com/mattwilkinsonn/akiflow-cli) (fork) → `tools/akiflow-cli`
 + [`mattwilkinsonn/homebrew-tap`](https://github.com/mattwilkinsonn/homebrew-tap) → `Formula`
 + [`mattwilkinsonn/dotfiles`](https://github.com/mattwilkinsonn/dotfiles)
-  (private; archived after every host migrates) → `nix-config`
+  (private) → the personal Nix config now lives in `sealedsecurity/sealed`
+  under `personal/matt/nix`.
 
-The CLI-tool repos are archived on GitHub and link back here. The
-dotfiles repo retires when the last host's migration completes.
+The CLI-tool repos are archived on GitHub and link back here.
 
 ## License
 
