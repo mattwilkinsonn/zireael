@@ -276,21 +276,31 @@ is the red-green order.
 In `oh-my-pi-peer.smoke.ts`, add the shim and the shutdown-during-unsettled-steer test:
 
 - **Shim** (module-level helper beside `drain`, `:19-25`): wrap `globalThis.setTimeout` /
-  `globalThis.clearTimeout`, ledger armed-vs-cleared/fired ids while installed, restore on
-  `restore()`. Behavior passes through to the real timers — only bookkeeping is added.
+  `globalThis.clearTimeout` to record each armed timer's fate — armed, then **cleared** (via
+  `clearTimeout`) or **fired** (the wrapped callback ran) — while installed. Timers pass through
+  to the real clock (only bookkeeping is added), so the ledger exposes `armed()` / `cleared()` /
+  `fired()` / `outstanding()` counts plus `clearAll()` (clear every still-outstanding real handle)
+  and `restore()` (restore the globals). `clearAll()` in teardown kills the leaked real 5s timer
+  the unfixed loop strands, so the red run fails fast instead of waiting out the real delay.
 - **Test 19**: install the shim → `steerHang` session (`:151`) → `runPeerLoop({ mesh, session })`
   at the **prod-default** 5_000ms → `START`, fold `a2` (steer never settles), `end("ans")` →
-  deferred commit is now racing on the armed settle timer → `await loop.shutdown()` → assert:
-  1. the ledger shows the settle timer was **cleared, not fired** — `shutdown()` was released by
-     the gate, not by the 5s timeout expiring;
+  the deferred commit's settle timer arms. **Wait for the arm before shutting down** — `drain()`
+  the mesh/`agent_end` queue, then poll until `ledger.armed() === 1`, so `shutdown()` can never
+  race ahead of the arming (otherwise outstanding is trivially 0 and the red assert passes without
+  ever exercising the shutdown-during-unsettled-steer path) → `await loop.shutdown()` → assert:
+  1. `ledger.fired() === 0 && ledger.cleared() === 1` — the settle timer was **cleared** by the
+     release gate, not left to **fire** at the 5s timeout; `outstanding()` alone can't tell the two
+     apart (a fired timer also leaves outstanding = 0), so the fired/cleared counts are load-bearing;
   2. `ledger.outstanding() === 0` — no armed loop-owned timer survives `shutdown()` (RED on
      `568c817`: the settle timer is still armed → outstanding = 1, the +5002ms exit in ledger
      form);
   3. `mesh.acked.length === 0` and no reply delivered — the joined commit's tail stayed a no-op
      (`stopped` guard, `loop.ts:233`); the join must not un-suppress the stale commit;
   4. `session.disposed === 1` — teardown still completed.
-- Run the suite; watch test 19 fail on the unfixed loop (assert 2 is the red bite). Record the
-  red output in the task report.
+  Teardown (always): `ledger.clearAll()` then `ledger.restore()`.
+- Run the suite; watch test 19 fail on the unfixed loop — on `568c817` the settle timer stays
+  armed and is never cleared, so assert 1 (`cleared === 1`) and assert 2 (`outstanding === 0`)
+  both bite. Record the red output in the task report.
 
 Interfaces:
 
@@ -301,7 +311,10 @@ runPeerLoop({ mesh, session, steerSettleTimeoutMs = 5_000 }:
 shutdown(): Promise<void>;                       // PeerLoop, loop.ts:279
 // consumed (oh-my-pi-peer.smoke.ts): StubSession.steerHang (:151), .deferSteer (:156), .rejectSteer (:159)
 // produced (new, module-level in oh-my-pi-peer.smoke.ts):
-function installTimerLedger(): { outstanding(): number; restore(): void };
+function installTimerLedger(): {
+  armed(): number; cleared(): number; fired(): number; outstanding(): number;
+  clearAll(): void; restore(): void;
+};
 ```
 
 Test cycle: `pnpm smoke:oh-my-pi` — tests 1-18 green, test 19 **red**.
