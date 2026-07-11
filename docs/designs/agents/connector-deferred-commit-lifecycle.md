@@ -117,6 +117,14 @@ This record owns the lifecycle before that lands.
   teardown races a pending commit (and the settle timer can't outlive shutdown) — is its OWN
   future PR with its own red-green." Finding #10 (test 18's `process.getActiveResourcesInfo()` is
   process-wide/fragile; use a test-scoped timer shim) rides along as a P3.
+- **Design-critic pass** (adversarial red-team, read-only, before human freeze): folded three
+  clear improvements — added mechanism **D** (clear the timer in `shutdown()` without awaiting) to
+  the fork and Open Question 1; softened §Recommendation pillar 1 (the ruling settled whether/where,
+  not the mechanism — its "cancel/await" phrasing disfavors only pure-A, not D); and stated A's
+  residual cost narrowly (unref fires-into-a-no-op post-teardown, dominated by D). The core B
+  mechanism (one-shot gate, single-slot `pendingCommit`, join-before-abort ordering) survived the
+  attack unchanged. A line-anchor-drift finding was checked and rejected — the anchors verify
+  verbatim against `568c817`.
 
 ## Approach
 
@@ -131,7 +139,7 @@ flags the mechanism "Design-pass-first … (fork: unref shim / tracked-await / r
 
 ### The mechanism fork
 
-Three candidate mechanisms:
+Four candidate mechanisms:
 
 - **A — `unref()` the settle timer.** One line at `loop.ts:227` (`timer.unref()`). The timer no
   longer holds the event loop, so the delayed exit disappears (the +0ms half of the proof).
@@ -142,23 +150,35 @@ Three candidate mechanisms:
 - **C — restructure to `AbortSignal` cancellation.** Thread an `AbortSignal` into
   `commitAfterSteers`; `shutdown()` aborts, which settles the race immediately so the `finally`
   runs. Standard cancel vocabulary; the largest change.
+- **D — clear the settle timer inside `shutdown()`, without awaiting.** Track the settle-timer
+  *handle* in a loop-level slot and `clearTimeout` it in `shutdown()` after `stopped = true` — no
+  gate, no join, no awaited float (~3 lines). The sole armed handle (the liveness leak) is cleared
+  so the process exits; the floating `commitAfterSteers` is left as an inert never-resolving
+  promise — with a hung steer neither `allSettled` nor the cleared `timeout` resolves, so the race
+  at `loop.ts:229` stays pending forever, but a never-resolving JS promise registers no libuv
+  handle and so does not hold the event loop open. No-double-commit is already guaranteed by the
+  `stopped` guard at `loop.ts:233`.
 
 ### Recommendation: B — track + await with a shutdown release gate
 
 Weighed against the three criteria that matter here:
 
-1. **The ruled contract names it.** The ruling and the SEA-1173 title both say *"tracks and
-   cancels/awaits the floating commitAfterSteers"* — and the escalation's alternative
-   ("unref+shim-and-continue") was explicitly the option Matt did *not* choose. A is the symptom
-   fix the ruling declined; shipping it as the "lifecycle fix" would re-litigate the ruling.
+1. **The ruled contract leans toward it — a weak signal, not a mandate.** The ruling and the
+   SEA-1173 title say *"tracks and cancels/awaits the floating commitAfterSteers"*. That settled
+   the *whether/where* (the lifecycle fix as its own PR — §Fixed intent), **not** the mechanism,
+   which §Fixed intent and Open Question 1 both hold open; so it cannot pre-close the fork. What
+   the phrasing does disfavor is *pure* **A** (`unref` alone neither cancels nor awaits). It does
+   **not** adjudicate B vs C vs D — **D** *cancels* (clears) the timer and so also satisfies
+   "cancel" — so the mechanism is weighed on the engineering merits below, not on the wording.
 2. **Teardown wants determinism, not latency.** `shutdown()` is on the teardown path — the caller
    (`peer.ts`) runs `await loop.shutdown()` then `mesh.stop()`. B gives the strongest
    post-condition: *after `shutdown()` resolves, no loop continuation is queued and no loop-owned
    timer is armed.* That invariant is what actually ends the #5→#7→#9 finding chain — every prior
    fix left something floating for the next review pass to find. A leaves both the float and an
-   (unref'd but armed) timer; C without tracking still lets the float's continuation run after
-   `shutdown()` returns. The join costs microtasks, not the 5s timeout: the gate settles the race
-   immediately and the guard at `loop.ts:233` returns before `finishTurn`.
+   (unref'd but armed) timer; **D** clears the timer (no armed handle survives, so its liveness
+   matches B) but leaves the float's continuation un-joined, exactly like C without tracking; only
+   B leaves *nothing* floating. The join costs microtasks, not the 5s timeout: the gate settles the
+   race immediately and the guard at `loop.ts:233` returns before `finishTurn`.
 3. **Minimal code still holds.** Fork AGENTS.md:116-117: "**Keep the code clean and minimal.** No
    bloat, no overcomplication." / "**Do only what is asked**". B is ~8 lines — one
    `Promise.withResolvers` gate, a third race arm, an assignment instead of `void`, one joined
@@ -197,7 +217,9 @@ Design notes that make B correct (the traps an implementer would otherwise hit):
 - **The gate must be a race arm, not an external `clearTimeout`.** If `shutdown()` cleared the
   timer from outside, the `timeout` promise would never resolve; with a hung steer,
   `Promise.allSettled` never resolves either — the race stays pending forever and
-  `await pendingCommit` deadlocks `shutdown()`. Resolving a third arm is the cancel.
+  `await pendingCommit` deadlocks `shutdown()`. Resolving a third arm is the cancel. (This deadlock
+  is specific to B, which *awaits* the float; **D** sidesteps it by *not* awaiting — it clears the
+  timer and leaves the float inert. See §Alternatives.)
 - **Join before abort/dispose.** `stopped = true` is already set, so the joined commit's
   continuation runs `finally` → guard (`loop.ts:233`) → `return`; it cannot re-enter session work
   (`finishTurn` is unreachable). Joining first means the abort/dispose steps run with no loop
@@ -213,23 +235,36 @@ Design notes that make B correct (the traps an implementer would otherwise hit):
 ### Alternatives, weighed
 
 - **A — `timer.unref()` (rejected as the sole fix).** Cheapest (one line) and proven to fix the
-  delayed exit (the +0ms half of the proof). But it fixes only the process-exit symptom:
-  `shutdown()` still returns with the commit pending and the timer armed, so loop code still runs
-  after teardown (a guarded no-op, but observable — exactly the kind of floating seam the
-  #5→#7→#9 chain kept re-finding), and in any embedding where `shutdown()` is not followed by
-  process exit (a host running several peer lifecycles in one process — the smoke suite itself
-  tears down many loops in a single run), the unref'd timer still fires up to 5s later, waking an
-  orphaned continuation long after teardown. An unref'd timer is also invisible to
-  handle-count-style leak assertions, weakening the regression surface. Contradicts the ruled
-  "track + cancel/await" contract. *Also declined as a belt-and-braces rider on top of B:* once
-  the join guarantees the timer is cleared before `shutdown()` resolves, `unref()` is dead weight
-  (AGENTS.md:116-117) and would let a future regression hide from the leak test.
+  delayed exit (the +0ms half of the proof). Its real residual cost is narrow: `unref()` does not
+  *clear* the timer, so in any embedding where `shutdown()` is not followed by process exit (a host
+  running several peer lifecycles in one process — the smoke suite itself tears down many loops in a
+  single run) the unref'd timer still fires up to 5s post-teardown. It fires into a guarded no-op
+  (the race resolves → `finally` clears the already-fired timer → the guard at `loop.ts:233`
+  returns because `stopped` is true), so nothing runs — but a real armed handle outlived teardown.
+  That is strictly worse than **D**, which *clears* the timer so it never fires at all, for the same
+  ~1-line order of cost; A is dominated by D on the record's own liveness intent and is kept only as
+  the absolute floor. *Also declined as a belt-and-braces rider on top of B:* once the join
+  guarantees the timer is cleared before `shutdown()` resolves, `unref()` is dead weight
+  (AGENTS.md:116-117).
 - **C — `AbortSignal` restructure (rejected as over-machinery).** Equivalent cancel semantics to
   B's gate, but more surface: an `AbortController` at loop level, listener wiring + cleanup inside
   the timeout executor (or `throwIfAborted` + rejection-path catch discipline) — and *without* the
   tracked `pendingCommit` it still doesn't give the join (shutdown can't know when the `finally`
   ran). A complete C is B plus AbortController ceremony for zero additional guarantee. If the loop
   someday grows multiple cancellable waits, promote the one-shot gate to a controller then.
+- **D — clear the settle timer inside `shutdown()`, no await (the lighter fork).** Track the timer
+  handle in loop state and `clearTimeout` it in `shutdown()` after `stopped = true` — ~3 lines, no
+  gate, no `pendingCommit` slot, no awaited float. It fully removes the stated liveness leak: the
+  sole armed handle is cleared, and the now-never-resolving `commitAfterSteers` race (`loop.ts:229`
+  — with a hung steer neither `allSettled` nor the cleared `timeout` ever resolves) is an inert JS
+  promise that registers no libuv handle, so the event loop is free and the process exits.
+  No-double-commit is already guaranteed by the `stopped` guard (`loop.ts:233`) that §"What this is
+  NOT" relies on. **D's only gap vs B is the deterministic join:** under D the float's continuation
+  is left pending (it never runs — the race never settles), whereas B guarantees it has
+  run-and-returned before `shutdown()` resolves. That join is insurance only against a *future*
+  edit making `finishTurn` reachable during teardown (the guard is a no-op today) — so whether D's
+  ~3 lines or B's ~8 is the right buy is the load-bearing fork (Open Question 1). D strictly
+  dominates A (clears rather than unrefs) and is lighter than both B and C.
 
 ## Global Constraints
 
@@ -394,13 +429,19 @@ an accidental code edit).
 Batched for the merge review of this record; each carries the assumption the Plan is written
 against, so execution never stalls.
 
-1. **[load-bearing — the mechanism ruling] A, B, or C?** This is the fork the escalation record
-   flagged "design-pass-first" (tripwire `:186`) and the decision this PR exists to settle.
-   *Stated assumption: **B** — tracked `pendingCommit` + shutdown-released race arm — for the
-   reasons in §Recommendation (it is the ruled "track + cancel/await" contract verbatim; strongest
-   teardown post-condition — no queued continuation, no armed timer — which is what ends the
-   #5→#7→#9 finding chain; ~8 lines, no API change). A stays the one-line fallback if the join is
-   judged too much machinery; C only if the loop later grows more cancellable waits.*
+1. **[load-bearing — the mechanism] A, B, C, or D?** This is the fork the escalation record
+   flagged "design-pass-first" (tripwire `:186`) and the decision this PR exists to settle. The
+   live contest is **B vs D**: both remove the liveness leak and both satisfy the ruling's
+   "cancel/await" phrasing (§Recommendation pillar 1); they differ only in whether `shutdown()`
+   deterministically *joins* the float (B, ~8 lines) or merely clears its timer and leaves it inert
+   (D, ~3 lines). B's extra guarantee is insurance against a future edit that makes `finishTurn`
+   reachable during teardown — a guard that is a no-op today.
+   *Stated assumption: **B** — for the strongest teardown post-condition (no queued continuation,
+   no armed timer), which is what durably ends the #5→#7→#9 floating-seam chain: the ~5-line delta
+   over D buys a design a later reachability change can't silently re-break. **D** is the lighter,
+   defensible alternative if that insurance is judged not worth the join machinery for a defect
+   unreachable on today's contract; **A** is the one-line floor (dominated by D — it unrefs rather
+   than clears); **C** only if the loop later grows multiple cancellable waits.*
 2. **Does the #10 test migration (T3) ride this PR?** Non-load-bearing scope call: it shares the
    T1 shim and the tripwire filed it alongside #9, but it could ship as its own change. *Stated
    assumption: yes — same PR, separate commit, so the shim lands with both of its users.*
