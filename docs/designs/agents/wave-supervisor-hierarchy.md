@@ -147,14 +147,16 @@ grounding from live work this session:
 - **`aws`** — cloud provisioning on AWS (EC2, IAM, the SEA-1122 autoscaler, the deploy-runner;
   hudson + amundsen's SEA-940 relay work live). **Distinct from `pulumi`:** pulumi owns the IaC
   *tool* + `infra/pulumi/**` (`service-map.json:8`); aws is the deployed-cloud + deploy-runner
-  *domain*. To avoid a glob collision with pulumi's `infra/pulumi/**`, aws is a domain lane (empty
-  or narrowly-scoped globs), not a broad `infra/**` claim. Anchor worker: hudson.
+  *domain*. aws carries **empty globs** (a pure domain lane), so there is no glob overlap with
+  pulumi to resolve. Anchor worker: hudson.
 - **`forgejo`** — the forge-migration domain (erikson's forge-agent-identity work). Domain/migration
   lane; spec-only, no standing `sealed/` glob.
 
-Because their exact `service-map.json` shape (domain marker vs a real glob, and whether `aws` claims
-any `infra/` path) determines whether an executor can write the config entries without ambiguity,
-the precise mechanism is a **load-bearing Open Question** (below) with a recommended default.
+The exact `service-map.json` shape was ruled by Matt (Resolved decision 7): all three carry **empty
+globs + a domain marker + spec**, because nothing programmatic consumes the globs today (the T-CI
+resolver was never built — routing is agent-posts-on-start). Globs would only be defined if a future
+CI hook needs them. The same empty-glob shape covers the `dependencies`/`notes`/`skills` meta-owners
+that also need config entries (Resolved decision 6).
 
 ## Global Constraints
 
@@ -172,10 +174,10 @@ the precise mechanism is a **load-bearing Open Question** (below) with a recomme
      preserves `skill://multi-agent-wave`'s "ask the human directly, not through the supervisor"
      rule; the lane supervisor is kept posted on *state* (that the worker is blocked/asking), but the
      *question* reaches the human.
-  3. **All existing service-owners promoted + 3 new lane supervisors (`nemo`, `aws`, `forgejo`).**
-     Unstaffed lanes run supervisor-solo (dormant) until Mercator assigns workers. (Exact count of
-     "existing" is an Open Question — see OQ-3: the live roster shows 14 owners, `service-map.json`
-     lists 11.)
+  3. **All 14 existing service-owners promoted + 3 new lane supervisors (`nemo`, `aws`, `forgejo`) =
+     17 lanes.** The 14 existing = the 11 in `service-map.json` + `dependencies`/`notes`/`skills`
+     (meta-domain owners); all become full worker-staffable lanes (Matt ruled, Resolved decision 6).
+     Unstaffed lanes run supervisor-solo (dormant) until Mercator assigns workers.
 - **Persona frontmatter contract** (parser takes scalars + inline lists only — no nesting, NO
   trailing `#` comments on a value line, NEVER a `capabilities` key; `agent-file.ts:31-63`):
   - worker: `role: worker`, `subscribe: [announcements, svc.<lane>]` (the new home-lane channel),
@@ -196,21 +198,25 @@ the precise mechanism is a **load-bearing Open Question** (below) with a recomme
 
 ## Plan
 
-### T-config — three new lanes in `service-map.json` + `channels.json`
+### T-config — new lane entries in `service-map.json` + `channels.json`
 
-Add `nemo`, `aws`, `forgejo` entries to both config files (nix-managed plane → this is the zireael
-config PR). Each `service-map.json` entry follows the fork-service shape
-(`service-map.json:13-14`): `{ service, channel, priority, globs: [], repos?/domain marker, spec }`
-— empty/narrow globs (domain lanes, no `sealed/` path), so the "most-specific-wins" resolver
-(`service-map.json:2`) never collides them with existing services (critically, `aws` must not claim
-`infra/**` and collide with `pulumi`'s `infra/pulumi/**`). Each `channels.json` entry mirrors the
-existing `#svc.<name>` shape (`channels.json:10-15`): `replay: true`, `replayWindow: "7d"`,
-description + `@mention the <lane> owner…` instructions.
+Add entries to both config files (nix-managed plane → this is the zireael config PR) for the new
+lanes that lack them. Two groups, **both using empty globs** (Resolved decision 7 — globs are inert;
+nothing consumes them):
 
-- **Interfaces:** consumes the OQ-2 resolution (domain-marker mechanism); produces
-  `nix-config/agents/cotal/service-map.json` (+3 entries) and `channels.json` (+3 `#svc.*` entries).
-- **Test cycle:** `nix-switch` (or a config-parse check) succeeds; a launched `nemo`/`aws`/`forgejo`
-  owner shows `subscribe` including its `#svc.<lane>`; an @mention wakes it.
+- **3 domain lanes** — `nemo`, `aws`, `forgejo`.
+- **3 meta-owner lanes** — `dependencies`, `notes`, `skills` (promoted to full lanes per Resolved
+  decision 6, but absent from the config today — they need entries to get a `#svc.<name>` channel).
+
+Each `service-map.json` entry follows the fork-service shape (`service-map.json:13-14`):
+`{ service, channel, priority, globs: [], domain/repos marker, spec }` with **empty `globs`**. Each
+`channels.json` entry mirrors the existing `#svc.<name>` shape (`channels.json:10-15`):
+`replay: true`, `replayWindow: "7d"`, description + `@mention the <lane> owner…` instructions.
+
+- **Interfaces:** produces `nix-config/agents/cotal/service-map.json` (+6 entries) and
+  `channels.json` (+6 `#svc.*` entries: nemo/aws/forgejo/dependencies/notes/skills).
+- **Test cycle:** `nix-switch` (or a config-parse check) succeeds; a launched owner for each new
+  lane shows `subscribe` including its `#svc.<lane>`; an @mention wakes it.
 - **Model hint:** small.
 
 ### T-owner-template — evolve `_service-owner-template.md` to lane supervisor
@@ -246,8 +252,9 @@ unchanged (`svc.>` already present, `:6-7`).
 Update `supervisor.md` to describe the two-level model: Mercator assigns workers→lanes + owns the
 board (single authority for lane ownership); lane supervisors assign tasks→workers within a lane and
 report up. Reconcile Inv 1 (`:28-33`) explicitly as the scoped split (lane membership vs in-lane
-task), refine Inv 3 (`:37-42`) per OQ-1's resolution (who authors worker personas), and add the
-relay-up cadence Mercator expects from lane supervisors. Keep the push posture (`:77-78`).
+task), refine Inv 3 (`:37-42`) per Resolved decision 5 (Mercator stays sole persona author; lane
+supervisors request workers up), and add the relay-up cadence Mercator expects from lane
+supervisors. Keep the push posture (`:77-78`).
 
 - **Interfaces:** edits `nix-config/agents/cotal/agents/supervisor.md`; consumed by the live
   `mercator.md` rewrite in T-personas.
@@ -299,34 +306,10 @@ contract is known; the skill lives in the sealed repo, a separate PR.
 
 ## Open Questions
 
-> Screened against the merge gate: **load-bearing** questions block the freeze (an executor would
-> hit real ambiguity); each carries a recommendation for Matt to rule in one pass.
+> The three load-bearing questions (persona-authoring authority, new-lane resolution, owner count)
+> were ruled by Matt and folded into **Resolved decisions** below. Only a non-load-bearing deferral
+> remains — the merge ratifies it (per `skill://design`, the freeze gate).
 
-- **OQ-1 (load-bearing) — persona-authoring authority under the hierarchy.** Today only Mercator
-  authors persona files (`supervisor.md:37-42`, Inv 3). When a lane supervisor needs a new worker,
-  does it (a) request up and **Mercator authors** the persona (keeps single authoring authority, one
-  more hop), or (b) **the lane supervisor authors** its own worker personas within its lane (faster,
-  but two authoring authorities + a spawn-safety question)? **Recommend (a)** — keep authoring
-  centralized with Mercator; lane supervisors request workers, Mercator provisions. An executor
-  wiring the spawn/authoring path (T-supervisor, T-personas) needs this answer.
-- **OQ-2 (load-bearing) — new-lane resolution mechanism.** How do `nemo`/`aws`/`forgejo` resolve in
-  `service-map.json` — domain/`repos:` marker with empty globs (like fork services
-  `omp`/`cotal`), or a real `sealed/` glob? And does `aws` claim any `infra/` path (risking a
-  `pulumi` collision) or stay a pure domain lane? **Recommend:** all three as domain lanes with
-  empty globs + a `domain`/`repos` marker + spec, `aws` claiming NO `infra/` glob (pure
-  deploy-runner/cloud domain, distinct from pulumi's `infra/pulumi/**`). An executor writing
-  T-config is blocked without this.
-- **OQ-3 (load-bearing) — how many "existing" owners are promoted?** Frozen decision 3 says "11
-  existing service-owners," and `service-map.json`/`channels.json` list exactly 11. But the **live
-  roster shows 14 service-owners** — the 11 plus `dependencies`, `notes`, `skills` (meta-domain
-  owners with no sealed-path glob, absent from both config files). Do those three also become lane
-  supervisors (→ 17 lanes total), or do they stay meta-owners outside the worker-lane model (→ 14
-  lanes: 11 + nemo/aws/forgejo, matching the frozen count)? **Recommend:** treat
-  `dependencies`/`notes`/`skills` as **meta-owners that stay lane supervisors of their own domain
-  but are not primary worker-staffing lanes** (they rarely need a staffed worker team) — so the
-  frozen "14 lanes" is the *worker-staffable* lane count, and the meta-owners are supervisors-solo
-  by default. An executor building the staffing map + T-personas needs to know whether to author
-  worker home-lanes pointing at these three.
 - **OQ-4 (non-load-bearing, deferred) — board format for lane rollups.** Should the tracker gain an
   explicit per-lane rollup view (lane → workers → task state), or does Mercator keep the flat
   swimlane board and derive lane state mentally? The design is correct either way; the rollup
@@ -345,8 +328,22 @@ contract is known; the skill lives in the sealed repo, a separate PR.
    `coordination-structure.md` Inv 1 without creating a second board.
 4. **Lane supervisors are evolved service-owners, active when staffed.** They keep the three service
    duties + `model: xhigh`; dormancy flips to `working` only when the lane has assigned workers.
-5. **The three new lanes are domain lanes.** `nemo`/`aws`/`forgejo` carry domain/`repos` markers +
-   empty globs (no `sealed/` path, no CI backstop — agent-posts-on-start), pending OQ-2's exact
-   shape.
-6. **Cutover is gated on the freeze.** T-personas (live rewrites) + T-config (nix PR) execute
+5. **Persona-authoring stays centralized with Mercator (OQ-1 ruled).** A lane supervisor that needs
+   a worker requests up (`need-agent`); **Mercator authors** the persona and assigns it to the lane.
+   One authoring authority is preserved (refines `supervisor.md` Inv 3 only by adding the
+   request-up path — not a second author). Lane supervisors never author personas or spawn.
+6. **All 14 existing owners are promoted to full lanes + the 3 new = 17 lanes (OQ-3 ruled).** The 11
+   in `service-map.json` PLUS `dependencies`, `notes`, `skills` (the meta-domain owners) ALL become
+   full worker-staffable lane supervisors, plus `nemo`/`aws`/`forgejo` = **17 lanes total**. The
+   meta-owners run supervisor-solo until Mercator staffs them, like any lane — they are not a
+   special case.
+7. **New lanes carry empty globs; the globs are inert documentation (OQ-2 ruled).** Grounded this
+   session: **nothing programmatic consumes `service-map.json` globs** — the T-CI path-routing hook
+   spec'd in `service-owners.md` was deferred and never built; the only references are prose
+   (`README.md`, templates) and the nix packaging comment (`agent-config.nix:38`). Actual PR→channel
+   routing is the **agent-posts-on-start** path (a worker posts its PR into `#svc.<name>` manually).
+   So `nemo`/`aws`/`forgejo` (and `dependencies`/`notes`/`skills`) get **empty globs + a domain
+   marker + spec** at zero functional cost; the aws-vs-`pulumi` precedence concern is moot (no
+   resolver exists to collide). If a future T-CI hook is built, globs get defined then — not now.
+8. **Cutover is gated on the freeze.** T-personas (live rewrites) + T-config (nix PR) execute
    **after** this record merges; the wave runs flat until then — no half-cutover.
