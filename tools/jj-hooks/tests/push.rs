@@ -679,6 +679,90 @@ fn first_push_root_parented_commit_hk() {
     assert_eq!(head, repo.commit_id_of("firstpush"));
 }
 
+// A NON-root-parented commit pushed to a fresh/empty remote must still
+// resolve to the `{new}^` diff range — NOT all-files. This pins the
+// has_real_parent branch of the #284 fix: only a commit whose sole
+// parent is jj's synthetic root gets all-files; a normal commit whose
+// real parent simply isn't on the fresh remote keeps diffing against
+// its parent. A root-detection misfire would silently all-files a
+// normal push, so we assert the hook saw a concrete FROM_REF (the
+// parent commit) rather than the empty FROM_REF of all-files mode.
+#[test]
+fn first_push_real_parented_commit_uses_parent_range() {
+    let repo = TestRepo::new();
+    repo.add_empty_remote("fresh");
+    repo.write_pre_commit_config(PRE_PUSH_RECORD_RANGE);
+
+    // A real commit on top of main (its parent is main's tip, a real
+    // git commit — not the jj root), on a brand-new bookmark.
+    repo.write("feature.txt", "x\n");
+    let out = repo.jj(&["commit", "-m", "feature"]);
+    assert!(out.status.success(), "{}", show(&out));
+    let out = repo.jj(&["bookmark", "create", "firstreal", "-r", "@-"]);
+    assert!(out.status.success(), "{}", show(&out));
+
+    // The pushed commit itself. pre-commit receives the raw `{new}^`
+    // ref string (it does not pre-resolve it), so FROM_REF should be
+    // this commit's id with a trailing `^`.
+    let new = repo
+        .jj(&[
+            "log",
+            "-r",
+            "firstreal",
+            "--no-graph",
+            "-T",
+            "commit_id",
+            "--ignore-working-copy",
+        ])
+        .stdout;
+    let new = String::from_utf8_lossy(&new).trim().to_owned();
+
+    let out_dir = tempfile::tempdir().unwrap();
+    let out_path = out_dir.path().join("range");
+    let out_path_str = out_path.to_string_lossy().into_owned();
+
+    let out = repo.jj_hooks_with_env(
+        &[
+            "--runner",
+            "pre-commit",
+            "push",
+            "-b",
+            "firstreal",
+            "--remote",
+            "fresh",
+        ],
+        &[("JJ_HOOKS_TEST_RANGE_OUT", &out_path_str)],
+    );
+    assert!(out.status.success(), "{}", show(&out));
+
+    let contents = std::fs::read_to_string(&out_path).unwrap_or_else(|e| {
+        panic!(
+            "hook didn't write to {}: {e}\n{}",
+            out_path.display(),
+            show(&out)
+        )
+    });
+    let from_line = contents
+        .lines()
+        .find_map(|l| l.strip_prefix("FROM="))
+        .unwrap_or_else(|| panic!("missing FROM= line in {contents:?}"));
+    assert!(
+        !from_line.is_empty(),
+        "real-parented first push must run in diff-range mode with a \
+         concrete FROM_REF, got an empty FROM_REF (all-files mode — the \
+         root-detection misfired): {contents:?}\n{}",
+        show(&out)
+    );
+    let from_stem = from_line
+        .strip_suffix('^')
+        .unwrap_or_else(|| panic!("expected FROM_REF to be `{{new}}^`, got `{from_line}`"));
+    assert!(
+        new.starts_with(from_stem),
+        "expected FROM_REF to be the pushed commit `{new}` with a trailing \
+         `^` (`{{new}}^`), got `{from_line}`",
+    );
+}
+
 // -- runner migration (issue #2) ---------------------------------------------
 
 #[test]

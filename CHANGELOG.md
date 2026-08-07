@@ -48,6 +48,12 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
   worktree is now warmed with a serial `hk validate` before its hooks
   run, so the cold-cache writes never collide. Best-effort and hk-only —
   the sequential path and non-hk runners are unaffected.
+- `jj-hp push` no longer crashes on the first push of a root-parented
+  commit to a fresh/empty remote. Diff-base resolution returned
+  `{new}^`, which is unresolvable when `new`'s only parent is jj's
+  synthetic root commit (it has no git object); the runner aborted
+  before any hook ran. Such a push now grades every file as added via
+  the backend's all-files mode. Issue jj-hooks#284.
 
 ## [0.3.0] — 2026-05-26
 

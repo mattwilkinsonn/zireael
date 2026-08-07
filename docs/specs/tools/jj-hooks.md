@@ -218,20 +218,29 @@ The rationale is a macOS/APFS race where concurrent `git worktree add
 In the default (diff-range) path, `run_once` iterates `from_refs` — one
 diff base per ancestor on the remote — building the hook argv per base
 and accumulating modifications in the shared worktree
-(`src/hooks.rs:915-943`). `resolve_from_refs` computes the bases
-(`src/hooks.rs:1031-1066`):
+(`src/hooks.rs:924-950`). `resolve_from_refs` computes the diff base — a
+`DiffBase` of either `Refs(_)` (one or more `--from-ref` commits) or
+`AllFiles` (`src/hooks.rs:1063-1119`):
 
 - An existing bookmark uses its old commit: `return
-  Ok(vec![old.clone()]);` (`src/hooks.rs:1032-1033`).
+  Ok(DiffBase::Refs(vec![old.clone()]));` (`src/hooks.rs:1064-1065`).
 - A new bookmark uses `heads(::<new> &
   ::remote_bookmarks(remote=exact:<remote>))` so each already-on-remote
-  ancestor is its own base (`src/hooks.rs:1037-1040`).
-- A new bookmark on a fresh remote falls back to the parent:
-  `vec![format!("{new}^")]` (`src/hooks.rs:1059-1062`).
+  ancestor is its own base (`src/hooks.rs:1068-1072`).
+- A new bookmark on a fresh remote whose parent is a real commit falls
+  back to that parent: `DiffBase::Refs(vec![format!("{new}^")])`
+  (`src/hooks.rs:1112-1116`).
+- A new bookmark on a fresh remote whose only parent is jj's synthetic
+  root commit resolves to `DiffBase::AllFiles` instead of `{new}^`:
+  the root has no git object, so `{new}^` is an unresolvable ref that
+  crashes the runner before any hook executes — all-files mode grades
+  every file as added, which is what a root-parented first push is
+  (`src/hooks.rs:1116`, issue jj-hooks#284).
 
-In `--all-files` mode the diff range is ignored and the runner's
-own all-files command runs once (`src/hooks.rs:900-914`); `from_refs`
-is meaningless there (`src/hooks.rs:878-881`).
+In `--all-files` mode — requested via the flag or resolved as
+`DiffBase::AllFiles` — the diff range is ignored and the runner's own
+all-files command runs once (`src/hooks.rs:908-922`); `from_refs`
+is meaningless there (`src/hooks.rs:882-894`).
 
 ### Fixup-commit synthesis and retry-after-fixup
 
