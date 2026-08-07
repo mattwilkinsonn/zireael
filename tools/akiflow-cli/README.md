@@ -50,7 +50,7 @@ install -m 0755 ./af ~/.local/bin/af   # or sudo install … /usr/local/bin/af
 
 ### Via Nix (home-manager)
 
-The fork ships with a home-manager activation in [Matt's nix-config](https://github.com/mattwilkinsonn/dotfiles) that clones + builds on every `nix-switch` (under `shared/dev.nix`'s `installAkiflowCli`). Drop-in:
+A home-manager activation that clones + builds `af` on every `nix-switch`. Drop-in:
 
 ```nix
 home.activation.installAkiflowCli = lib.hm.dag.entryAfter [ "writeBoundary" ] ''

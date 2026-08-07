@@ -1,7 +1,6 @@
 # zireael
 
-Personal monorepo: the public CLI tools I maintain. My personal Nix
-configuration has moved to the `sealed` monorepo (see [Nix configuration](#nix-configuration)).
+Personal monorepo: the public CLI tools I maintain.
 
 ## CLI tools
 
@@ -52,20 +51,6 @@ Each tagged release attaches `tar.gz` binaries for `darwin-arm64`,
 `linux-x64`, and `linux-arm64` to its GitHub Release. Grab them at
 <https://github.com/mattwilkinsonn/zireael/releases>.
 
-## Nix configuration
-
-My personal machine config — a multi-host
-[Nix flake](https://nix.dev/concepts/flakes.html) covering my dev boxes —
-now lives in the company `sealed` monorepo under `personal/matt/nix/`,
-alongside the sealedsecurity fleet config at `infra/nix/`. It moved there
-to keep the whole agent-platform tooling and machine config in one repo.
-The two flakes stay separate: `personal/matt/nix` follows unstable channels
-for the dev boxes, `infra/nix` tracks a stable base for the headless fleet.
-There is no flake-input coupling between them; each owns its baseline.
-
-This repo now carries the public CLI tools (below); the personal Nix config,
-dotfiles, and private workspace/SSH config are maintained in `sealed`.
-
 ## Development
 
 ```bash
@@ -86,7 +71,7 @@ CI shape: one workflow ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)
 + **`designs/<domain>/`** — point-in-time **design records** (the *why*; frozen once decided).
 + **`specs/<domain>/`** — the **living source of truth** for how a component *currently* behaves.
 
-Domains: `platform/` (nix hosts + CI), `tools/` (jj-gt, jj-hooks), `agents/` (multi-agent coordination). A behavior change updates the matching `specs/` doc **in the same PR**; see [`docs/README.md`](./docs/README.md).
+Domains: `platform/` (CI), `tools/` (jj-gt, jj-hooks), `agents/` (multi-agent coordination). A behavior change updates the matching `specs/` doc **in the same PR**; see [`docs/README.md`](./docs/README.md).
 
 ## Repository history
 
@@ -96,9 +81,6 @@ This repo replaces these previous standalone repos:
 + [`mattwilkinsonn/jj-gt`](https://github.com/mattwilkinsonn/jj-gt) → `tools/jj-gt`
 + [`mattwilkinsonn/akiflow-cli`](https://github.com/mattwilkinsonn/akiflow-cli) (fork) → `tools/akiflow-cli`
 + [`mattwilkinsonn/homebrew-tap`](https://github.com/mattwilkinsonn/homebrew-tap) → `Formula`
-+ [`mattwilkinsonn/dotfiles`](https://github.com/mattwilkinsonn/dotfiles)
-  (private) → the personal Nix config now lives in `sealedsecurity/sealed`
-  under `personal/matt/nix`.
 
 The CLI-tool repos are archived on GitHub and link back here.
 
