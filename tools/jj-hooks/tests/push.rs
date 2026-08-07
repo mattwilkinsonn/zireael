@@ -602,6 +602,83 @@ fn hk_hook_autofix_creates_fixup_ref() {
     assert!(repo.jj_knows_commit(&fixup));
 }
 
+// -- first push of a root-parented commit to a fresh remote (#284) -----------
+//
+// When a brand-new bookmark whose commit's only parent is jj's synthetic
+// root commit is pushed to a remote that shares no history, jj-hooks'
+// diff-base resolution used to return `{new}^`, an unresolvable git ref.
+// hk crashed parsing it; pre-commit mapped it to the null SHA and crashed
+// on the resulting invalid revision range. Both are the same single bug,
+// so we cover all three backends. The hook config MUST live in the pushed
+// commit's tree (autodetect runs in the target worktree), so we write it
+// before committing the root-parented commit.
+
+#[test]
+fn first_push_root_parented_commit_pre_commit() {
+    let repo = TestRepo::new();
+    repo.add_empty_remote("fresh");
+
+    // Root-parented commit whose tree carries the hook config.
+    let out = repo.jj(&["new", "root()"]);
+    assert!(out.status.success(), "{}", show(&out));
+    repo.write_pre_commit_config(PRE_PUSH_PASSING);
+    let out = repo.jj(&["commit", "-m", "first"]);
+    assert!(out.status.success(), "{}", show(&out));
+    let out = repo.jj(&["bookmark", "create", "firstpush", "-r", "@-"]);
+    assert!(out.status.success(), "{}", show(&out));
+
+    let head = repo.commit_id_of("firstpush");
+    let out = repo.jj_hooks(&[
+        "--runner",
+        "pre-commit",
+        "push",
+        "-b",
+        "firstpush",
+        "--remote",
+        "fresh",
+    ]);
+    assert!(out.status.success(), "{}", show(&out));
+    assert_eq!(head, repo.commit_id_of("firstpush"));
+}
+
+#[test]
+fn first_push_root_parented_commit_lefthook() {
+    let repo = TestRepo::new();
+    repo.add_empty_remote("fresh");
+
+    let out = repo.jj(&["new", "root()"]);
+    assert!(out.status.success(), "{}", show(&out));
+    repo.write_lefthook_config(LEFTHOOK_PRE_PUSH_PASSING);
+    let out = repo.jj(&["commit", "-m", "first"]);
+    assert!(out.status.success(), "{}", show(&out));
+    let out = repo.jj(&["bookmark", "create", "firstpush", "-r", "@-"]);
+    assert!(out.status.success(), "{}", show(&out));
+
+    let head = repo.commit_id_of("firstpush");
+    let out = repo.jj_hooks(&["push", "-b", "firstpush", "--remote", "fresh"]);
+    assert!(out.status.success(), "{}", show(&out));
+    assert_eq!(head, repo.commit_id_of("firstpush"));
+}
+
+#[test]
+fn first_push_root_parented_commit_hk() {
+    let repo = TestRepo::new();
+    repo.add_empty_remote("fresh");
+
+    let out = repo.jj(&["new", "root()"]);
+    assert!(out.status.success(), "{}", show(&out));
+    repo.write_hk_config(HK_PRE_PUSH_PASSING);
+    let out = repo.jj(&["commit", "-m", "first"]);
+    assert!(out.status.success(), "{}", show(&out));
+    let out = repo.jj(&["bookmark", "create", "firstpush", "-r", "@-"]);
+    assert!(out.status.success(), "{}", show(&out));
+
+    let head = repo.commit_id_of("firstpush");
+    let out = repo.jj_hooks(&["push", "-b", "firstpush", "--remote", "fresh"]);
+    assert!(out.status.success(), "{}", show(&out));
+    assert_eq!(head, repo.commit_id_of("firstpush"));
+}
+
 // -- runner migration (issue #2) ---------------------------------------------
 
 #[test]

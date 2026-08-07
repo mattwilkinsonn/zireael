@@ -201,7 +201,7 @@ fn run_for_update_with_cancel(
         });
     };
 
-    let from_refs = resolve_from_refs(jj, update)?;
+    let diff_base = resolve_from_refs(jj, update)?;
     let setup_steps = setup::load_steps(jj)?;
 
     let initial = run_once(
@@ -212,7 +212,7 @@ fn run_for_update_with_cancel(
         stage,
         update,
         new_commit,
-        &from_refs,
+        &diff_base,
         &setup_steps,
         opts.all_files,
         opts.capture_output,
@@ -246,7 +246,7 @@ fn run_for_update_with_cancel(
         stage,
         update,
         fixup,
-        &from_refs,
+        &diff_base,
         &setup_steps,
         opts.all_files,
         opts.capture_output,
@@ -736,7 +736,7 @@ fn run_once(
     stage: Stage,
     update: &BookmarkUpdate,
     target_commit: &str,
-    from_refs: &[String],
+    diff_base: &DiffBase,
     setup_steps: &[SetupStep],
     all_files: bool,
     capture_output: bool,
@@ -876,14 +876,22 @@ fn run_once(
     };
 
     // all_files: ignore the diff range and run each runner's
-    // "lint every tracked file" command exactly once. from_refs
-    // is meaningless here — the runner sees no --from-ref/--to-ref.
+    // "lint every tracked file" command exactly once. The from-refs
+    // are meaningless here — the runner sees no --from-ref/--to-ref.
+    // This fires either when the caller requested all-files mode
+    // (`jj-hp run --all-files`) or when the diff base resolved to
+    // `DiffBase::AllFiles` (first push of a root-parented commit, #284).
     //
-    // Default path: iterate from_refs (one per ancestor on the
-    // remote) so multi-ancestor pushes still get the full set of
+    // Default path: iterate the resolved from-refs (one per ancestor on
+    // the remote) so multi-ancestor pushes still get the full set of
     // diff bases. Each iteration accumulates modifications in the
     // shared worktree, mirroring how the standard pre-push pipeline
     // builds up its fixup.
+    let all_files = all_files || matches!(diff_base, DiffBase::AllFiles);
+    let from_refs: &[String] = match diff_base {
+        DiffBase::Refs(refs) => refs,
+        DiffBase::AllFiles => &[],
+    };
     let mut success = true;
     // Seed the captured buffer with the setup-step output when the
     // caller asked us to capture. Setup output is always captured
@@ -1024,13 +1032,37 @@ fn run_subprocess(
     }
 }
 
-/// Resolve the `from_ref` commits to diff against. For an existing
-/// bookmark update we just use the old commit; for a new bookmark we
-/// find the heads of `::new & ::remote_bookmarks(remote)` so each
-/// already-on-remote ancestor becomes its own diff base.
-fn resolve_from_refs(jj: &JjCli, update: &BookmarkUpdate) -> Result<Vec<String>> {
+/// The diff base(s) a hook backend should grade a bookmark update
+/// against.
+enum DiffBase {
+    /// One or more concrete commits to use as `--from-ref`. Each entry
+    /// is diffed against the target commit in turn (multi-ancestor
+    /// pushes get one base per already-on-remote ancestor).
+    Refs(Vec<String>),
+    /// Grade every tracked file as newly added — each backend's native
+    /// all-files mode, no `--from-ref` at all.
+    ///
+    /// This arm exists for the first push of a root-parented commit
+    /// (#284): its only parent is jj's synthetic root commit, which has
+    /// no git object, so `{new}^` is an unresolvable ref. There is no
+    /// well-known empty-*commit* hash to stand in (commits embed
+    /// author/date, so no fixed value exists). Git's empty-*tree* hash
+    /// works as a base for the git-diff backends (pre-commit, lefthook),
+    /// but hk resolves the base through libgit2 `merge_base`, which
+    /// rejects a tree object — so no single ref serves all three
+    /// backends. All-files mode is the semantically correct answer
+    /// anyway: a root-parented first push adds every file.
+    AllFiles,
+}
+
+/// Resolve the diff base for a bookmark update. For an existing bookmark
+/// update we just use the old commit; for a new bookmark we find the
+/// heads of `::new & ::remote_bookmarks(remote)` so each already-on-remote
+/// ancestor becomes its own diff base. A new bookmark whose only parent
+/// is the jj root commit resolves to [`DiffBase::AllFiles`] (see #284).
+fn resolve_from_refs(jj: &JjCli, update: &BookmarkUpdate) -> Result<DiffBase> {
     if let Some(old) = update.old_commit.as_ref() {
-        return Ok(vec![old.clone()]);
+        return Ok(DiffBase::Refs(vec![old.clone()]));
     }
 
     let new = update.new_commit.as_ref().expect("not a delete here");
@@ -1058,11 +1090,33 @@ fn resolve_from_refs(jj: &JjCli, update: &BookmarkUpdate) -> Result<Vec<String>>
 
     if refs.is_empty() {
         // New bookmark on a totally fresh remote — no ancestors on the
-        // remote at all. Use the parent of new as the diff base.
-        return Ok(vec![format!("{new}^")]);
+        // remote at all. Normally we diff against the parent of `new`
+        // (`{new}^`). But when `new`'s only parent is jj's synthetic
+        // root commit, `{new}^` is not a resolvable git ref (the root
+        // has no git object), so hk/pre-commit crash before any hook
+        // runs (#284). In that case grade every file as added via the
+        // backend's all-files mode instead.
+        //
+        // `parents(new) ~ root()` is empty iff every parent of `new`
+        // is the root commit. Verified against the pinned jj version.
+        let root_parent_revset = format!("parents({new}) ~ root()");
+        let parents_out = jj.run(&[
+            "log",
+            "--no-graph",
+            "-r",
+            &root_parent_revset,
+            "-T",
+            template,
+            "--ignore-working-copy",
+        ])?;
+        let has_real_parent = parents_out.lines().any(|l| !l.trim().is_empty());
+        if has_real_parent {
+            return Ok(DiffBase::Refs(vec![format!("{new}^")]));
+        }
+        return Ok(DiffBase::AllFiles);
     }
 
-    Ok(refs)
+    Ok(DiffBase::Refs(refs))
 }
 
 fn changed_files(worktree: &Path, from: &str, to: &str) -> Result<Vec<PathBuf>> {
