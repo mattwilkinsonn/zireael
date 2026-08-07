@@ -487,6 +487,26 @@ fi
         );
         path
     }
+
+    /// Add a fresh, empty bare git remote named `name` (at
+    /// `<tmp>/<name>.git`) and register it as a git remote in the
+    /// primary. Mirrors the origin setup in [`Self::new`] but leaves the
+    /// remote with no refs at all — used to reproduce the first-push of a
+    /// root-parented commit to a remote that shares no history (#284).
+    pub fn add_empty_remote(&self, name: &str) -> PathBuf {
+        let path = self.tmp.path().join(format!("{name}.git"));
+        run(
+            self.tmp.path(),
+            "git",
+            &["init", "--bare", "--quiet", path.to_str().unwrap()],
+        );
+        run(
+            &self.primary,
+            "git",
+            &["remote", "add", name, path.to_str().unwrap()],
+        );
+        path
+    }
 }
 
 pub fn run(cwd: &Path, prog: &str, args: &[&str]) {
