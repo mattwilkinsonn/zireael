@@ -205,6 +205,30 @@ fn autodetect_lefthook_dotted_variant() {
 }
 
 #[test]
+fn autodetect_lefthook_toml() {
+    // Regression for issue #285: lefthook supports TOML config in
+    // addition to YAML, but autodetect only looked for the YAML
+    // variants — a repo with only `lefthook.toml` reported "no
+    // hook-runner config" and silently skipped hooks.
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("lefthook.toml"), "").unwrap();
+    assert_eq!(
+        Runner::autodetect(tmp.path()).unwrap(),
+        Some(Runner::Lefthook)
+    );
+}
+
+#[test]
+fn autodetect_lefthook_dotted_toml() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join(".lefthook.toml"), "").unwrap();
+    assert_eq!(
+        Runner::autodetect(tmp.path()).unwrap(),
+        Some(Runner::Lefthook)
+    );
+}
+
+#[test]
 fn autodetect_pre_commit() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(tmp.path().join(".pre-commit-config.yaml"), "").unwrap();

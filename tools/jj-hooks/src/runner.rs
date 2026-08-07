@@ -38,8 +38,10 @@ impl Runner {
                 &[
                     "lefthook.yml",
                     "lefthook.yaml",
+                    "lefthook.toml",
                     ".lefthook.yml",
                     ".lefthook.yaml",
+                    ".lefthook.toml",
                 ][..],
             ),
             (

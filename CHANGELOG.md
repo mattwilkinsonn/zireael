@@ -41,6 +41,11 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
 
 ### Fixed — jj-hooks
 
+- Runner autodetection now recognises lefthook's TOML config
+  (`lefthook.toml` / `.lefthook.toml`) in addition to the YAML forms. A
+  repo configured with only a `lefthook.toml` previously reported "no
+  hook-runner config" and skipped hooks. Issue #285.
+
 - Parallel `jj-gt submit` hook runs no longer fail intermittently with
   nondeterministic `Eval error: field not found` panics. Each bookmark's
   hooks run in their own ephemeral worktree, and the concurrent cold

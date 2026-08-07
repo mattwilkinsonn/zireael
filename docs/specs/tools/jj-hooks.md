@@ -114,7 +114,7 @@ present at the worktree root (`src/runner.rs:33-81`):
 | Runner | Config files |
 | --- | --- |
 | `Hk` | `hk.pkl` (`src/runner.rs:35`) |
-| `Lefthook` | `lefthook.yml` / `.yaml`, `.lefthook.yml` / `.yaml` (`src/runner.rs:37-43`) |
+| `Lefthook` | `lefthook.yml` / `.yaml` / `.toml`, `.lefthook.yml` / `.yaml` / `.toml` (`src/runner.rs:37-45`) |
 | `PreCommit` | `.pre-commit-config.yaml` / `.yml` (`src/runner.rs:46-47`) |
 | `Prek` | `prek.toml`, `.prek.toml` (`src/runner.rs:49-55`) |
 
