@@ -1,7 +1,7 @@
 # docs/
 
-Internal docs for zireael — the jj tooling, the nix-host + CI platform,
-and multi-agent coordination. Two kinds, mirrored by domain:
+Internal docs for zireael — the jj tooling, the CI platform, and
+multi-agent coordination. Two kinds, mirrored by domain:
 
 - **`designs/<domain>/`** — point-in-time **design records**: the *why*
   (problem, alternatives, decision, plan). Frozen once decided.
@@ -10,7 +10,7 @@ and multi-agent coordination. Two kinds, mirrored by domain:
   `#### Scenario:` (RFC 2119 + Given/When/Then) where security- or
   interface-critical; prose + tables elsewhere.
 
-Domains: `platform/` (nix hosts + CI), `tools/` (jj-gt, jj-hooks),
+Domains: `platform/` (CI), `tools/` (jj-gt, jj-hooks),
 `agents/` (multi-agent coordination).
 
 ## Living specs — keep them current
