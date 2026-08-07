@@ -8,18 +8,18 @@ class JjGt < Formula
     on_arm do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/jj-gt-v#{version}-darwin-arm64.tar.gz"
       # SHA256 is bumped by .github/workflows/release.yml when a tag is pushed.
-      sha256 "36a8f904a5ad6da967c508721834b821aace67001784529c01fb40af00fc5a9c"
+      sha256 "460d0959d9af3fe4bf5a34242571ef141845a8b624f78db7a87c581df9666fa6"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/jj-gt-v#{version}-linux-x64.tar.gz"
-      sha256 "0206162a64dc4393325e547548bd44c920fe9363caece561fa02cf62ee000dd8"
+      sha256 "cab71393c481dc5f6f6f4060b6b636ff744850f89850c9ebaaa6944888b7a007"
     end
     on_arm do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/jj-gt-v#{version}-linux-arm64.tar.gz"
-      sha256 "b71f97516c9a2e913b97fa3fad25726cdb3f56a7fcdf06c0fbf0c237334ef585"
+      sha256 "bfe2fec9e5d2755b7f0b8df1d261ad1127ddf9967eb778426af5160c9ee2fc0c"
     end
   end
 
