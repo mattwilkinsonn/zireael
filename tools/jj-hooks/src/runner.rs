@@ -33,13 +33,30 @@ impl Runner {
     pub fn autodetect(root: &Path) -> Result<Option<Runner>> {
         let candidates = [
             (Runner::Hk, &["hk.pkl"][..]),
+            // Lefthook autodetects its config as MainConfigNames x
+            // Extensions: names `lefthook` / `.lefthook` / `.config/lefthook`
+            // crossed with `.yml` / `.yaml` / `.json` / `.jsonc` / `.toml`
+            // (see lefthook `internal/config/loader.go`). Mirror that full
+            // 15-path set here so a repo using any of lefthook's own config
+            // forms is detected rather than silently skipped.
             (
                 Runner::Lefthook,
                 &[
                     "lefthook.yml",
                     "lefthook.yaml",
+                    "lefthook.json",
+                    "lefthook.jsonc",
+                    "lefthook.toml",
                     ".lefthook.yml",
                     ".lefthook.yaml",
+                    ".lefthook.json",
+                    ".lefthook.jsonc",
+                    ".lefthook.toml",
+                    ".config/lefthook.yml",
+                    ".config/lefthook.yaml",
+                    ".config/lefthook.json",
+                    ".config/lefthook.jsonc",
+                    ".config/lefthook.toml",
                 ][..],
             ),
             (

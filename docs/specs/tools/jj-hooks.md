@@ -103,29 +103,29 @@ each known flag's canonical form and appending `passthrough` at the end
 `Runner::Hk => "hk"`). `RunnerArg` is the clap value-enum mirror with a
 `From<RunnerArg>` conversion (`src/cli.rs:206-223`).
 
-`Stage` is `PreCommit | PrePush` (`src/runner.rs:85-88`), rendered as
-`"pre-commit"` / `"pre-push"` (`src/runner.rs:91-96`).
+`Stage` is `PreCommit | PrePush` (`src/runner.rs:102-105`), rendered as
+`"pre-commit"` / `"pre-push"` (`src/runner.rs:108-113`).
 
 ### Autodetection
 
 When `--runner` is absent the runner is detected from config files
-present at the worktree root (`src/runner.rs:33-81`):
+present at the worktree root (`src/runner.rs:33-98`):
 
 | Runner | Config files |
 | --- | --- |
 | `Hk` | `hk.pkl` (`src/runner.rs:35`) |
-| `Lefthook` | `lefthook.yml` / `.yaml`, `.lefthook.yml` / `.yaml` (`src/runner.rs:37-43`) |
-| `PreCommit` | `.pre-commit-config.yaml` / `.yml` (`src/runner.rs:46-47`) |
-| `Prek` | `prek.toml`, `.prek.toml` (`src/runner.rs:49-55`) |
+| `Lefthook` | `lefthook.{yml,yaml,json,jsonc,toml}`, the dotted `.lefthook.*` forms, and the same names under `.config/` (`src/runner.rs:43-60`) |
+| `PreCommit` | `.pre-commit-config.yaml` / `.yml` (`src/runner.rs:62-65`) |
+| `Prek` | `prek.toml`, `.prek.toml` (`src/runner.rs:66-72`) |
 
 Two or more *distinct* families found at one root is an error
-(`src/runner.rs:76-79` — *"multiple hook-runner configs found at
+(`src/runner.rs:93-96` — *"multiple hook-runner configs found at
 workspace root … Use --runner to pick one."*). `prek` + `pre-commit`
 are not ambiguous — they collapse to `Prek` since prek consumes both
-config shapes (`src/runner.rs:69-71` — `found.retain(|r| *r !=
+config shapes (`src/runner.rs:86-88` — `found.retain(|r| *r !=
 Runner::PreCommit);`). On an autodetected `PreCommit`, `prek` is
 preferred when resolvable since it is a faster drop-in
-(`src/runner.rs:207-218`, applied at `src/hooks.rs:821-838`). No config
+(`src/runner.rs:230-235`, applied at `src/hooks.rs:821-838`). No config
 present is a silent skip (`src/hooks.rs:810-820` — *"no hook-runner
 config in target commit; skipping hooks"*).
 
@@ -133,35 +133,35 @@ config in target commit; skipping hooks"*).
 
 | Runner | Diff-range invocation | All-files invocation |
 | --- | --- | --- |
-| `PreCommit` / `Prek` | `<bin> run --hook-stage <stage> --from-ref <from> --to-ref <to>` (`src/runner.rs:110-119`) | `<bin> run --hook-stage <stage> --all-files` (`src/runner.rs:166-172`) |
-| `Hk` | `hk run <stage> --from-ref <from> --to-ref <to>` (`src/runner.rs:120-128`) | `hk run <stage> --glob '*'` (`src/runner.rs:173-179`) |
-| `Lefthook` | `lefthook run <stage> --file <path>…` (`src/runner.rs:139-146`) | `lefthook run <stage> --all-files` (`src/runner.rs:198-205`) |
+| `PreCommit` / `Prek` | `<bin> run --hook-stage <stage> --from-ref <from> --to-ref <to>` (`src/runner.rs:125-136`) | `<bin> run --hook-stage <stage> --all-files` (`src/runner.rs:181-189`) |
+| `Hk` | `hk run <stage> --from-ref <from> --to-ref <to>` (`src/runner.rs:137-145`) | `hk run <stage> --glob '*'` (`src/runner.rs:190-196`) |
+| `Lefthook` | `lefthook run <stage> --file <path>…` (`src/runner.rs:156-163`) | `lefthook run <stage> --all-files` (`src/runner.rs:215-222`) |
 
 `hk` *needs* `--from-ref`/`--to-ref` inside an ephemeral worktree,
 otherwise it tries to resolve `refs/remotes/origin/HEAD` and fails
-(`src/runner.rs:101-105`). `lefthook` takes a file list, not ref
+(`src/runner.rs:119-125`). `lefthook` takes a file list, not ref
 bounds — passing it to `hook_command` panics
-(`src/runner.rs:129-131`). For all-files mode `hk` uses `--glob '*'`
+(`src/runner.rs:146-148`). For all-files mode `hk` uses `--glob '*'`
 because its own `-a/--all` does not override stage-hook ref bounds
-(`src/runner.rs:155-159`, verified against hk 1.45.0).
+(`src/runner.rs:172-176`, verified against hk 1.45.0).
 
 ### Runner binary resolution
 
 Element 0 of the built argv (the bare binary name) is replaced by the
 prefix from `resolve_runner_argv`, which tries four layers, first hit
-wins (`src/runner.rs:243-272`, spliced at `src/hooks.rs:855-856` +
+wins (`src/runner.rs:255-357`, spliced at `src/hooks.rs:855-856` +
 `splice_runner_prefix` `src/hooks.rs:696-711`):
 
 1. `jj-hooks.runner-bin.<runner>` config — explicit override, string
    or array, relative paths resolved against `workspace_root`
-   (`src/runner.rs:245-249`).
+   (`src/runner.rs:262-266`).
 2. The path baked into `primary_git_dir/hooks/<stage>` by `prek
-   install` / `pre-commit install` (`src/runner.rs:250-260`).
+   install` / `pre-commit install` (`src/runner.rs:267-277`).
 3. `uv run --` when `workspace_root/uv.lock` and `uv` both exist, for
-   pre-commit/prek only (`src/runner.rs:261-265`).
-4. Plain `$PATH` (`src/runner.rs:266-267`).
+   pre-commit/prek only (`src/runner.rs:278-282`).
+4. Plain `$PATH` (`src/runner.rs:283-284`).
 
-All four empty returns `RunnerNotFound` (`src/runner.rs:269-272`).
+All four empty returns `RunnerNotFound` (`src/runner.rs:354-356`).
 
 ## Hook execution pipeline
 
@@ -363,7 +363,7 @@ serially, from its own target worktree"* (`src/hooks.rs:550-552`).
   &validate_argv, wt.path()))` (`src/hooks.rs:873`) where
   `validate_argv` is the resolved prefix spliced over
   `hk_validate_command()` = `vec![Runner::Hk.bin().into(),
-  "validate".into()]` (`src/runner.rs:191-193`, spliced at
+  "validate".into()]` (`src/runner.rs:208-210`, spliced at
   `src/hooks.rs:871-872`),
 - **And** `warm_once` MUST hold the `PklWarmCache` mutex across the
   `validate` call so concurrent callers block, returning early for an
@@ -447,7 +447,7 @@ run with `--ignore-working-copy`.
 - **When** hooks run,
 - **Then** the runner MUST see `--from-ref <old> --to-ref <new>`
   (`src/hooks.rs:1032-1033` feeding `hook_command`,
-  `src/runner.rs:108-128`) — the full bookmark diff, same as `git push
+  `src/runner.rs:125-150`) — the full bookmark diff, same as `git push
   origin <bookmark>` would push.
 - **And** for the revset entrypoint, the *"to"* is `heads(<revset>)`
   (limit 1) and the *"from"* is `roots(<revset>)-`, so `main..tip`
