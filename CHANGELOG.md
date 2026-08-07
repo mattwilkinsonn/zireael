@@ -41,9 +41,10 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
 
 ### Fixed — jj-hooks
 
-- Runner autodetection now recognises lefthook's TOML config
-  (`lefthook.toml` / `.lefthook.toml`) in addition to the YAML forms. A
-  repo configured with only a `lefthook.toml` previously reported "no
+- Runner autodetection now recognises lefthook's full config surface —
+  YAML, JSON, JSONC and TOML forms (`lefthook.*`, the dotted
+  `.lefthook.*`, and the same under `.config/`) — not just YAML. A repo
+  configured with any non-YAML lefthook config previously reported "no
   hook-runner config" and skipped hooks. Issue #285.
 
 - Parallel `jj-gt submit` hook runs no longer fail intermittently with

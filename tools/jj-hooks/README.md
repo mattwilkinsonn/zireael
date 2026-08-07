@@ -207,7 +207,7 @@ Global flags:
 `jj-hooks` probes the workspace root for these files, in order:
 
 1. `hk.pkl` → `hk`
-2. `lefthook.yml` / `lefthook.yaml` / `lefthook.toml` / `.lefthook.yml` / `.lefthook.yaml` / `.lefthook.toml` → `lefthook`
+2. `lefthook.{yml,yaml,json,jsonc,toml}`, the dotted `.lefthook.*` forms, and the same names under `.config/` → `lefthook`
 3. `.pre-commit-config.yaml` / `.pre-commit-config.yml` → `pre-commit`
 4. `prek.toml` / `.prek.toml` → `prek` (prek's native TOML config)
 

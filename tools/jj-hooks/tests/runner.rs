@@ -229,6 +229,44 @@ fn autodetect_lefthook_dotted_toml() {
 }
 
 #[test]
+fn autodetect_lefthook_json() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("lefthook.json"), "").unwrap();
+    assert_eq!(
+        Runner::autodetect(tmp.path()).unwrap(),
+        Some(Runner::Lefthook)
+    );
+}
+
+#[test]
+fn autodetect_lefthook_jsonc() {
+    let tmp = TempDir::new().unwrap();
+    std::fs::write(tmp.path().join("lefthook.jsonc"), "").unwrap();
+    assert_eq!(
+        Runner::autodetect(tmp.path()).unwrap(),
+        Some(Runner::Lefthook)
+    );
+}
+
+#[test]
+fn autodetect_lefthook_config_dir() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join(".config")).unwrap();
+    std::fs::write(root.join(".config/lefthook.yml"), "").unwrap();
+    assert_eq!(Runner::autodetect(root).unwrap(), Some(Runner::Lefthook));
+}
+
+#[test]
+fn autodetect_lefthook_config_dir_toml() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join(".config")).unwrap();
+    std::fs::write(root.join(".config/lefthook.toml"), "").unwrap();
+    assert_eq!(Runner::autodetect(root).unwrap(), Some(Runner::Lefthook));
+}
+
+#[test]
 fn autodetect_pre_commit() {
     let tmp = TempDir::new().unwrap();
     std::fs::write(tmp.path().join(".pre-commit-config.yaml"), "").unwrap();
