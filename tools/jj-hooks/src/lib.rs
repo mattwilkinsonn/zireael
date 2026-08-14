@@ -12,6 +12,7 @@ pub mod init;
 pub mod jj;
 pub mod push;
 pub mod push_tags;
+pub mod repo_env;
 pub mod runner;
 pub mod setup;
 pub mod worktree;

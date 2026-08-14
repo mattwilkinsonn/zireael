@@ -27,6 +27,22 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
   `--glob '*'` (its documented `-a/--all` flag doesn't actually override
   stage-hook ref bounds in v1.45.0). `jj-hp push` always uses the diff
   range — the bookmark's ref bounds are its identity.
+- Hook subprocesses now run inside the repo's direnv/devenv environment.
+  When the workspace has a `.envrc` and `direnv` is on `$PATH`, `jj-hp`
+  runs `direnv export json` once (against the workspace root, cached for
+  the whole invocation) and merges the result into every hook and
+  setup-step subprocess — so the local gate resolves the same
+  devenv-pinned tools (moon, biome, proto shims, …) that CI's
+  `devenv shell -- moon ci` does, instead of the system `$PATH`. Strict
+  superset of the old behavior: no `.envrc` / no `direnv` / export failure
+  falls back to the previous env (parent + `JJ_HOOKS_WORKSPACE`), and a
+  blocked `.envrc` prints a `direnv allow` hint. Git repo-location vars
+  (`GIT_DIR` and the rest of `git rev-parse --local-env-vars`) are stripped
+  from the hook child unconditionally — whether carried by the patch or
+  inherited from an already-loaded shell (a secondary workspace's
+  `.envrc.local`) — so hook children resolve git against their own worktree.
+  Opt out with `JJ_HOOKS_NO_REPO_ENV=1` or `jj-hooks.repo-env = "off"`.
+  Issue jj-hooks#289.
 
 ### Changed — build + CI
 

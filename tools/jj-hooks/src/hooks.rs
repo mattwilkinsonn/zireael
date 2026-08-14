@@ -153,6 +153,11 @@ pub fn run_for_update(
     update: &BookmarkUpdate,
     opts: RunOpts,
 ) -> Result<HookOutcome> {
+    // Compute the repo's devenv/direnv env ONCE, eagerly, before any
+    // worktree/spawn. The returned Arc is intentionally discarded — the
+    // side effect is populating the process-global cache that the spawn
+    // sites read via `apply_repo_env`. The opt-outs are read once here.
+    let _ = crate::repo_env::repo_env(workspace_root, crate::repo_env::repo_env_enabled(jj));
     run_for_update_with_cancel(
         jj,
         primary_git_dir,
@@ -300,13 +305,15 @@ fn run_for_update_with_cancel(
 /// (silent on success); a failure is logged and swallowed — it never aborts
 /// the batch (a real config error resurfaces through the per-bookmark run that
 /// follows) — and reported as `false` so the caller only marks warmed on success.
-fn run_hk_validate(argv: &[String], cwd: &Path) -> bool {
+fn run_hk_validate(argv: &[String], cwd: &Path, workspace_root: &Path) -> bool {
     tracing::info!("warming hk Pkl cache: {argv:?}");
-    match Command::new(&argv[0])
-        .args(&argv[1..])
-        .current_dir(cwd)
-        .output()
-    {
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..]).current_dir(cwd);
+    // hk itself may be devenv-pinned; validate under the same env the run
+    // will use. JJ_HOOKS_WORKSPACE is set after so it always wins.
+    crate::repo_env::apply_repo_env(&mut cmd, workspace_root);
+    cmd.env("JJ_HOOKS_WORKSPACE", workspace_root);
+    match cmd.output() {
         Ok(out) if out.status.success() => true,
         Ok(out) => {
             tracing::debug!(
@@ -427,6 +434,9 @@ where
     S: Fn(usize, &BookmarkUpdate) + Send + Sync,
     F: Fn(usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
 {
+    // Populate the repo-env cache ONCE before the fan-out, so parallel
+    // workers read it (never race to compute it). Opt-outs read once here.
+    let _ = crate::repo_env::repo_env(workspace_root, crate::repo_env::repo_env_enabled(jj));
     // One warm cache shared across the batch: the first per-bookmark run
     // for each distinct config validates it (serially) from its own
     // worktree; the rest reuse the now-warm `~/.pkl` cache.
@@ -547,6 +557,9 @@ where
     S: Fn(usize, usize, &BookmarkUpdate) + Send + Sync,
     F: Fn(usize, usize, &BookmarkUpdate, &HookOutcome) + Send + Sync,
 {
+    // Populate the repo-env cache ONCE before the fan-out (see
+    // `run_for_updates_parallel`). Opt-outs read once here.
+    let _ = crate::repo_env::repo_env(workspace_root, crate::repo_env::repo_env_enabled(jj));
     // One warm cache shared across all partitions (see
     // `run_for_updates_parallel`): each distinct config is warmed once,
     // serially, from its own target worktree.
@@ -870,7 +883,9 @@ fn run_once(
         Some(warm) if runner == Runner::Hk => {
             let validate_argv =
                 splice_runner_prefix(&runner_argv, &crate::runner::hk_validate_command());
-            warm.warm_once(wt.path(), || run_hk_validate(&validate_argv, wt.path()))
+            warm.warm_once(wt.path(), || {
+                run_hk_validate(&validate_argv, wt.path(), workspace_root)
+            })
         }
         _ => None,
     };
@@ -1006,9 +1021,12 @@ fn run_subprocess(
     capture: Option<&mut String>,
 ) -> Result<bool> {
     let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..])
-        .current_dir(cwd)
-        .env("JJ_HOOKS_WORKSPACE", workspace_root);
+    cmd.args(&argv[1..]).current_dir(cwd);
+    // Merge the repo's direnv/devenv env (once-computed, cached) BEFORE
+    // JJ_HOOKS_WORKSPACE so that variable always wins. No-op unless a batch
+    // entrypoint populated the cache for this workspace_root.
+    crate::repo_env::apply_repo_env(&mut cmd, workspace_root);
+    cmd.env("JJ_HOOKS_WORKSPACE", workspace_root);
     match capture {
         None => {
             let status = cmd.status()?;
@@ -1588,6 +1606,72 @@ mod tests {
                 .warm_once(wt, || panic!("must not re-validate"))
                 .is_none(),
             "already-warm worktree returns None without re-validating"
+        );
+    }
+
+    #[test]
+    fn run_subprocess_applies_repo_env_patch() {
+        // A seeded PATH-setting patch must reach the child, and
+        // JJ_HOOKS_WORKSPACE (set AFTER the patch) must still win.
+        let ws = tempfile::TempDir::new().unwrap();
+        crate::repo_env::test_seed(
+            ws.path(),
+            crate::repo_env::EnvPatch::Patch(std::collections::HashMap::from([(
+                "REPO_ENV_MARKER".to_string(),
+                Some("applied".to_string()),
+            )])),
+        );
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "printf 'MARK=[%s]' \"${REPO_ENV_MARKER:-unset}\"".to_string(),
+        ];
+        let mut buf = String::new();
+        let ok = run_subprocess(&argv, ws.path(), ws.path(), Some(&mut buf)).unwrap();
+        assert!(ok);
+        // RED before T2: run_subprocess set only JJ_HOOKS_WORKSPACE, so the
+        // child saw `unset` and this assertion failed.
+        assert!(buf.contains("MARK=[applied]"), "captured: {buf:?}");
+    }
+
+    #[test]
+    fn run_subprocess_strips_git_local_env_from_patch() {
+        // A patch that (wrongly) carries GIT_DIR must NOT reach the hook
+        // child — it would make the child's git resolve against the primary
+        // workspace instead of the temp worktree.
+        let ws = tempfile::TempDir::new().unwrap();
+        crate::repo_env::test_seed(
+            ws.path(),
+            crate::repo_env::EnvPatch::Patch(std::collections::HashMap::from([(
+                "GIT_DIR".to_string(),
+                Some("/bogus/primary/.git".to_string()),
+            )])),
+        );
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "printf 'GD=[%s]' \"${GIT_DIR:-unset}\"".to_string(),
+        ];
+        let mut buf = String::new();
+        run_subprocess(&argv, ws.path(), ws.path(), Some(&mut buf)).unwrap();
+        assert!(buf.contains("GD=[unset]"), "captured: {buf:?}");
+    }
+
+    #[test]
+    fn run_subprocess_no_patch_is_unchanged() {
+        // Non-regression: with no cache entry, the child env is the parent's
+        // plus JJ_HOOKS_WORKSPACE — nothing added, nothing removed.
+        let ws = tempfile::TempDir::new().unwrap();
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "printf 'WS=[%s]' \"${JJ_HOOKS_WORKSPACE:-unset}\"".to_string(),
+        ];
+        let mut buf = String::new();
+        run_subprocess(&argv, ws.path(), ws.path(), Some(&mut buf)).unwrap();
+        assert!(
+            buf.contains(&format!("WS=[{}]", ws.path().display())),
+            "captured: {buf:?}"
         );
     }
 }

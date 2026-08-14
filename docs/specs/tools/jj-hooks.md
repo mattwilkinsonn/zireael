@@ -274,6 +274,68 @@ attempt before the runner is invoked and returns `success: false`
 on success (`src/setup.rs:116-131`); `JJ_HOOKS_WORKSPACE` exposes the
 invocation workspace to each step (`src/setup.rs:111-115`).
 
+### Requirement: Repo environment propagation into hook subprocesses
+
+Because hooks run in a detached `/tmp` worktree outside the repo's
+direnv tree, every hook, setup-step, and `hk validate` subprocess
+SHALL run inside the repo's direnv/devenv environment when one is
+available, so devenv-pinned tools resolve the same way they do under
+CI's `devenv shell -- moon ci` rather than against the system `$PATH`.
+The mechanism SHALL be a strict superset of the prior behavior: when it
+cannot load an environment it MUST fall back to exactly the previous
+subprocess environment (the parent env plus `JJ_HOOKS_WORKSPACE`).
+
+#### Scenario: Export computed once per invocation, applied at every spawn
+
+- **Given** a `workspace_root` whose directory has an allowed `.envrc`
+  and `direnv` on `jj-hp`'s `$PATH`,
+- **When** a batch entrypoint runs (`run_for_update`,
+  `run_for_updates_parallel`, or `run_for_partitioned_updates_parallel`,
+  `src/hooks.rs`),
+- **Then** it MUST eagerly compute the environment delta once via
+  `repo_env::repo_env(workspace_root, enabled)`
+  (`src/repo_env.rs`), which runs `direnv export json` with
+  `current_dir(workspace_root)` (never the temp worktree) and caches
+  the parsed diff under a process-global `OnceLock<Mutex<HashMap>>`
+  keyed by the canonicalized root,
+- **And** each subprocess spawn MUST merge the cached diff into its
+  `Command` via `repo_env::apply_repo_env(&mut cmd, workspace_root)`
+  before setting `JJ_HOOKS_WORKSPACE` (`src/hooks.rs` `run_subprocess`
+  / `run_hk_validate`, `src/setup.rs` `run_steps`), so
+  `JJ_HOOKS_WORKSPACE` always wins,
+- **And** the export subprocess MUST inherit the full parent
+  environment (only `DIRENV_LOG_FORMAT` overridden) so direnv reverses a
+  previously-loaded repo's env via the inherited `DIRENV_DIFF` before
+  applying this repo's `.envrc`.
+
+#### Scenario: Git repo-location variables are stripped from the hook child
+
+- **Given** a hook `Command` about to spawn (a `.envrc.local` may set
+  `GIT_DIR` at the primary repo's `.git`, reaching the child either via
+  the computed patch or — when the shell was already loaded, so the
+  export diff is empty — by inheritance from `jj-hp`'s own environment),
+- **When** `apply_repo_env` merges the patch into that `Command`,
+- **Then** every variable git reports via `git rev-parse
+  --local-env-vars` (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, …;
+  `src/repo_env.rs` `git_local_env_vars`) MUST be removed from the child
+  unconditionally — whether the patch set it, unset it, or never
+  mentioned it — so the hook child resolves git against its own temp
+  worktree, not the primary workspace.
+
+#### Scenario: Absent or failed environment is a silent fallback
+
+- **Given** no `.envrc`, no `direnv` on `$PATH`, or a failed
+  `direnv export json`,
+- **When** the batch entrypoint computes the patch,
+- **Then** the result MUST be `EnvPatch::Disabled` and every spawn MUST
+  be byte-identical to the prior behavior; a failure MUST warn via
+  `tracing` and never abort the batch, except a blocked `.envrc` which
+  MUST additionally emit one visible `direnv allow` hint
+  (`src/repo_env.rs` `compute` / `report_blocked`).
+- **And** the mechanism MUST be opt-out via `JJ_HOOKS_NO_REPO_ENV`
+  (any non-empty value) or jj config `jj-hooks.repo-env = "off"`, read
+  once at the batch entrypoint (`src/repo_env.rs` `repo_env_enabled`).
+
 ## Parallel batch execution
 
 The single-bookmark CLI path is sequential: `jj-hp push` loops
