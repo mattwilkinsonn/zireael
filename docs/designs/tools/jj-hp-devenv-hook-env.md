@@ -28,7 +28,7 @@ ci`). This record designs the mechanism; the class-level choice is settled.
   env plus `JJ_HOOKS_WORKSPACE`. Failure to load the env is never fatal — warn
   once (tracing) and fall back.
 - **Captured-output purity.** `run_subprocess` folds child stdout+stderr into
-  the user-facing failure buffer (`hooks.rs:1014-1018`); `run_steps` does the
+  the user-facing failure buffer (`hooks.rs:1022-1026`); `run_steps` does the
   same (`setup.rs:161-165`). The env-acquisition step MUST NOT leak direnv's
   output into those buffers. The guarantee is structural: the export runs as
   a *separate* subprocess whose stdout/stderr jj-hp pipes itself and routes
@@ -61,23 +61,28 @@ ci`). This record designs the mechanism; the class-level choice is settled.
   test-controlled PATH). The cross-repo compass biome repro is the driver's
   acceptance test, not a unit test.
 - **Git repo-location env is stripped from the patch.** `apply_repo_env`
-  removes the git repo-location env family — at minimum `GIT_DIR`,
-  `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`
-  (the `git rev-parse --local-env-vars` set) — before the patch reaches the
-  child. Load-bearing: this repo's documented secondary-workspace flow drops
-  a `.envrc.local` setting `GIT_DIR` at the primary repo's `.git`
-  (`.envrc:14-17`); propagated into the detached temp worktree, it would make
-  every git invocation inside the hook child (hk's diff computation, moon's
-  affected detection) resolve HEAD/index against the PRIMARY workspace —
-  wrong changed-file sets at best, primary-index mutation at worst. Enforced
-  with a T1/T2 test.
+  removes the git repo-location env family before the patch reaches the
+  child. The set is derived authoritatively at runtime from `git rev-parse
+  --local-env-vars` (the names git itself treats as repo-local — `GIT_DIR`,
+  `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+  `GIT_COMMON_DIR`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_CONFIG`, and
+  the rest), so a repo whose `.envrc` sets any git-local var — not just the
+  observed `GIT_DIR` case — is covered, and the set tracks git-version
+  additions instead of drifting against a hardcoded list. Load-bearing:
+  this repo's documented secondary-workspace flow drops a `.envrc.local`
+  setting `GIT_DIR` at the primary repo's `.git` (`.envrc:14-17`);
+  propagated into the detached temp worktree, it would make every git
+  invocation inside the hook child (hk's diff computation, moon's affected
+  detection) resolve HEAD/index against the PRIMARY workspace — wrong
+  changed-file sets at best, primary-index mutation at worst. Enforced with
+  a T1/T2 test.
 
 ## Evidence base (cited this session)
 
 All file:line references were read this session in the clone at
 `/home/mattw/agents/workspaces/zireael/zireael`.
 
-- **Bug site 1 — hook subprocess env** (`tools/jj-hooks/src/hooks.rs:1000-1003`):
+- **Bug site 1 — hook subprocess env** (`tools/jj-hooks/src/hooks.rs:1008-1011`):
 
   ```rust
   let mut cmd = Command::new(&argv[0]);
@@ -87,8 +92,8 @@ All file:line references were read this session in the clone at
   ```
 
   `cwd` is the temp worktree (`wt.path()` at the call sites,
-  `hooks.rs:910` and `hooks.rs:938`). The child inherits only jj-hp's env plus
-  that one variable. Signature (`hooks.rs:994-999`):
+  `hooks.rs:918` and `hooks.rs:946`). The child inherits only jj-hp's env plus
+  that one variable. Signature (`hooks.rs:1002-1007`):
 
   ```rust
   fn run_subprocess(
@@ -109,7 +114,7 @@ All file:line references were read this session in the clone at
       .output()?;
   ```
 
-  Same shape, same gap. `run_steps` signature (`setup.rs:133`, doc comment above at `:132`):
+  Same shape, same gap. `run_steps` signature (`setup.rs:132`, doc comment above at `:131`):
   `pub fn run_steps(steps: &[SetupStep], worktree: &Path, workspace_root: &Path) -> Result<String>`.
 
 - **Third spawn site — hk cache warm** (`tools/jj-hooks/src/hooks.rs:303-308`):
@@ -131,7 +136,7 @@ All file:line references were read this session in the clone at
   `run_subprocess(&argv, wt.path(), workspace_root, captured.as_mut())?` per
   iteration — the per-subprocess vs once-per-run cost fork is real.
 
-- **Captured-buffer contract** (`hooks.rs:1014-1018`):
+- **Captured-buffer contract** (`hooks.rs:1022-1026`):
 
   ```rust
   buf.push_str(&format!("$ {}\n", argv.join(" ")));
@@ -145,7 +150,7 @@ All file:line references were read this session in the clone at
   failure dump — hence the export-in-a-separate-process constraint.
 
 - **Runner resolution walks jj-hp's own PATH**
-  (`tools/jj-hooks/src/runner.rs:227-236`):
+  (`tools/jj-hooks/src/runner.rs:244-253`):
 
   ```rust
   fn which(bin: &str) -> Option<PathBuf> {
@@ -161,8 +166,8 @@ All file:line references were read this session in the clone at
   ```
 
   Layer 4 of `resolve_runner_argv(runner, jj, workspace_root,
-  primary_git_dir, stage)` (`runner.rs:273-279`; resolution-order doc at
-  `runner.rs:243-267`). This resolves the *runner* binary (hk / prek /
+  primary_git_dir, stage)` (`runner.rs:290-296`; resolution-order doc at
+  `runner.rs:260-289`). This resolves the *runner* binary (hk / prek /
   pre-commit / lefthook) against the parent PATH — see fork 5.
 
 - **PklWarmCache precedent — once-per-run serialized warm**
@@ -234,7 +239,7 @@ All file:line references were read this session in the clone at
   Fork 5.
 
 - **Layer 4 returns a bare name; the child resolves it**
-  (`tools/jj-hooks/src/runner.rs:332-335`):
+  (`tools/jj-hooks/src/runner.rs:349-351`):
 
   ```rust
   // (4) Plain $PATH.
@@ -248,14 +253,22 @@ All file:line references were read this session in the clone at
   which PATH satisfied the pre-check. This is why T1+T2 alone fix every
   observed fleet manifestation and the pre-check ordering is cosmetic.
 
-- **Release plumbing — internal path-dep pin** (root `Cargo.toml:43`):
+- **Release plumbing — crate version + internal path-dep pin** (root
+  `Cargo.toml:10` and `Cargo.toml:43`):
 
   ```toml
-  jj-hooks = { version = "0.3.7", path = "tools/jj-hooks" }
+  [workspace.package]
+  version = "0.3.8"
+  # ...
+  jj-hooks = { version = "0.3.8", path = "tools/jj-hooks" }
   ```
 
-  The workspace-dep floor is a separate field from the crate version; T5's
-  bump checklist must touch both or the release auto-rewrite drifts.
+  The crate version lives once at `[workspace.package].version` (root
+  `Cargo.toml:10`); `tools/jj-hooks/Cargo.toml` carries only
+  `version.workspace = true` (`tools/jj-hooks/Cargo.toml:4`), no literal.
+  The path-dep pin at `Cargo.toml:43` is auto-rewritten to the crate
+  version by `cargo publish` (comment at `Cargo.toml:36-42`), so T5 bumps
+  the single field at `:10` and the pin tracks automatically.
 
 ### Empirical findings (driver-run, this clone, direnv 2.37.1)
 
@@ -289,7 +302,7 @@ Run against the real `.envrc` (`use devenv`) before freeze:
 1. **Detect**: the mechanism activates iff the T4 opt-outs permit it (read
    once at the batch entrypoints, passed in as `enabled`) AND
    `workspace_root/.envrc` exists AND `direnv` resolves on jj-hp's own PATH
-   (same `which` walk as `runner.rs:227-236`). Otherwise the patch is
+   (same `which` walk as `runner.rs:244-253`). Otherwise the patch is
    `Disabled` and every spawn is byte-identical to today.
 2. **Export once**: run `direnv export json` with
    `current_dir(workspace_root)` (the allowed `.envrc` location, never the
@@ -347,26 +360,26 @@ Run against the real `.envrc` (`use devenv`) before freeze:
    (`DIRENV_DIFF`/`DIRENV_DIR` included), overriding only
    `DIRENV_LOG_FORMAT`** — never "sanitize" `DIRENV_*` on the happy path;
    the cleared-env pass exists only as the failure retry in step 2.
-   `apply_repo_env` strips the git repo-location env family (`GIT_DIR`,
-   `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`,
-   `GIT_OBJECT_DIRECTORY`) from the patch — see Global Constraints.
+   `apply_repo_env` strips the git repo-location env family (derived at
+   runtime from `git rev-parse --local-env-vars`) from the patch — see
+   Global Constraints.
    `JJ_HOOKS_WORKSPACE` is set after the patch so it always wins.
 5. **Applied at all three worktree spawn sites**: `run_subprocess`
-   (`hooks.rs:1000-1003`), `run_steps` (`setup.rs:150-154`), and
+   (`hooks.rs:1008-1011`), `run_steps` (`setup.rs:150-154`), and
    `run_hk_validate` (`hooks.rs:303-308`) call the one shared helper. The
-   pure-git plumbing spawns (`changed_files` `hooks.rs:1069`, `delete_git_ref`
-   `hooks.rs:1212`, `run_git*` `hooks.rs:1228-1259`, worktree create/remove)
+   pure-git plumbing spawns (`changed_files` `hooks.rs:1122`, `delete_git_ref`
+   `hooks.rs:1265`, `run_git*` `hooks.rs:1281-1312`, worktree create/remove)
    stay untouched — git needs no devenv.
 6. **Runner resolution — deferred.** `resolve_runner_argv` is unchanged in
    this release. After T1+T2 the runner binary is resolved via `execvp`
    against the *child's* merged PATH at spawn time (layer 4 returns a bare
-   name, `runner.rs:332-335`), so devenv-pinned runners already win where
+   name, `runner.rs:349-351`), so devenv-pinned runners already win where
    it matters; a repo-env-PATH fallback in the pre-check would also
    silently change runner *selection* via `prefer_prek_when_available`
    (`hooks.rs:830-838`). See Fork 5 and the T3 Open Question.
 7. **Escape hatch** (fork 7): automatic by default; jj config
    `jj-hooks.repo-env = "off"` (read via the existing `JjCli` config-get
-   pattern, cf. `read_runner_bin_config`, `runner.rs:354-357`) and env var
+   pattern, cf. `read_runner_bin_config`, `runner.rs:371-375`) and env var
    `JJ_HOOKS_NO_REPO_ENV=1` both force `Disabled`. Both are read once at
    the batch entrypoints and passed into the eager `repo_env()` call as a
    parameter — never an ambient process-global flag (fork 6).
@@ -392,10 +405,10 @@ once, keeps the capture buffer clean, and needs zero new runtime dependencies
 - **(a) Wrap argv in `direnv exec <workspace_root> <argv…>`** — rejected.
   Correctness is fine (direnv evaluates and execs), but: (i) cost is per
   subprocess — `run_once` spawns one subprocess per `from_ref`
-  (`hooks.rs:916-938`) per bookmark, so a 3-ancestor × 4-bookmark batch pays
+  (`hooks.rs:924-950`) per bookmark, so a 3-ancestor × 4-bookmark batch pays
   12 direnv evaluations instead of 1; (ii) direnv logs to the *child's*
   stderr, which `run_subprocess` folds into the user-facing buffer
-  (`hooks.rs:1016-1018`) — suppressible with `DIRENV_LOG_FORMAT=""` but any
+  (`hooks.rs:1022-1026`) — suppressible with `DIRENV_LOG_FORMAT=""` but any
   direnv *error* would still land there; (iii) it rewrites every argv, which
   interacts with `splice_runner_prefix` and the `$ argv` header line the
   capture buffer prints (`hooks.rs:1014`), leaking mechanism into UX.
@@ -453,19 +466,19 @@ forbids any new failure mode).
 Chosen: the export subprocess pipes both stdout (the JSON) and stderr
 (routed into `tracing::warn` on failure only). Because the hook child
 itself is spawned directly (no direnv wrapper), nothing new can reach the
-capture buffer at `hooks.rs:1014-1018` / `setup.rs:161-165` — a structural
+capture buffer at `hooks.rs:1022-1026` / `setup.rs:161-165` — a structural
 guarantee of the export-once approach, not a filter. `DIRENV_LOG_FORMAT=""`
 is set as a secondary nicety; empirically (F4) it does NOT silence devenv's
 bootstrap stderr, so it must never be relied on for purity.
 
 ### Fork 5 — interaction with `resolve_runner_argv` (deferred)
 
-The runner pre-check resolves via jj-hp's own PATH (`runner.rs:227-236`,
+The runner pre-check resolves via jj-hp's own PATH (`runner.rs:244-253`,
 called from `hooks.rs:855-856`). A repo-env-PATH fallback (T3) was designed
 and is now **deferred from the first release**, for two reasons:
 
 - **Redundant with `execvp` for every observed failure.** Layer 4 returns
-  the bare binary name (`runner.rs:332-335`), which the child resolves
+  the bare binary name (`runner.rs:349-351`), which the child resolves
   against its own merged PATH at spawn time — so after T1+T2 a
   devenv-pinned runner already wins where it matters, regardless of which
   PATH satisfied the pre-check. T1+T2 alone fix all observed fleet
@@ -540,8 +553,8 @@ pub enum EnvPatch {
 pub fn repo_env(workspace_root: &Path, enabled: bool) -> std::sync::Arc<EnvPatch>;
 
 /// Merge the cached patch into `cmd`: env() for Some, env_remove() for
-/// None, after stripping the git repo-location family (GIT_DIR,
-/// GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR, GIT_OBJECT_DIRECTORY).
+/// None, after stripping the git repo-location family (derived at runtime
+/// from `git rev-parse --local-env-vars`).
 /// No-op for Disabled or a missing cache entry. Never touches
 /// JJ_HOOKS_WORKSPACE (callers set it after this call).
 pub fn apply_repo_env(cmd: &mut std::process::Command, workspace_root: &Path);
@@ -549,7 +562,7 @@ pub fn apply_repo_env(cmd: &mut std::process::Command, workspace_root: &Path);
 
 Detection inside `repo_env`: `enabled` AND
 `workspace_root.join(".envrc").is_file()` AND `direnv` found by a PATH walk
-(reuse/mirror `which`, `runner.rs:227-236`).
+(reuse/mirror `which`, `runner.rs:244-253`).
 
 Outcome handling per Approach step 2: empty-stdout success ⇒ `Patch(empty)`;
 failure ⇒ one cleared-`DIRENV_*` retry; blocked `.envrc` ⇒ `Disabled` plus
@@ -589,7 +602,7 @@ Test cycle (red→green; hermetic fake-direnv shim except the last item):
 
 ### T2 — apply the patch at all three worktree spawn sites
 
-Modify `run_subprocess` (`hooks.rs:1000-1003`), `run_steps`
+Modify `run_subprocess` (`hooks.rs:1008-1011`), `run_steps`
 (`setup.rs:150-154`), and `run_hk_validate` (`hooks.rs:303-308`) to call
 `repo_env::apply_repo_env(&mut cmd, workspace_root)` before the
 `JJ_HOOKS_WORKSPACE` env set. `run_hk_validate` gains a `workspace_root:
@@ -628,7 +641,7 @@ resolvable at the pre-check, with a friendlier `RunnerNotFound` message
 (`error.rs:26-35`) in that case.
 
 Why it is out of the first release (Fork 5): layer 4 returns a bare name
-(`runner.rs:332-335`) that the child resolves against its merged PATH via
+(`runner.rs:349-351`) that the child resolves against its merged PATH via
 `execvp`, so T1+T2 already fix every observed manifestation and T3 only
 affects the cosmetic pre-check message; and via the `Runner::Prek` probe
 feeding `prefer_prek_when_available` (`hooks.rs:830-838`) it would silently
@@ -647,7 +660,7 @@ and silently miss entries cached before it was set). Order:
 `JJ_HOOKS_NO_REPO_ENV` env var (any non-empty value → disabled), then jj
 config `jj-hooks.repo-env` (`"off"` → disabled; unset or `"auto"` →
 automatic), read via the same `jj config get` pattern as
-`read_runner_bin_config` (`runner.rs:354-384`). The entrypoints
+`read_runner_bin_config` (`runner.rs:371-401`). The entrypoints
 (`run_for_update` / parallel / sequential) have a `JjCli` in scope; the
 spawn sites never consult config.
 
@@ -666,11 +679,13 @@ No process isolation required — the opt-out is per-call, not ambient.
 ### T5 — docs + release
 
 Update `tools/jj-hooks/README.md` (mechanism, fallback semantics, the two
-opt-outs); version bump per the repo's release flow — the checklist touches
-BOTH the crate version in `tools/jj-hooks/Cargo.toml` AND the root
-`Cargo.toml:43` internal path-dep pin (`jj-hooks = { version = "0.3.7",
-path = "tools/jj-hooks" }`), or the release auto-rewrite drifts; changelog
-entry referencing #289. Driver-run acceptance: the compass biome repro
+opt-outs); version bump per the repo's release flow — bump the single
+`[workspace.package].version` field at root `Cargo.toml:10` (the crate
+manifest `tools/jj-hooks/Cargo.toml` is `version.workspace = true`, no
+literal to edit); the internal path-dep pin at root `Cargo.toml:43` is
+auto-rewritten to that version by `cargo publish` (comment at
+`Cargo.toml:36-42`), so it tracks automatically; changelog entry
+referencing #289. Driver-run acceptance: the compass biome repro
 (temp worktree resolves devenv biome 2.5.4, not system 2.4.16) and a push
 from a bare (non-direnv-loaded) shell in zireael passing `moon ci` with
 live proto pins.
@@ -693,9 +708,9 @@ First release ships T1 + T2 + T4 + T5. T3 is deferred to a follow-up issue
   end-to-end child-env tests + capture-purity + git-family strip tests
 - [ ] T4 — opt-outs (`JJ_HOOKS_NO_REPO_ENV`, `jj-hooks.repo-env = "off"`)
   as the `enabled` population parameter; opt-out tests
-- [ ] T5 — README + changelog + version bump (crate + root `Cargo.toml:43`
-  path-dep pin); driver acceptance (compass biome repro, bare-shell
-  zireael push)
+- [ ] T5 — README + changelog + version bump (root `Cargo.toml:10`
+  `[workspace.package].version`; the `:43` path-dep pin auto-rewrites on
+  publish); driver acceptance (compass biome repro, bare-shell zireael push)
 - [ ] (deferred) T3 — runner-resolution fallback to the repo-env PATH;
   follow-up issue after Matt rules on the Open Question
 
@@ -705,7 +720,7 @@ First release ships T1 + T2 + T4 + T5. T3 is deferred to a follow-up issue
   PATH) from the first release.** Recommendation: **defer T3 to a follow-up
   issue; first release = T1+T2+T4+T5.** Two independent reasons: (1) after
   T1+T2 the runner binary resolves via `execvp` against the child's merged
-  PATH at spawn time (layer 4 returns a bare name, `runner.rs:332-335`), so
+  PATH at spawn time (layer 4 returns a bare name, `runner.rs:349-351`), so
   T1+T2 already fix ALL observed fleet manifestations (biome, proto,
   nilaway) and T3 would only improve the cosmetic pre-check
   `RunnerNotFound` message in an unobserved devenv-only-runner case;
