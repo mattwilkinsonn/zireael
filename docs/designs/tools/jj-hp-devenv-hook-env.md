@@ -41,7 +41,7 @@ ci`). This record designs the mechanism; the class-level choice is settled.
   lives at `workspace_root`, which `run_subprocess` and `run_steps` already
   receive.
 - **Once per (invocation × workspace_root).** A parallel batch spawns N
-  subprocesses per bookmark (one per `from_ref`, `hooks.rs:916-942`) across M
+  subprocesses per bookmark (one per `from_ref`, `hooks.rs:924-950`) across M
   bookmarks; the devenv env is computed exactly once per jj-hp process and
   reused, following the `PklWarmCache` per-run-cache precedent
   (`hooks.rs:336-370`).
@@ -131,7 +131,7 @@ All file:line references were read this session in the clone at
   `hk validate` evaluates `hk.pkl` inside the worktree; it gets the same env
   treatment for consistency (hk itself may be devenv-pinned).
 
-- **N subprocesses per bookmark** (`hooks.rs:916`, `hooks.rs:938`): the
+- **N subprocesses per bookmark** (`hooks.rs:924`, `hooks.rs:946`): the
   default path iterates `for from_ref in from_refs` and calls
   `run_subprocess(&argv, wt.path(), workspace_root, captured.as_mut())?` per
   iteration — the per-subprocess vs once-per-run cost fork is real.
@@ -411,7 +411,7 @@ once, keeps the capture buffer clean, and needs zero new runtime dependencies
   (`hooks.rs:1022-1026`) — suppressible with `DIRENV_LOG_FORMAT=""` but any
   direnv *error* would still land there; (iii) it rewrites every argv, which
   interacts with `splice_runner_prefix` and the `$ argv` header line the
-  capture buffer prints (`hooks.rs:1014`), leaking mechanism into UX.
+  capture buffer prints (`hooks.rs:1022`), leaking mechanism into UX.
 - **(b) `direnv export json` once, parse, apply via `Command::envs`** —
   **chosen.** Full env including PATH (direnv computes exactly what `cd` into
   the repo would load, honoring `use devenv`, `watch_file`, and
@@ -634,7 +634,7 @@ Git-family strip end-to-end: patch carrying `GIT_DIR` → the hook child's
 
 ### T3 (DEFERRED — follow-up, not in this release) — runner resolution falls back to the repo-env PATH
 
-What it would add: in `resolve_runner_argv` layer 4 (`runner.rs:273-340`),
+What it would add: in `resolve_runner_argv` layer 4 (`runner.rs:349-352`),
 on a parent-PATH `which` miss, retry the walk over the repo-env patch's
 `PATH` — making a repo whose *runner* (hk/prek/…) is only devenv-pinned
 resolvable at the pre-check, with a friendlier `RunnerNotFound` message
