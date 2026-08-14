@@ -269,6 +269,64 @@ matched. Either install the runner globally (`brew install prek`,
 `pipx install prek`, `uv tool install prek`), activate your venv
 before invoking `jj-hp`, or set `jj-hooks.runner-bin.<runner>`.
 
+## Repo environment (direnv / devenv)
+
+Hooks run in an ephemeral `/tmp` worktree, so by default the hook subprocess
+inherits only `jj-hp`'s own process environment — **not** the repo's
+direnv/devenv environment. That means tools your hooks shell out to (moon,
+biome, proto shims, …) resolve against the *system* `$PATH` instead of the
+versions your project pins, producing false-red gates (e.g. system biome
+2.4.16 grading files your CI checks with devenv's 2.5.4) or hard failures.
+
+`jj-hp` closes this gap: if the workspace has a `.envrc` and `direnv` is on
+`$PATH`, it runs `direnv export json` **once** (against the workspace root,
+where the `.envrc` is allowed — never the temp worktree), caches the result
+for the whole invocation, and merges that environment into every hook and
+setup-step subprocess before spawning. The local gate then runs in the same
+environment CI does (`devenv shell -- moon ci`). This works for any `.envrc`
+— plain `direnv`, `use devenv`, and `source_env_if_exists .envrc.local`
+overrides alike — because it goes through direnv itself.
+
+The merge is a **diff**, not a replacement (direnv's export is a diff against
+the invoking environment), so all three launch states behave correctly:
+
+- Launched from a shell that already has this repo's env loaded → the diff is
+  empty, behavior is unchanged.
+- Launched from a bare environment (e.g. an automation harness) → the diff
+  prepends the devenv `PATH` and sets the devenv variables.
+- Launched from a shell with a *different* repo's env loaded → direnv reverses
+  that repo's env before applying this one.
+
+Git repo-location variables (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and
+the rest of the family git reports via `git rev-parse --local-env-vars`) are
+stripped from the patch before it reaches the hook child: the child must run
+git against the temp worktree it is checked out in, not against whatever a
+`.envrc.local` might point `GIT_DIR` at.
+
+### Fallback and failure semantics
+
+This is a strict superset of the previous behavior — it never introduces a new
+failure mode. When there is **no `.envrc`**, **no `direnv` on `$PATH`**, or the
+export fails for any other reason, the hook subprocess environment is exactly
+what it was before (the parent env plus `JJ_HOOKS_WORKSPACE`). Env-load
+failures are never fatal:
+
+- A **blocked `.envrc`** (a fresh clone where you haven't run `direnv allow`
+  yet) prints a one-line notice and runs hooks without the repo env — run
+  `direnv allow` to enable it.
+- A **stale/corrupt inherited `DIRENV_DIFF`** is retried once with the
+  `DIRENV_*` state cleared before falling back.
+- Any other export failure logs a `tracing` warning and falls back.
+
+### Opting out
+
+The mechanism is automatic, with two off-switches:
+
+- **`JJ_HOOKS_NO_REPO_ENV=1`** environment variable (any non-empty value).
+- **`jj-hooks.repo-env = "off"`** in jj config (`"auto"` or unset =
+  automatic). Set in your user, repo, or workspace config, e.g.
+  `jj config set --repo jj-hooks.repo-env off`.
+
 ## Fixup commits
 
 When hooks modify files in the ephemeral worktree, `jj-hooks` stages them,

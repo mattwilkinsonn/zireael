@@ -147,11 +147,13 @@ pub fn run_steps(steps: &[SetupStep], worktree: &Path, workspace_root: &Path) ->
         // here — setup steps are typically short (seconds-scale
         // package installs); there's no progress signal we'd lose
         // by waiting on `wait_with_output()`.
-        let output = Command::new(&step.run[0])
-            .args(&step.run[1..])
-            .current_dir(worktree)
-            .env("JJ_HOOKS_WORKSPACE", workspace_root)
-            .output()?;
+        let mut cmd = Command::new(&step.run[0]);
+        cmd.args(&step.run[1..]).current_dir(worktree);
+        // Merge the repo's direnv/devenv env (once-computed, cached) BEFORE
+        // JJ_HOOKS_WORKSPACE so that variable always wins. No-op unless a
+        // batch entrypoint populated the cache for this workspace_root.
+        crate::repo_env::apply_repo_env(&mut cmd, workspace_root);
+        let output = cmd.env("JJ_HOOKS_WORKSPACE", workspace_root).output()?;
 
         // Header line so the caller can tell which step produced
         // which captured output when there are multiple steps. Cheap
@@ -427,5 +429,54 @@ mod tests {
         };
         let captured = run_steps(&[step], tmp.path(), tmp.path()).unwrap();
         assert!(captured.contains("this-must-not-leak-to-terminal"));
+    }
+
+    #[test]
+    fn run_steps_applies_repo_env_patch() {
+        // Twin of the run_subprocess test: a seeded patch must reach setup
+        // steps too. RED before T2 (run_steps set only JJ_HOOKS_WORKSPACE).
+        let ws = tempfile::TempDir::new().unwrap();
+        crate::repo_env::test_seed(
+            ws.path(),
+            crate::repo_env::EnvPatch::Patch(std::collections::HashMap::from([(
+                "REPO_ENV_MARKER".to_string(),
+                Some("applied".to_string()),
+            )])),
+        );
+        let step = SetupStep {
+            name: None,
+            run: vec![
+                "sh".into(),
+                "-c".into(),
+                "printf 'MARK=[%s]' \"${REPO_ENV_MARKER:-unset}\"".into(),
+            ],
+        };
+        let captured = run_steps(&[step], ws.path(), ws.path()).unwrap();
+        assert!(
+            captured.contains("MARK=[applied]"),
+            "captured: {captured:?}"
+        );
+    }
+
+    #[test]
+    fn run_steps_strips_git_local_env_from_patch() {
+        let ws = tempfile::TempDir::new().unwrap();
+        crate::repo_env::test_seed(
+            ws.path(),
+            crate::repo_env::EnvPatch::Patch(std::collections::HashMap::from([(
+                "GIT_DIR".to_string(),
+                Some("/bogus/primary/.git".to_string()),
+            )])),
+        );
+        let step = SetupStep {
+            name: None,
+            run: vec![
+                "sh".into(),
+                "-c".into(),
+                "printf 'GD=[%s]' \"${GIT_DIR:-unset}\"".into(),
+            ],
+        };
+        let captured = run_steps(&[step], ws.path(), ws.path()).unwrap();
+        assert!(captured.contains("GD=[unset]"), "captured: {captured:?}");
     }
 }
