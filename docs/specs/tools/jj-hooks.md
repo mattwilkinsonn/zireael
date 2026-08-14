@@ -308,16 +308,19 @@ subprocess environment (the parent env plus `JJ_HOOKS_WORKSPACE`).
   previously-loaded repo's env via the inherited `DIRENV_DIFF` before
   applying this repo's `.envrc`.
 
-#### Scenario: Git repo-location variables are stripped from the patch
+#### Scenario: Git repo-location variables are stripped from the hook child
 
-- **Given** a computed patch (a `.envrc.local` may set `GIT_DIR` at the
-  primary repo's `.git`),
-- **When** `apply_repo_env` merges it into a hook `Command`,
+- **Given** a hook `Command` about to spawn (a `.envrc.local` may set
+  `GIT_DIR` at the primary repo's `.git`, reaching the child either via
+  the computed patch or — when the shell was already loaded, so the
+  export diff is empty — by inheritance from `jj-hp`'s own environment),
+- **When** `apply_repo_env` merges the patch into that `Command`,
 - **Then** every variable git reports via `git rev-parse
   --local-env-vars` (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, …;
-  `src/repo_env.rs` `git_local_env_vars`) MUST be removed from the
-  child, so the hook child resolves git against its own temp worktree,
-  not the primary workspace.
+  `src/repo_env.rs` `git_local_env_vars`) MUST be removed from the child
+  unconditionally — whether the patch set it, unset it, or never
+  mentioned it — so the hook child resolves git against its own temp
+  worktree, not the primary workspace.
 
 #### Scenario: Absent or failed environment is a silent fallback
 

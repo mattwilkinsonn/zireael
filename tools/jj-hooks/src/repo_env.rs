@@ -88,11 +88,16 @@ fn repo_env_with(workspace_root: &Path, enabled: bool, exporter: &DirenvExporter
 }
 
 /// Merge the cached patch for `workspace_root` into `cmd`: `env()` for each
-/// `Some(v)`, `env_remove()` for each `None`, after stripping the git
-/// repo-location env family (derived at runtime from
-/// `git rev-parse --local-env-vars`). No-op for `Disabled` or a missing cache
-/// entry. Never touches `JJ_HOOKS_WORKSPACE` — callers set it AFTER this call
-/// so it always wins.
+/// `Some(v)`, `env_remove()` for each `None`. Then unconditionally strip the
+/// git repo-location env family (derived at runtime from
+/// `git rev-parse --local-env-vars`) from the child — whether the patch set
+/// it, unset it, or never mentioned it. The strip must be unconditional
+/// because a git-local var can reach the child by INHERITANCE, not only via
+/// the patch: a secondary workspace whose already-loaded `.envrc.local` set
+/// `GIT_DIR` produces an empty `direnv export` diff, so the var is absent from
+/// the patch yet still present in jj-hp's own env that the child inherits.
+/// No-op for `Disabled` or a missing cache entry. Never touches
+/// `JJ_HOOKS_WORKSPACE` — callers set it AFTER this call so it always wins.
 pub fn apply_repo_env(cmd: &mut Command, workspace_root: &Path) {
     let key = cache_key(workspace_root);
     let patch = {
@@ -108,13 +113,9 @@ pub fn apply_repo_env(cmd: &mut Command, workspace_root: &Path) {
     };
     let git_local = git_local_env_vars();
     for (key, value) in map {
+        // Git repo-location vars are handled by the unconditional strip below,
+        // never applied from the patch.
         if git_local.contains(key) {
-            // A repo-local git-location var (GIT_DIR, GIT_INDEX_FILE, …) must
-            // NEVER reach the hook child: the child runs inside the temp
-            // worktree and its git must resolve HEAD/index against THAT
-            // worktree, not the primary workspace this repo's `.envrc.local`
-            // may point at. Strip it whether the patch set or unset it.
-            cmd.env_remove(key);
             continue;
         }
         match value {
@@ -125,6 +126,15 @@ pub fn apply_repo_env(cmd: &mut Command, workspace_root: &Path) {
                 cmd.env_remove(key);
             }
         }
+    }
+    // A repo-local git-location var (GIT_DIR, GIT_INDEX_FILE, …) must NEVER
+    // reach the hook child: the child runs inside the temp worktree and its
+    // git must resolve HEAD/index against THAT worktree, not the primary
+    // workspace this repo's `.envrc.local` may point at. Strip the whole
+    // family unconditionally — covering both a var carried by the patch and
+    // one inherited from jj-hp's own env when the export diff was empty.
+    for key in git_local {
+        cmd.env_remove(key);
     }
 }
 
@@ -555,12 +565,14 @@ mod tests {
     }
 
     #[test]
-    fn capture_purity_export_stderr_is_piped_not_fatal() {
+    fn export_stderr_chatter_does_not_fail_the_outcome() {
         let bin = tempfile::TempDir::new().unwrap();
-        // Writes chatter to its own stderr but still succeeds. Because
-        // `run_export` pipes stderr, the chatter never reaches the parent
-        // terminal or any hook-capture buffer, and the outcome is a clean
-        // Patch.
+        // Chatter on the export's own stderr must not turn a successful export
+        // into a Fail. That the chatter also never reaches a hook-capture
+        // buffer is a STRUCTURAL guarantee, not asserted here: `run_export`
+        // pipes stderr (Stdio::piped) and routes it only to `tracing`, and
+        // `compute`/`run_export` take no capture-buffer parameter, so there is
+        // no channel from export stderr into the failure buffer to test.
         let direnv = write_fake_direnv(
             bin.path(),
             "#!/bin/sh\necho 'SECRET-DIRENV-CHATTER' 1>&2\nprintf '%s' '{\"A\":\"1\"}'\n",
@@ -679,6 +691,31 @@ mod tests {
             String::from_utf8_lossy(&out.stdout),
             "GD=[unset] GIF=[unset] KEEP=[yes]",
             "git repo-location vars must be stripped; other vars kept"
+        );
+    }
+
+    #[test]
+    fn apply_strips_inherited_git_local_env_with_empty_patch() {
+        // The loaded-shell case: a secondary workspace whose already-loaded
+        // `.envrc.local` set GIT_DIR yields an EMPTY export diff, so GIT_DIR is
+        // absent from the patch yet still inherited from jj-hp's own env. The
+        // strip must be unconditional over the child, not patch-scoped, or the
+        // hook child's git resolves HEAD/index against the primary workspace.
+        let ws = tempfile::TempDir::new().unwrap();
+        test_seed(ws.path(), EnvPatch::Patch(HashMap::new()));
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("printf 'GD=[%s] GIF=[%s]' \"${GIT_DIR:-unset}\" \"${GIT_INDEX_FILE:-unset}\"")
+            // Inherited from the parent env, NOT from the patch.
+            .env("GIT_DIR", "/bogus/primary/.git")
+            .env("GIT_INDEX_FILE", "/bogus/primary/.git/index")
+            .stdout(Stdio::piped());
+        apply_repo_env(&mut cmd, ws.path());
+        let out = cmd.output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "GD=[unset] GIF=[unset]",
+            "inherited git repo-location vars must be stripped even with an empty patch"
         );
     }
 

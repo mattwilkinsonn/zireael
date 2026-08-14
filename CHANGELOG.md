@@ -38,7 +38,9 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
   falls back to the previous env (parent + `JJ_HOOKS_WORKSPACE`), and a
   blocked `.envrc` prints a `direnv allow` hint. Git repo-location vars
   (`GIT_DIR` and the rest of `git rev-parse --local-env-vars`) are stripped
-  from the patch so hook children resolve git against their own worktree.
+  from the hook child unconditionally — whether carried by the patch or
+  inherited from an already-loaded shell (a secondary workspace's
+  `.envrc.local`) — so hook children resolve git against their own worktree.
   Opt out with `JJ_HOOKS_NO_REPO_ENV=1` or `jj-hooks.repo-env = "off"`.
   Issue jj-hooks#289.
 

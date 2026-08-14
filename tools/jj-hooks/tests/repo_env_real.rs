@@ -9,8 +9,15 @@
 //!
 //! Each test gates on `direnv` being present on the parent PATH; if it isn't,
 //! the test early-returns (skips) rather than fails — mirroring
-//! `runner_resolution_real.rs`. nextest runs each test in its own process, so
-//! the in-process `XDG_*` overrides below are isolated per test.
+//! `runner_resolution_real.rs`.
+//!
+//! REQUIRES cargo-nextest (per-process test isolation). These tests mutate
+//! process-global state — `XDG_*` and `DIRENV_*` via `std::env::set_var` — so
+//! they are only isolated when each runs in its own process, which nextest
+//! guarantees and plain `cargo test` does NOT (it runs a binary's tests on
+//! shared threads, where the env mutations race). Run them with
+//! `cargo nextest run -p jj-hooks --test repo_env_real`; CI is nextest-only
+//! (`ci.yml`). Do not run this file under plain `cargo test`.
 
 use std::path::Path;
 use std::process::Command;

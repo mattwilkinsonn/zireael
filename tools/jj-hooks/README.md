@@ -299,9 +299,10 @@ the invoking environment), so all three launch states behave correctly:
 
 Git repo-location variables (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and
 the rest of the family git reports via `git rev-parse --local-env-vars`) are
-stripped from the patch before it reaches the hook child: the child must run
-git against the temp worktree it is checked out in, not against whatever a
-`.envrc.local` might point `GIT_DIR` at.
+stripped from the hook child unconditionally — whether they arrive via the
+patch or are inherited from an already-loaded shell (a secondary workspace's
+`.envrc.local`): the child must run git against the temp worktree it is checked
+out in, not against whatever a `.envrc.local` might point `GIT_DIR` at.
 
 ### Fallback and failure semantics
 
