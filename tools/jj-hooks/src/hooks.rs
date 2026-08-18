@@ -1660,7 +1660,9 @@ mod tests {
     #[test]
     fn run_subprocess_no_patch_is_unchanged() {
         // Non-regression: with no cache entry, the child env is the parent's
-        // plus JJ_HOOKS_WORKSPACE — nothing added, nothing removed.
+        // plus JJ_HOOKS_WORKSPACE — no devenv patch applied. (The git
+        // repo-location strip always runs but is a no-op here: no git-local
+        // var is set on this command's env.)
         let ws = tempfile::TempDir::new().unwrap();
         let argv = vec![
             "sh".to_string(),

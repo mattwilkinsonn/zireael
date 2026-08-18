@@ -738,3 +738,21 @@ First release ships T1 + T2 + T4 + T5. T3 is deferred to a follow-up issue
 - **[non-load-bearing] Config key name.** `jj-hooks.repo-env` with values
   `auto`/`off` is assumed; any rename is a find-replace in T4 before it
   lands.
+
+## Follow-up: git-family strip decoupled from the patch (jj-hooks#292)
+
+The first release coupled the git repo-location strip to the devenv patch
+flow: `apply_repo_env` reached the strip only on the `EnvPatch::Patch` arm and
+early-returned before it for `EnvPatch::Disabled` (no `.envrc`, no `direnv`,
+failed export, or opt-out) and for a missing cache entry. That left the
+original leak class open wherever the devenv path is inactive — a repo without
+direnv, pushed from a linked worktree, still inherited the worktree's `GIT_DIR`
+into its hook children.
+
+The strip is a safety invariant of spawning a hook from a detached worktree,
+not a devenv-feature convenience, so it is now unconditional: `apply_repo_env`
+calls a standalone `strip_git_local_env(cmd)` on every invocation, before any
+patch/cache early-return. The devenv env-merge stays gated on an active patch;
+only the git-family strip was decoupled. This answers the "Git repo-location
+propagation remainder" Open Question in the affirmative — worktree spawns
+always see the worktree's own git context, never the primary workspace's.

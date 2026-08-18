@@ -88,24 +88,26 @@ fn repo_env_with(workspace_root: &Path, enabled: bool, exporter: &DirenvExporter
 }
 
 /// Merge the cached patch for `workspace_root` into `cmd`: `env()` for each
-/// `Some(v)`, `env_remove()` for each `None`. Then unconditionally strip the
-/// git repo-location env family (derived at runtime from
-/// `git rev-parse --local-env-vars`) from the child — whether the patch set
-/// it, unset it, or never mentioned it. The strip must be unconditional
-/// because a git-local var can reach the child by INHERITANCE, not only via
-/// the patch: a secondary workspace whose already-loaded `.envrc.local` set
-/// `GIT_DIR` produces an empty `direnv export` diff, so the var is absent from
-/// the patch yet still present in jj-hp's own env that the child inherits.
-/// No-op for `Disabled` or a missing cache entry. Never touches
-/// `JJ_HOOKS_WORKSPACE` — callers set it AFTER this call so it always wins.
+/// `Some(v)`, `env_remove()` for each `None`. Independent of the patch,
+/// unconditionally strip the git repo-location env family (derived at runtime
+/// from `git rev-parse --local-env-vars`) from the child — see
+/// [`strip_git_local_env`]. Never touches `JJ_HOOKS_WORKSPACE` — callers set
+/// it AFTER this call so it always wins.
 pub fn apply_repo_env(cmd: &mut Command, workspace_root: &Path) {
+    // The git repo-location strip is a safety invariant of spawning a hook
+    // from a detached worktree (`GIT_DIR` from the worktree outranks the
+    // child's cwd), NOT a devenv-feature convenience — so it runs on every
+    // call, before any patch/cache early-return. The devenv env-merge below
+    // stays gated on an active patch.
+    strip_git_local_env(cmd);
+
     let key = cache_key(workspace_root);
     let patch = {
         let guard = cache().lock().unwrap();
         guard.get(&key).map(Arc::clone)
     };
     let Some(patch) = patch else {
-        return; // Not populated (or a non-batch path) — behave as today.
+        return; // Not populated (or a non-batch path) — no devenv patch to apply.
     };
     let map = match &*patch {
         EnvPatch::Patch(map) => map,
@@ -113,7 +115,7 @@ pub fn apply_repo_env(cmd: &mut Command, workspace_root: &Path) {
     };
     let git_local = git_local_env_vars();
     for (key, value) in map {
-        // Git repo-location vars are handled by the unconditional strip below,
+        // Git repo-location vars are handled by the unconditional strip above,
         // never applied from the patch.
         if git_local.contains(key) {
             continue;
@@ -127,13 +129,23 @@ pub fn apply_repo_env(cmd: &mut Command, workspace_root: &Path) {
             }
         }
     }
-    // A repo-local git-location var (GIT_DIR, GIT_INDEX_FILE, …) must NEVER
-    // reach the hook child: the child runs inside the temp worktree and its
-    // git must resolve HEAD/index against THAT worktree, not the primary
-    // workspace this repo's `.envrc.local` may point at. Strip the whole
-    // family unconditionally — covering both a var carried by the patch and
-    // one inherited from jj-hp's own env when the export diff was empty.
-    for key in git_local {
+}
+
+/// Strip the git repo-location env family (`GIT_DIR`, `GIT_INDEX_FILE`,
+/// `GIT_CONFIG_PARAMETERS`, and the rest of `git rev-parse --local-env-vars`)
+/// from a hook/setup `cmd`. Run unconditionally on every spawn jj-hp makes
+/// from a temp worktree, whatever the repo-env patch state:
+///
+/// A repo-local git-location var must NEVER reach the hook child — the child
+/// runs inside the temp worktree and its git must resolve HEAD/index against
+/// THAT worktree, not the primary workspace. The var reaches the child by
+/// INHERITANCE from jj-hp's own env (git exports `GIT_DIR` into the pre-push
+/// hook when the push runs from a linked worktree, and it outranks the child's
+/// cwd), independent of any `.envrc` — so the strip cannot be coupled to an
+/// active devenv patch, or a repo without direnv leaks `GIT_DIR` into its
+/// hooks.
+fn strip_git_local_env(cmd: &mut Command) {
+    for key in git_local_env_vars() {
         cmd.env_remove(key);
     }
 }
@@ -720,19 +732,49 @@ mod tests {
     }
 
     #[test]
-    fn apply_is_noop_for_missing_cache_entry() {
+    fn apply_strips_git_local_but_keeps_other_env_for_missing_cache_entry() {
+        // A missing cache entry (non-batch path, or a workspace never computed)
+        // must still strip the git repo-location family — the leak reaches the
+        // child by inheritance from jj-hp's env, independent of any patch — but
+        // must leave every non-git var untouched.
         let ws = tempfile::TempDir::new().unwrap(); // never seeded
         let mut cmd = Command::new("sh");
         cmd.arg("-c")
-            .arg("printf '%s' \"${SOME_VAR:-unset}\"")
+            .arg("printf 'GD=[%s] KEEP=[%s]' \"${GIT_DIR:-unset}\" \"${SOME_VAR:-unset}\"")
+            .env("GIT_DIR", "/bogus/primary/.git")
             .env("SOME_VAR", "kept")
             .stdout(Stdio::piped());
         apply_repo_env(&mut cmd, ws.path());
         let out = cmd.output().unwrap();
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),
-            "kept",
-            "a missing cache entry must leave the command env untouched"
+            "GD=[unset] KEEP=[kept]",
+            "missing cache entry: git repo-location vars stripped, other vars kept"
+        );
+    }
+
+    #[test]
+    fn apply_strips_git_local_env_for_disabled_patch() {
+        // The non-direnv case (issue #292): a repo with no `.envrc` / no direnv
+        // has an EnvPatch::Disabled entry, yet a push from a linked worktree
+        // still leaks GIT_DIR into the hook child by inheritance. The strip is
+        // a safety invariant, not a devenv convenience, so it must run on the
+        // Disabled arm too.
+        let ws = tempfile::TempDir::new().unwrap();
+        test_seed(ws.path(), EnvPatch::Disabled);
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg("printf 'GD=[%s] GCP=[%s] KEEP=[%s]' \"${GIT_DIR:-unset}\" \"${GIT_CONFIG_PARAMETERS:-unset}\" \"${SOME_VAR:-unset}\"")
+            .env("GIT_DIR", "/bogus/primary/.git")
+            .env("GIT_CONFIG_PARAMETERS", "'core.hooksPath=/tmp/evil'")
+            .env("SOME_VAR", "kept")
+            .stdout(Stdio::piped());
+        apply_repo_env(&mut cmd, ws.path());
+        let out = cmd.output().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "GD=[unset] GCP=[unset] KEEP=[kept]",
+            "disabled patch (non-direnv repo): git repo-location vars still stripped"
         );
     }
 }
