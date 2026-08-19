@@ -401,7 +401,7 @@ it always wins) — harmless for non-cargo repos, where nothing reads
 `JJ_HOOKS_NO_GATE_CACHE` / `jj-hooks.gate-cache = "off"`:
 
 - **`JJ_HOOKS_NO_GATE_CACHE=1`** environment variable (any non-empty value).
-- **`jj-hooks.gate-cache = "off"`** in jj config (`"on"` or unset = automatic),
+- **`jj-hooks.gate-cache = "off"`** in jj config (`"auto"` or unset = automatic),
   e.g. `jj config set --repo jj-hooks.gate-cache off`.
 
 ### Quick start
