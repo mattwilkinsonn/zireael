@@ -1658,9 +1658,41 @@ mod tests {
     }
 
     #[test]
+    fn run_subprocess_strips_inherited_git_local_env_on_disabled_path() {
+        // #292 end-to-end at the spawn site: a non-direnv repo (EnvPatch::Disabled)
+        // pushed from a linked worktree inherits GIT_DIR from jj-hp's own env.
+        // The strip must fire on the Disabled arm too, so the hook child sees it
+        // unset. GIT_DIR is set on the process env (not a patch) to model the
+        // inheritance vector; nextest runs each test in its own process, so the
+        // mutation is isolated.
+        let ws = tempfile::TempDir::new().unwrap();
+        crate::repo_env::test_seed(ws.path(), crate::repo_env::EnvPatch::Disabled);
+        // SAFETY: nextest process-per-test isolation (cf. repo_env_real.rs).
+        unsafe {
+            std::env::set_var("GIT_DIR", "/bogus/primary/.git");
+        }
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "printf 'GD=[%s]' \"${GIT_DIR:-unset}\"".to_string(),
+        ];
+        let mut buf = String::new();
+        run_subprocess(&argv, ws.path(), ws.path(), Some(&mut buf)).unwrap();
+        unsafe {
+            std::env::remove_var("GIT_DIR");
+        }
+        assert!(
+            buf.contains("GD=[unset]"),
+            "disabled-path spawn must strip inherited GIT_DIR; captured: {buf:?}"
+        );
+    }
+
+    #[test]
     fn run_subprocess_no_patch_is_unchanged() {
         // Non-regression: with no cache entry, the child env is the parent's
-        // plus JJ_HOOKS_WORKSPACE — nothing added, nothing removed.
+        // plus JJ_HOOKS_WORKSPACE — no devenv patch applied. (The git
+        // repo-location strip always runs but is a no-op here: no git-local
+        // var is set on this command's env.)
         let ws = tempfile::TempDir::new().unwrap();
         let argv = vec![
             "sh".to_string(),

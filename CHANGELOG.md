@@ -76,6 +76,17 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
   synthetic root commit (it has no git object); the runner aborted
   before any hook ran. Such a push now grades every file as added via
   the backend's all-files mode. Issue jj-hooks#284.
+- Git repo-location vars (`GIT_DIR` and the rest of `git rev-parse
+  --local-env-vars`) are now stripped from every hook and setup-step
+  subprocess unconditionally, not only when the repo-env/devenv patch is
+  active. Pushing from a linked worktree makes git export `GIT_DIR` into
+  the pre-push hook, and it outranks a subprocess's own cwd — so a repo
+  without direnv (no `.envrc`, no `direnv` on `$PATH`, or repo-env opted
+  out) still leaked the worktree's `GIT_DIR` into its hook children,
+  making their git resolve HEAD/index against the wrong repository. The
+  strip is a safety invariant of spawning a hook from a detached
+  worktree, so it no longer depends on the devenv env-merge being on.
+  Issue jj-hooks#292.
 
 ## [0.3.0] — 2026-05-26
 
