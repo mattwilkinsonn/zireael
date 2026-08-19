@@ -77,7 +77,10 @@ pub fn apply_gate_cache(cmd: &mut std::process::Command, workspace_root: &Path) 
     if enabled != Some(true) {
         return;
     }
-    cmd.env("CARGO_TARGET_DIR", workspace_root.join("target"));
+    // Derive the injected dir from the SAME canonical path as the cache key,
+    // so a non-canonical (symlinked/relative) primary root can't split the
+    // key from the value.
+    cmd.env("CARGO_TARGET_DIR", cache_key(workspace_root).join("target"));
 }
 
 /// Read the gate-cache opt-outs, in precedence order:

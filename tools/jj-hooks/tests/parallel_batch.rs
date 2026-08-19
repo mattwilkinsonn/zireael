@@ -510,6 +510,19 @@ fn run_for_partitioned_updates_parallel_failure_in_one_stack_does_not_cancel_the
 /// (pre-commit suppresses hook stdout on success, so a captured-output
 /// assertion is unreliable; distinct files under the shared primary root are
 /// race-free across the concurrent children).
+///
+/// Scope: this asserts the *wiring* — every batch child is pointed at one
+/// shared primary `target/`. It deliberately does NOT run a real `cargo`/
+/// `cargo nextest` under the gate (every fixture hook in this crate is an `sh`
+/// script, by design — a recursive cargo build inside the test suite would be
+/// slow and brittle). The distinct question the shared dir raises — is it SAFE
+/// for N concurrent `cargo nextest` invocations to share one `CARGO_TARGET_DIR`
+/// / nextest store? — is answered by driver measurement, not in-suite: N=3
+/// concurrent `cargo nextest run -p jj-hooks` against one shared store each
+/// pass 242/242 with no corruption or false-fail (cargo's `.cargo-lock`
+/// serializes the build phase; the run store tolerates concurrent readers).
+/// That is why the batch test step keeps the shared store rather than a
+/// per-worktree one (the design's stated fallback, unneeded).
 #[test]
 fn parallel_batch_all_children_share_primary_cargo_target_dir() {
     let repo = TestRepo::new();
