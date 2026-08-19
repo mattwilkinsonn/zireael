@@ -8,18 +8,18 @@ class JjHooks < Formula
     on_arm do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/jj-hooks-v#{version}-darwin-arm64.tar.gz"
       # SHA256 is bumped by .github/workflows/release.yml when a tag is pushed.
-      sha256 "5f3af75a8bec8313747d62c4b8008fea388f332ca6a0d2e72f3067ff5a52c805"
+      sha256 "2cd16b9a22adaf5d87487fe848274d0d83bcbf31408ab3e42843becea27bbde0"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/jj-hooks-v#{version}-linux-x64.tar.gz"
-      sha256 "349d532511c3f7d7eb6da105a4ba631df9b1aa54e960723dfc5aa83782a7c8f3"
+      sha256 "b9a0f9ce6bfd7a9e5561444ba65c8ac6e5692c8129c974c0818c08ce38c808cf"
     end
     on_arm do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/jj-hooks-v#{version}-linux-arm64.tar.gz"
-      sha256 "d831c50c87a65f3e1fb3e436a955ca665a21b7f8b8cb7ffc3998ed91ee21839c"
+      sha256 "12bffd3105232ff4090af7ccf79fbc7b5f4fa6ffb9acb57fa7b6b564296a3cf4"
     end
   end
 
