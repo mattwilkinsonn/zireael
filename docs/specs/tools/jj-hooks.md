@@ -329,12 +329,34 @@ subprocess environment (the parent env plus `JJ_HOOKS_WORKSPACE`).
 - **When** the batch entrypoint computes the patch,
 - **Then** the result MUST be `EnvPatch::Disabled` and every spawn MUST
   be byte-identical to the prior behavior; a failure MUST warn via
-  `tracing` and never abort the batch, except a blocked `.envrc` which
-  MUST additionally emit one visible `direnv allow` hint
-  (`src/repo_env.rs` `compute` / `report_blocked`).
+  `tracing` and never abort the batch, except a blocked `.envrc` with
+  auto-allow disabled (see the next scenario), which MUST additionally
+  emit one visible `direnv allow` hint (`src/repo_env.rs` `compute` /
+  `report_blocked`).
 - **And** the mechanism MUST be opt-out via `JJ_HOOKS_NO_REPO_ENV`
   (any non-empty value) or jj config `jj-hooks.repo-env = "off"`, read
   once at the batch entrypoint (`src/repo_env.rs` `repo_env_enabled`).
+
+#### Scenario: A blocked `.envrc` is auto-`direnv allow`ed
+
+- **Given** a `workspace_root` with a present but not-yet-allowed
+  `.envrc` (a fresh clone), `direnv` on `$PATH`, and auto-allow enabled
+  (the default),
+- **When** the batch entrypoint computes the patch and the export
+  reports blocked (`src/repo_env.rs` `compute` / `resolve_blocked`),
+- **Then** jj-hp MUST run `direnv allow <workspace_root>/.envrc` and
+  re-run the export at the same `clear_direnv` posture, returning the
+  resulting `EnvPatch::Patch` so the gate gets the repo toolchain on the
+  first push with no manual `direnv allow`,
+- **And** any failure of the allow or the re-export MUST warn once via
+  `tracing` and fall back to `EnvPatch::Disabled` — byte-identical to the
+  blocked behavior when auto-allow is off, never fatal,
+- **And** the behavior MUST be opt-out via `JJ_HOOKS_NO_DIRENV_ALLOW`
+  (any non-empty value) or jj config `jj-hooks.repo-env-autoallow =
+  false`, read once at the batch entrypoint on a SEPARATE axis from
+  `jj-hooks.repo-env` (`src/repo_env.rs` `repo_env_autoallow_enabled`);
+  when off, the blocked `.envrc` degrades to `Disabled` with the visible
+  hint exactly as before.
 
 ### Requirement: Gate subprocesses reuse the primary workspace's build cache
 

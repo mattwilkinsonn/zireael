@@ -157,7 +157,11 @@ pub fn run_for_update(
     // worktree/spawn. The returned Arc is intentionally discarded — the
     // side effect is populating the process-global cache that the spawn
     // sites read via `apply_repo_env`. The opt-outs are read once here.
-    let _ = crate::repo_env::repo_env(workspace_root, crate::repo_env::repo_env_enabled(jj));
+    let _ = crate::repo_env::repo_env(
+        workspace_root,
+        crate::repo_env::repo_env_enabled(jj),
+        crate::repo_env::repo_env_autoallow_enabled(jj),
+    );
     // Record the gate-cache opt-out ONCE here too, beside repo-env, so the
     // spawn sites can point CARGO_TARGET_DIR at the primary `target/`.
     crate::gate_cache::gate_cache(workspace_root, crate::gate_cache::gate_cache_enabled(jj));
@@ -439,7 +443,11 @@ where
 {
     // Populate the repo-env cache ONCE before the fan-out, so parallel
     // workers read it (never race to compute it). Opt-outs read once here.
-    let _ = crate::repo_env::repo_env(workspace_root, crate::repo_env::repo_env_enabled(jj));
+    let _ = crate::repo_env::repo_env(
+        workspace_root,
+        crate::repo_env::repo_env_enabled(jj),
+        crate::repo_env::repo_env_autoallow_enabled(jj),
+    );
     crate::gate_cache::gate_cache(workspace_root, crate::gate_cache::gate_cache_enabled(jj));
     // One warm cache shared across the batch: the first per-bookmark run
     // for each distinct config validates it (serially) from its own
@@ -563,7 +571,11 @@ where
 {
     // Populate the repo-env cache ONCE before the fan-out (see
     // `run_for_updates_parallel`). Opt-outs read once here.
-    let _ = crate::repo_env::repo_env(workspace_root, crate::repo_env::repo_env_enabled(jj));
+    let _ = crate::repo_env::repo_env(
+        workspace_root,
+        crate::repo_env::repo_env_enabled(jj),
+        crate::repo_env::repo_env_autoallow_enabled(jj),
+    );
     crate::gate_cache::gate_cache(workspace_root, crate::gate_cache::gate_cache_enabled(jj));
     // One warm cache shared across all partitions (see
     // `run_for_updates_parallel`): each distinct config is warmed once,
