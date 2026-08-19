@@ -183,7 +183,11 @@ mod tests {
             .stdout(Stdio::piped());
         apply_gate_cache(&mut cmd, ws.path());
         let out = cmd.output().unwrap();
-        let expected = format!("CTD=[{}]", ws.path().join("target").display());
+        // Canonicalize the expected path the same way the product does (via
+        // `cache_key`), so the assertion holds on a host whose TMPDIR resolves
+        // through a symlink (e.g. macOS `/tmp` -> `/private/tmp`).
+        let expected_root = dunce::canonicalize(ws.path()).unwrap();
+        let expected = format!("CTD=[{}]", expected_root.join("target").display());
         assert_eq!(String::from_utf8_lossy(&out.stdout), expected);
     }
 
