@@ -795,6 +795,69 @@ mod tests {
     }
 
     #[test]
+    fn autoallow_still_blocked_after_allow_warns_and_falls_back() {
+        let before_warn = WARN_COUNT.load(Ordering::SeqCst);
+        let bin = tempfile::TempDir::new().unwrap();
+        // `allow` succeeds, but the `.envrc` STILL exports blocked afterward
+        // (a mis-configured or racy allow that doesn't take) — the post-allow
+        // re-export re-hits the blocked arm of `resolve_blocked`.
+        let direnv = write_fake_direnv(
+            bin.path(),
+            "#!/bin/sh\n\
+             if [ \"$1\" = allow ]; then exit 0; fi\n\
+             echo 'direnv: error /x/.envrc is blocked. Run `direnv allow` to approve its content' 1>&2\n\
+             exit 1\n",
+        );
+        let ws = ws_with_envrc();
+        assert_eq!(
+            compute(ws.path(), true, true, &fake_exporter(direnv, &[])),
+            EnvPatch::Disabled,
+            "a still-blocked re-export after a successful allow must fall back to Disabled"
+        );
+        assert_eq!(
+            WARN_COUNT.load(Ordering::SeqCst),
+            before_warn + 1,
+            "a still-blocked post-allow re-export must warn exactly once"
+        );
+    }
+
+    #[test]
+    fn autoallow_reexport_failure_after_allow_warns_and_falls_back() {
+        let before_warn = WARN_COUNT.load(Ordering::SeqCst);
+        let bin = tempfile::TempDir::new().unwrap();
+        let state = tempfile::TempDir::new().unwrap();
+        let allowed_flag = state.path().join("allowed");
+        // Stateful shim: `export` reports BLOCKED until `allow` runs (creating
+        // the flag), then FAILS with a non-blocked error. So the first export
+        // hits the blocked arm → `resolve_blocked` → `allow` succeeds → the
+        // post-allow re-export hits the Fail arm (not blocked, exit non-zero).
+        // Without the flag gating, a shim that failed on every export would be
+        // a plain first-attempt Fail and never reach `resolve_blocked` at all.
+        let direnv = write_fake_direnv(
+            bin.path(),
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = allow ]; then : > '{flag}'; exit 0; fi\n\
+                 if [ -f '{flag}' ]; then echo 'direnv: internal error while loading .envrc' 1>&2; exit 1; fi\n\
+                 echo 'direnv: error /x/.envrc is blocked. Run `direnv allow` to approve its content' 1>&2\n\
+                 exit 1\n",
+                flag = allowed_flag.display(),
+            ),
+        );
+        let ws = ws_with_envrc();
+        assert_eq!(
+            compute(ws.path(), true, true, &fake_exporter(direnv, &[])),
+            EnvPatch::Disabled,
+            "a failed re-export after a successful allow must fall back to Disabled"
+        );
+        assert_eq!(
+            WARN_COUNT.load(Ordering::SeqCst),
+            before_warn + 1,
+            "a failed post-allow re-export must warn exactly once"
+        );
+    }
+
+    #[test]
     fn autoallow_from_precedence() {
         use std::ffi::OsStr;
         // Env-var opt-out wins over any config value.

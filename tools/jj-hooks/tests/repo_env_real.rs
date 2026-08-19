@@ -104,8 +104,11 @@ fn blocked_envrc_with_autoallow_on_is_allowed_and_yields_patch() {
     };
     assert_eq!(map.get("FOO"), Some(&Some("bar".to_string())));
     // The allow landed in the ISOLATED trust DB (XDG_DATA_HOME), not the
-    // host's global one — proving the test is hermetic. direnv records
-    // allowed `.envrc`s under `<XDG_DATA_HOME>/direnv/allow/`.
+    // host's global one — proving the test is hermetic. direnv (2.x) records
+    // allowed `.envrc`s under `<XDG_DATA_HOME>/direnv/allow/`; if a future
+    // direnv relocates that dir this `read_dir` yields 0 and the assertion
+    // fails LOUDLY (a false RED on upgrade), never a false green — the
+    // functional `FOO=bar` check above already proves the allow itself worked.
     let allow_dir = home.path().join("data").join("direnv").join("allow");
     let recorded = std::fs::read_dir(&allow_dir)
         .map(|entries| entries.count())
