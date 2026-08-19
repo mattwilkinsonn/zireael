@@ -158,6 +158,9 @@ pub fn run_for_update(
     // side effect is populating the process-global cache that the spawn
     // sites read via `apply_repo_env`. The opt-outs are read once here.
     let _ = crate::repo_env::repo_env(workspace_root, crate::repo_env::repo_env_enabled(jj));
+    // Record the gate-cache opt-out ONCE here too, beside repo-env, so the
+    // spawn sites can point CARGO_TARGET_DIR at the primary `target/`.
+    crate::gate_cache::gate_cache(workspace_root, crate::gate_cache::gate_cache_enabled(jj));
     run_for_update_with_cancel(
         jj,
         primary_git_dir,
@@ -437,6 +440,7 @@ where
     // Populate the repo-env cache ONCE before the fan-out, so parallel
     // workers read it (never race to compute it). Opt-outs read once here.
     let _ = crate::repo_env::repo_env(workspace_root, crate::repo_env::repo_env_enabled(jj));
+    crate::gate_cache::gate_cache(workspace_root, crate::gate_cache::gate_cache_enabled(jj));
     // One warm cache shared across the batch: the first per-bookmark run
     // for each distinct config validates it (serially) from its own
     // worktree; the rest reuse the now-warm `~/.pkl` cache.
@@ -560,6 +564,7 @@ where
     // Populate the repo-env cache ONCE before the fan-out (see
     // `run_for_updates_parallel`). Opt-outs read once here.
     let _ = crate::repo_env::repo_env(workspace_root, crate::repo_env::repo_env_enabled(jj));
+    crate::gate_cache::gate_cache(workspace_root, crate::gate_cache::gate_cache_enabled(jj));
     // One warm cache shared across all partitions (see
     // `run_for_updates_parallel`): each distinct config is warmed once,
     // serially, from its own target worktree.
@@ -1026,6 +1031,9 @@ fn run_subprocess(
     // JJ_HOOKS_WORKSPACE so that variable always wins. No-op unless a batch
     // entrypoint populated the cache for this workspace_root.
     crate::repo_env::apply_repo_env(&mut cmd, workspace_root);
+    // Point CARGO_TARGET_DIR at the primary `target/` AFTER apply_repo_env so
+    // a repo-env-carried value can never win. No-op unless enabled.
+    crate::gate_cache::apply_gate_cache(&mut cmd, workspace_root);
     cmd.env("JJ_HOOKS_WORKSPACE", workspace_root);
     match capture {
         None => {

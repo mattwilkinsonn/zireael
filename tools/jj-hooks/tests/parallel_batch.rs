@@ -8,7 +8,7 @@
 
 mod harness;
 
-use harness::{PRE_PUSH_FAILING, PRE_PUSH_PASSING, show};
+use harness::{PRE_PUSH_FAILING, PRE_PUSH_PASSING, PRE_PUSH_RECORD_CTD_PER_BOOKMARK, show};
 use jj_hooks::bookmark_updates::{BookmarkUpdate, UpdateType};
 use jj_hooks::hooks::{
     Cancel, RunOpts, run_for_partitioned_updates_parallel, run_for_updates_parallel,
@@ -500,6 +500,72 @@ fn run_for_partitioned_updates_parallel_failure_in_one_stack_does_not_cancel_the
         assert!(
             !o.success,
             "partition {p_idx} outcome unexpectedly passed: {o:?}",
+        );
+    }
+}
+
+/// Gate-cache (Mode A / T1): all N parallel gate worktrees of a batch see the
+/// SAME `CARGO_TARGET_DIR` — the primary `target/`. Each child writes its
+/// observed value to a per-bookmark file `$JJ_HOOKS_WORKSPACE/ctd-<to-ref>`
+/// (pre-commit suppresses hook stdout on success, so a captured-output
+/// assertion is unreliable; distinct files under the shared primary root are
+/// race-free across the concurrent children).
+#[test]
+fn parallel_batch_all_children_share_primary_cargo_target_dir() {
+    let repo = TestRepo::new();
+    repo.write_pre_commit_config(PRE_PUSH_RECORD_CTD_PER_BOOKMARK);
+    let (main, b1, b2, b3) = build_three_stack(&repo);
+    let updates = updates_for_three_stack(&main, &b1, &b2, &b3);
+
+    let jj = JjCli::new(repo.primary().to_path_buf());
+    let primary_git_dir = primary_git_dir(repo.primary()).unwrap();
+    let opts = RunOpts {
+        retry_after_fixup: true,
+        all_files: false,
+        capture_output: true,
+    };
+
+    let outcomes = run_for_updates_parallel(
+        &jj,
+        &primary_git_dir,
+        repo.primary(),
+        Some(Runner::PreCommit),
+        Stage::PrePush,
+        &updates,
+        opts,
+        |_idx, _update| {},
+        |_idx, _update, _outcome| {},
+    )
+    .unwrap();
+    assert_eq!(outcomes.len(), 3);
+    for (idx, outcome) in outcomes.iter().enumerate() {
+        assert!(outcome.success, "outcome #{idx} failed: {outcome:?}");
+    }
+
+    let expected = std::fs::canonicalize(repo.primary())
+        .unwrap()
+        .join("target")
+        .to_string_lossy()
+        .into_owned();
+
+    // Collect every per-bookmark ctd file the children wrote.
+    let mut seen = Vec::new();
+    for entry in std::fs::read_dir(repo.primary()).unwrap() {
+        let path = entry.unwrap().path();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.starts_with("ctd-") {
+            seen.push(std::fs::read_to_string(&path).unwrap());
+        }
+    }
+    assert_eq!(
+        seen.len(),
+        3,
+        "expected one CTD file per bookmark, got {seen:?}"
+    );
+    for value in &seen {
+        assert_eq!(
+            value, &expected,
+            "every batch child must see CARGO_TARGET_DIR = <primary>/target"
         );
     }
 }

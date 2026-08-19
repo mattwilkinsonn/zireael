@@ -153,6 +153,9 @@ pub fn run_steps(steps: &[SetupStep], worktree: &Path, workspace_root: &Path) ->
         // JJ_HOOKS_WORKSPACE so that variable always wins. No-op unless a
         // batch entrypoint populated the cache for this workspace_root.
         crate::repo_env::apply_repo_env(&mut cmd, workspace_root);
+        // Point CARGO_TARGET_DIR at the primary `target/` AFTER apply_repo_env
+        // so a repo-env-carried value can never win. No-op unless enabled.
+        crate::gate_cache::apply_gate_cache(&mut cmd, workspace_root);
         let output = cmd.env("JJ_HOOKS_WORKSPACE", workspace_root).output()?;
 
         // Header line so the caller can tell which step produced

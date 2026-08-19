@@ -668,6 +668,44 @@ repos:
         pass_filenames: false
 "#;
 
+/// A hook that records the `CARGO_TARGET_DIR` the child subprocess saw into
+/// the file named by `$JJ_HOOKS_TEST_CTD_OUT`, then exits 0. Used by the
+/// gate-cache (Mode A / T1) tests to assert the gate points cargo at the
+/// PRIMARY workspace's `target/` (and to observe the byte-identical opt-out
+/// fallback). Writes the literal `unset` when the var is absent so the
+/// pre-change RED state (no injection) is observable.
+pub const PRE_PUSH_RECORD_CARGO_TARGET_DIR: &str = r#"
+repos:
+  - repo: local
+    hooks:
+      - id: record-ctd
+        name: record-ctd
+        entry: sh -c 'printf "%s" "${CARGO_TARGET_DIR:-unset}" > "$JJ_HOOKS_TEST_CTD_OUT"'
+        language: system
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false
+"#;
+
+/// A hook that writes the child's `CARGO_TARGET_DIR` to a per-bookmark file
+/// `$JJ_HOOKS_WORKSPACE/ctd-<to-ref>` (keyed by `$PRE_COMMIT_TO_REF` so the N
+/// concurrent batch children never collide on one path), then exits 0. Used
+/// by the parallel batch gate-cache test — pre-commit suppresses hook STDOUT
+/// on success, so a captured-output assertion is unreliable; a per-child file
+/// under the shared primary root is not.
+pub const PRE_PUSH_RECORD_CTD_PER_BOOKMARK: &str = r#"
+repos:
+  - repo: local
+    hooks:
+      - id: record-ctd-batch
+        name: record-ctd-batch
+        entry: sh -c 'printf "%s" "${CARGO_TARGET_DIR:-unset}" > "$JJ_HOOKS_WORKSPACE/ctd-$PRE_COMMIT_TO_REF"'
+        language: system
+        stages: [pre-push]
+        always_run: true
+        pass_filenames: false
+"#;
+
 // -- lefthook fixtures --------------------------------------------------------
 //
 // Lefthook takes per-stage hooks under `<stage>:` and per-step commands
