@@ -304,6 +304,18 @@ patch or are inherited from an already-loaded shell (a secondary workspace's
 `.envrc.local`): the child must run git against the temp worktree it is checked
 out in, not against whatever a `.envrc.local` might point `GIT_DIR` at.
 
+When the workspace has a `.envrc` that is present but not yet `direnv allow`ed
+(the usual state of a fresh clone), `direnv export` reports the environment as
+*blocked* and the gate would otherwise run env-blind against the system
+`$PATH`. `jj-hp` closes this too: it runs `direnv allow` on the workspace root
+and re-exports, so the gate gets the repo's pinned toolchain on the very first
+push instead of after a manual bootstrap step. This mutates direnv's global
+trust database, so — as with any `direnv allow` — direnv will thereafter
+auto-load that `.envrc` in your interactive shells in that directory too. The
+auto-allow is never fatal: any failure warns once and falls back to the prior
+blocked behavior (hooks run without the repo env). Turn it off with
+`JJ_HOOKS_NO_DIRENV_ALLOW` / `jj-hooks.repo-env-autoallow = false` (below).
+
 ### Fallback and failure semantics
 
 This is a strict superset of the previous behavior — it never introduces a new
@@ -313,8 +325,10 @@ what it was before (the parent env plus `JJ_HOOKS_WORKSPACE`). Env-load
 failures are never fatal:
 
 - A **blocked `.envrc`** (a fresh clone where you haven't run `direnv allow`
-  yet) prints a one-line notice and runs hooks without the repo env — run
-  `direnv allow` to enable it.
+  yet) is auto-`direnv allow`ed by jj-hp so the first push already runs with the
+  repo env; see above for the trust-DB side effect and the off-switch. Should
+  the auto-allow itself fail, jj-hp prints a one-line notice and runs hooks
+  without the repo env.
 - A **stale/corrupt inherited `DIRENV_DIFF`** is retried once with the
   `DIRENV_*` state cleared before falling back.
 - Any other export failure logs a `tracing` warning and falls back.
@@ -327,6 +341,12 @@ The mechanism is automatic, with two off-switches:
 - **`jj-hooks.repo-env = "off"`** in jj config (`"auto"` or unset =
   automatic). Set in your user, repo, or workspace config, e.g.
   `jj config set --repo jj-hooks.repo-env off`.
+- **`JJ_HOOKS_NO_DIRENV_ALLOW=1`** environment variable (any non-empty value)
+  disables just the auto-`direnv allow` of a blocked `.envrc` — an already
+  allowed `.envrc` is still exported and merged as usual.
+- **`jj-hooks.repo-env-autoallow = false`** in jj config (`true` or unset =
+  automatic) is the config equivalent, e.g.
+  `jj config set --repo jj-hooks.repo-env-autoallow false`.
 
 ## Fixup commits
 
@@ -367,6 +387,22 @@ inside the ephemeral worktree with `command not found` or `module not found`.
 
 Configure `jj-hooks.setup` to declare commands jj-hp runs inside the
 worktree *before* the hook runner fires.
+
+### Rust build cache
+
+The absent `target/` is a special case: rather than rebuild the whole crate
+cold in every ephemeral worktree (~35s even with sccache), `jj-hp` points the
+gate's `CARGO_TARGET_DIR` at the **primary** repo's `target/` so cargo reuses
+your own warm dev builds. The gate then finishes near-instantly instead of
+paying a cold build, on the first gated push as well as later ones. This is set
+unconditionally on every hook and setup-step subprocess (after the repo env, so
+it always wins) — harmless for non-cargo repos, where nothing reads
+`CARGO_TARGET_DIR`. `hk validate` is not affected. Turn it off with
+`JJ_HOOKS_NO_GATE_CACHE` / `jj-hooks.gate-cache = "off"`:
+
+- **`JJ_HOOKS_NO_GATE_CACHE=1`** environment variable (any non-empty value).
+- **`jj-hooks.gate-cache = "off"`** in jj config (`"on"` or unset = automatic),
+  e.g. `jj config set --repo jj-hooks.gate-cache off`.
 
 ### Quick start
 
