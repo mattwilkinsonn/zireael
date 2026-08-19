@@ -9,11 +9,15 @@
 //!
 //! This module computes the environment delta direnv would apply on entering
 //! `workspace_root` (via `direnv export json`, run once per process and
-//! cached) and merges it into each hook `Command` before it spawns. It is a
-//! strict superset of today's behavior: when there is no `.envrc`, no
-//! `direnv` on PATH, or the export fails, the patch is [`EnvPatch::Disabled`]
-//! and every spawn is byte-identical to before (parent env + the caller's
-//! `JJ_HOOKS_WORKSPACE`). See `docs/designs/tools/jj-hp-devenv-hook-env.md`.
+//! cached) and merges it into each hook `Command` before it spawns. The
+//! devenv env-merge is a strict superset of today's behavior: when there is
+//! no `.envrc`, no `direnv` on PATH, or the export fails, the patch is
+//! [`EnvPatch::Disabled`] and no devenv env is applied. Independently — and
+//! regardless of patch state — the git repo-location family
+//! (`git rev-parse --local-env-vars`) is always stripped from the child (see
+//! [`strip_git_local_env`]); that safety strip is the one deliberate
+//! difference from a bare parent-env spawn.
+//! See `docs/designs/tools/jj-hp-devenv-hook-env.md`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -26,8 +30,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// The environment delta direnv would apply on entering `workspace_root`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnvPatch {
-    /// No `.envrc`, no `direnv`, export failed, or opted out — spawn
-    /// unchanged (parent env + `JJ_HOOKS_WORKSPACE`).
+    /// No `.envrc`, no `direnv`, export failed, or opted out — no devenv env
+    /// applied (the git repo-location strip in [`apply_repo_env`] still runs).
     Disabled,
     /// Apply: set each `Some(v)`, remove each `None` key. An EMPTY map is a
     /// success (the parent env already has this repo's env loaded, so the

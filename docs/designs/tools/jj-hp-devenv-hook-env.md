@@ -24,9 +24,12 @@ ci`). This record designs the mechanism; the class-level choice is settled.
 - **No regression for non-direnv repos.** jj-hooks is a released public tool.
   When `workspace_root` has no `.envrc`, or `direnv` is not on jj-hp's PATH, or
   the export fails for any reason (unallowed `.envrc`, direnv error), the
-  subprocess environment MUST be byte-identical to today's: inherit the parent
-  env plus `JJ_HOOKS_WORKSPACE`. Failure to load the env is never fatal — warn
-  once (tracing) and fall back.
+  subprocess environment MUST be byte-identical to today's — inherit the parent
+  env plus `JJ_HOOKS_WORKSPACE` — **except** the git repo-location family
+  (`git rev-parse --local-env-vars`) is always stripped regardless of patch
+  state (see the #292 Follow-up): that strip is a safety invariant of spawning
+  a hook from a detached worktree, not part of the devenv env-merge. Failure to
+  load the env is never fatal — warn once (tracing) and fall back.
 - **Captured-output purity.** `run_subprocess` folds child stdout+stderr into
   the user-facing failure buffer (`hooks.rs:1022-1026`); `run_steps` does the
   same (`setup.rs:161-165`). The env-acquisition step MUST NOT leak direnv's
@@ -303,7 +306,8 @@ Run against the real `.envrc` (`use devenv`) before freeze:
    once at the batch entrypoints, passed in as `enabled`) AND
    `workspace_root/.envrc` exists AND `direnv` resolves on jj-hp's own PATH
    (same `which` walk as `runner.rs:244-253`). Otherwise the patch is
-   `Disabled` and every spawn is byte-identical to today.
+   `Disabled` and every spawn is byte-identical to today except the git
+   repo-location family is always stripped (#292 Follow-up).
 2. **Export once**: run `direnv export json` with
    `current_dir(workspace_root)` (the allowed `.envrc` location, never the
    temp worktree), stdout piped, stderr piped and routed to `tracing::warn`
@@ -536,7 +540,8 @@ Interfaces:
 ```rust
 /// The environment delta direnv would apply on entering `workspace_root`.
 pub enum EnvPatch {
-    /// No .envrc, no direnv, export failed, or opted out — spawn unchanged.
+    /// No .envrc, no direnv, export failed, or opted out — spawn unchanged
+    /// except the git repo-location family is always stripped (#292).
     Disabled,
     /// Apply: set each Some(v), remove each None key. An EMPTY map is a
     /// success (parent env already loaded — empty diff), not Disabled.
