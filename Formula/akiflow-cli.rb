@@ -1,7 +1,7 @@
 class AkiflowCli < Formula
   desc "Command-line task management for Akiflow (fork of code-yeongyu/akiflow-cli)"
   homepage "https://github.com/mattwilkinsonn/zireael/tree/main/tools/akiflow-cli"
-  version "0.3.10"
+  version "0.3.11"
   license "MIT"
 
   on_macos do
