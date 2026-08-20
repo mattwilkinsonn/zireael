@@ -72,7 +72,7 @@ fn direnv_allow(ws: &Path) {
 }
 
 #[test]
-fn blocked_envrc_before_allow_is_disabled() {
+fn blocked_envrc_with_autoallow_off_is_disabled() {
     if skip_if_no_direnv() {
         return;
     }
@@ -80,10 +80,44 @@ fn blocked_envrc_before_allow_is_disabled() {
     isolate_direnv_state(home.path());
     let ws = tempfile::TempDir::new().unwrap();
     write_envrc(ws.path(), "export FOO=bar\n");
-    // No `direnv allow` — the `.envrc` is blocked. repo_env degrades to
-    // Disabled (and emits the visible eprintln, checked in unit tests).
-    let patch = repo_env(ws.path(), true);
+    // No `direnv allow`, and autoallow OFF — the `.envrc` stays blocked, so
+    // repo_env degrades to Disabled (byte-identical to pre-Mode-B behavior,
+    // and emits the visible eprintln checked in unit tests).
+    let patch = repo_env(ws.path(), true, false);
     assert_eq!(*patch, EnvPatch::Disabled);
+}
+
+#[test]
+fn blocked_envrc_with_autoallow_on_is_allowed_and_yields_patch() {
+    if skip_if_no_direnv() {
+        return;
+    }
+    let home = tempfile::TempDir::new().unwrap();
+    isolate_direnv_state(home.path());
+    let ws = tempfile::TempDir::new().unwrap();
+    write_envrc(ws.path(), "export FOO=bar\n");
+    // No manual `direnv allow` — with autoallow ON (the default), jj-hp runs
+    // `direnv allow` itself, then the re-export yields a Patch carrying FOO.
+    let patch = repo_env(ws.path(), true, true);
+    let EnvPatch::Patch(map) = &*patch else {
+        panic!("expected Patch after auto-allow, got {patch:?}");
+    };
+    assert_eq!(map.get("FOO"), Some(&Some("bar".to_string())));
+    // The allow landed in the ISOLATED trust DB (XDG_DATA_HOME), not the
+    // host's global one — proving the test is hermetic. direnv (2.x) records
+    // allowed `.envrc`s under `<XDG_DATA_HOME>/direnv/allow/`; if a future
+    // direnv relocates that dir this `read_dir` yields 0 and the assertion
+    // fails LOUDLY (a false RED on upgrade), never a false green — the
+    // functional `FOO=bar` check above already proves the allow itself worked.
+    let allow_dir = home.path().join("data").join("direnv").join("allow");
+    let recorded = std::fs::read_dir(&allow_dir)
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert!(
+        recorded > 0,
+        "auto-allow must record the trust in the isolated DB at {}",
+        allow_dir.display()
+    );
 }
 
 #[test]
@@ -97,7 +131,7 @@ fn bare_env_export_emits_the_var() {
     write_envrc(ws.path(), "export FOO=bar\n");
     direnv_allow(ws.path());
     // The harness process has no repo env loaded (bare), so the diff sets FOO.
-    let patch = repo_env(ws.path(), true);
+    let patch = repo_env(ws.path(), true, false);
     let EnvPatch::Patch(map) = &*patch else {
         panic!("expected Patch, got {patch:?}");
     };
@@ -138,7 +172,7 @@ fn loaded_env_is_empty_patch() {
         }
     }
 
-    let patch = repo_env(ws.path(), true);
+    let patch = repo_env(ws.path(), true, false);
     let EnvPatch::Patch(map) = &*patch else {
         panic!("expected Patch (empty), got {patch:?}");
     };

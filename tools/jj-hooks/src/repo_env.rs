@@ -66,18 +66,23 @@ fn cache_key(workspace_root: &Path) -> PathBuf {
 /// piped for the JSON, stderr piped and routed to `tracing`). On failure it
 /// retries once with `DIRENV_DIR`/`DIRENV_FILE`/`DIRENV_DIFF`/`DIRENV_WATCHES`
 /// removed; only a failed retry degrades to `Disabled`.
-pub fn repo_env(workspace_root: &Path, enabled: bool) -> Arc<EnvPatch> {
+pub fn repo_env(workspace_root: &Path, enabled: bool, autoallow: bool) -> Arc<EnvPatch> {
     let exporter = DirenvExporter {
         direnv: which("direnv"),
         base: BaseEnv::Inherit,
     };
-    repo_env_with(workspace_root, enabled, &exporter)
+    repo_env_with(workspace_root, enabled, autoallow, &exporter)
 }
 
 /// Cache-aware core of [`repo_env`], parameterized over the exporter so the
 /// detection / export / retry / cache logic is testable against a hermetic
 /// fake `direnv` shim without touching the process PATH or environment.
-fn repo_env_with(workspace_root: &Path, enabled: bool, exporter: &DirenvExporter) -> Arc<EnvPatch> {
+fn repo_env_with(
+    workspace_root: &Path,
+    enabled: bool,
+    autoallow: bool,
+    exporter: &DirenvExporter,
+) -> Arc<EnvPatch> {
     let key = cache_key(workspace_root);
     // Hold the lock across `compute` so parallel workers block on (and then
     // reuse) the single export rather than each paying it — the
@@ -86,7 +91,7 @@ fn repo_env_with(workspace_root: &Path, enabled: bool, exporter: &DirenvExporter
     if let Some(existing) = guard.get(&key) {
         return Arc::clone(existing);
     }
-    let patch = Arc::new(compute(workspace_root, enabled, exporter));
+    let patch = Arc::new(compute(workspace_root, enabled, autoallow, exporter));
     guard.insert(key, Arc::clone(&patch));
     patch
 }
@@ -179,8 +184,67 @@ fn enabled_from(env_optout: Option<&std::ffi::OsStr>, config: Option<&str>) -> b
     !matches!(config, Some(c) if c.trim().eq_ignore_ascii_case("off"))
 }
 
+/// Read the auto-`direnv allow` off-switch, in precedence order (mirrors
+/// [`repo_env_enabled`], but on a SEPARATE axis — a bool on the new
+/// `jj-hooks.repo-env-autoallow` key, not a value on the existing `repo-env`
+/// key — so the two behaviors are independent):
+/// 1. `JJ_HOOKS_NO_DIRENV_ALLOW` env var — any non-empty value disables.
+/// 2. jj config `jj-hooks.repo-env-autoallow` — `false`/`off` disables; unset
+///    or `true` enables; any other value warns (tracing) and enables.
+///
+/// Called ONCE at each batch entrypoint and passed into [`repo_env`] as
+/// `autoallow`; never stored in an ambient global.
+pub fn repo_env_autoallow_enabled(jj: &crate::jj::JjCli) -> bool {
+    let env_optout = std::env::var_os("JJ_HOOKS_NO_DIRENV_ALLOW");
+    let config = jj
+        .run(&["config", "get", "jj-hooks.repo-env-autoallow"])
+        .ok();
+    autoallow_from(env_optout.as_deref(), config.as_deref())
+}
+
+/// Pure decision core of [`repo_env_autoallow_enabled`], split out so the
+/// precedence is testable without a live jj repo. Strict bool-ish parse:
+/// `false`/`off` (case- and space-insensitive) disable; unset, empty, or
+/// `true` enable silently; any other non-empty value warns (tracing) and
+/// enables.
+fn autoallow_from(env_optout: Option<&std::ffi::OsStr>, config: Option<&str>) -> bool {
+    if let Some(value) = env_optout
+        && !value.is_empty()
+    {
+        return false;
+    }
+    match config.map(str::trim) {
+        Some(c) if c.eq_ignore_ascii_case("false") || c.eq_ignore_ascii_case("off") => false,
+        None => true,
+        Some(c) if c.is_empty() || c.eq_ignore_ascii_case("true") => true,
+        Some(c) => {
+            tracing::warn!(
+                "jj-hp: unrecognized value {c:?} for jj config \
+                 `jj-hooks.repo-env-autoallow` (expected `true` or `false`); \
+                 auto `direnv allow` stays enabled"
+            );
+            #[cfg(test)]
+            WARN_COUNT.fetch_add(1, Ordering::SeqCst);
+            true
+        }
+    }
+}
+
 /// Detect, export, parse. Returns the patch for one `workspace_root`.
-fn compute(workspace_root: &Path, enabled: bool, exporter: &DirenvExporter) -> EnvPatch {
+///
+/// When the `.envrc` is present but not `direnv allow`ed, `direnv export`
+/// reports `Blocked`. If `autoallow` is enabled (the default) jj-hp resolves
+/// that state itself — `direnv allow <workspace_root>`, then re-run the export
+/// and return the resulting `Patch` (see [`resolve_blocked`]). If `autoallow`
+/// is off, the blocked branch behaves exactly as before (`report_blocked` →
+/// `Disabled`, byte-identical env). Auto-allow only ever IMPROVES the blocked
+/// case; on any failure it falls back to `Disabled`, never fatal.
+fn compute(
+    workspace_root: &Path,
+    enabled: bool,
+    autoallow: bool,
+    exporter: &DirenvExporter,
+) -> EnvPatch {
     if !enabled {
         return EnvPatch::Disabled;
     }
@@ -194,8 +258,13 @@ fn compute(workspace_root: &Path, enabled: bool, exporter: &DirenvExporter) -> E
     match exporter.attempt(direnv, workspace_root, /*clear_direnv=*/ false) {
         Outcome::Patch(map) => EnvPatch::Patch(map),
         Outcome::Blocked => {
-            report_blocked(workspace_root);
-            EnvPatch::Disabled
+            resolve_blocked(
+                workspace_root,
+                autoallow,
+                exporter,
+                direnv,
+                /*clear_direnv=*/ false,
+            )
         }
         Outcome::Fail(_) => {
             // F3: a corrupt/stale inherited `DIRENV_DIFF` makes the export
@@ -204,8 +273,13 @@ fn compute(workspace_root: &Path, enabled: bool, exporter: &DirenvExporter) -> E
             match exporter.attempt(direnv, workspace_root, /*clear_direnv=*/ true) {
                 Outcome::Patch(map) => EnvPatch::Patch(map),
                 Outcome::Blocked => {
-                    report_blocked(workspace_root);
-                    EnvPatch::Disabled
+                    resolve_blocked(
+                        workspace_root,
+                        autoallow,
+                        exporter,
+                        direnv,
+                        /*clear_direnv=*/ true,
+                    )
                 }
                 Outcome::Fail(reason) => {
                     tracing::warn!(
@@ -219,6 +293,53 @@ fn compute(workspace_root: &Path, enabled: bool, exporter: &DirenvExporter) -> E
             }
         }
     }
+}
+
+/// Resolve a blocked `.envrc`. With `autoallow` off, this is today's behavior:
+/// emit the visible signal and degrade to `Disabled`. With `autoallow` on,
+/// jj-hp runs `direnv allow <workspace_root>` and re-runs the export (reusing
+/// the same `clear_direnv` posture as the attempt that hit `Blocked`),
+/// returning the resulting `Patch`. Any failure of the allow OR the re-export
+/// warns once and falls back to `Disabled` — byte-identical to the pre-fix
+/// blocked path, never fatal.
+fn resolve_blocked(
+    workspace_root: &Path,
+    autoallow: bool,
+    exporter: &DirenvExporter,
+    direnv: &Path,
+    clear_direnv: bool,
+) -> EnvPatch {
+    if !autoallow {
+        report_blocked(workspace_root);
+        return EnvPatch::Disabled;
+    }
+    if let Err(reason) = exporter.allow(direnv, workspace_root) {
+        warn_autoallow_failed(&reason);
+        return EnvPatch::Disabled;
+    }
+    match exporter.attempt(direnv, workspace_root, clear_direnv) {
+        Outcome::Patch(map) => EnvPatch::Patch(map),
+        Outcome::Blocked => {
+            warn_autoallow_failed("`.envrc` still blocked after `direnv allow`");
+            EnvPatch::Disabled
+        }
+        Outcome::Fail(reason) => {
+            warn_autoallow_failed(&reason);
+            EnvPatch::Disabled
+        }
+    }
+}
+
+/// Warn once that auto-`direnv allow` could not resolve the blocked `.envrc`,
+/// and (in tests) bump `WARN_COUNT`. The gate then runs env-blind exactly as
+/// it did before this mechanism — never fatal.
+fn warn_autoallow_failed(reason: &str) {
+    tracing::warn!(
+        "jj-hp: auto `direnv allow` could not resolve the blocked `.envrc` \
+         (hooks run without the repo env): {reason}"
+    );
+    #[cfg(test)]
+    WARN_COUNT.fetch_add(1, Ordering::SeqCst);
 }
 
 /// Emit the ONE visible signal for a blocked `.envrc` — a fresh clone where
@@ -333,6 +454,49 @@ impl DirenvExporter {
             }
         }
         cmd.output()
+    }
+
+    /// Run `direnv allow <workspace_root>/.envrc` so a blocked `.envrc`
+    /// becomes trusted and the subsequent export succeeds. Modeled on
+    /// [`run_export`](Self::run_export): same cwd and base-env construction,
+    /// so the fake test shim (which branches on `$1`) sees the same
+    /// environment it does for `export`. Returns `Err(reason)` on a spawn
+    /// error or a non-zero exit — the caller warns once and falls back to
+    /// `Disabled`, never fatal.
+    fn allow(&self, direnv: &Path, workspace_root: &Path) -> Result<(), String> {
+        let mut cmd = Command::new(direnv);
+        cmd.arg("allow")
+            // Allow the `.envrc` that lives at `workspace_root`, never the
+            // temp worktree's.
+            .arg(workspace_root.join(".envrc"))
+            .current_dir(workspace_root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        match &self.base {
+            BaseEnv::Inherit => {}
+            #[cfg(test)]
+            BaseEnv::Explicit(vars) => {
+                cmd.env_clear();
+                for (k, v) in vars {
+                    cmd.env(k, v);
+                }
+            }
+        }
+        cmd.env("DIRENV_LOG_FORMAT", "");
+        let output = match cmd.output() {
+            Ok(output) => output,
+            Err(e) => return Err(format!("spawn failed: {e}")),
+        };
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "direnv allow exited {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        }
     }
 }
 
@@ -461,7 +625,7 @@ mod tests {
             "#!/bin/sh\nprintf '%s' '{\"BIOME_PIN\":\"devenv\",\"DROP_ME\":null,\"PATH\":\"/devenv/bin:/usr/bin\"}'\n",
         );
         let ws = ws_with_envrc();
-        let patch = compute(ws.path(), true, &fake_exporter(direnv, &[]));
+        let patch = compute(ws.path(), true, false, &fake_exporter(direnv, &[]));
         let EnvPatch::Patch(map) = patch else {
             panic!("expected Patch, got {patch:?}");
         };
@@ -479,7 +643,7 @@ mod tests {
         let direnv = write_fake_direnv(bin.path(), "#!/bin/sh\nprintf '%s' '{}'\n");
         let ws = tempfile::TempDir::new().unwrap(); // no .envrc
         assert_eq!(
-            compute(ws.path(), true, &fake_exporter(direnv, &[])),
+            compute(ws.path(), true, false, &fake_exporter(direnv, &[])),
             EnvPatch::Disabled
         );
     }
@@ -491,7 +655,10 @@ mod tests {
             direnv: None, // not found on PATH
             base: BaseEnv::Explicit(vec![]),
         };
-        assert_eq!(compute(ws.path(), true, &exporter), EnvPatch::Disabled);
+        assert_eq!(
+            compute(ws.path(), true, false, &exporter),
+            EnvPatch::Disabled
+        );
     }
 
     #[test]
@@ -502,7 +669,7 @@ mod tests {
         let direnv = write_fake_direnv(bin.path(), "#!/bin/sh\nexit 0\n");
         let ws = ws_with_envrc();
         assert_eq!(
-            compute(ws.path(), true, &fake_exporter(direnv, &[])),
+            compute(ws.path(), true, false, &fake_exporter(direnv, &[])),
             EnvPatch::Patch(HashMap::new())
         );
         assert_eq!(
@@ -523,13 +690,201 @@ mod tests {
         );
         let ws = ws_with_envrc();
         assert_eq!(
-            compute(ws.path(), true, &fake_exporter(direnv, &[])),
+            compute(ws.path(), true, false, &fake_exporter(direnv, &[])),
             EnvPatch::Disabled
         );
         assert_eq!(
             BLOCKED_SIGNAL_COUNT.load(Ordering::SeqCst),
             before + 1,
             "blocked `.envrc` must emit the one visible signal"
+        );
+    }
+
+    /// A fake `direnv` that branches on `$1`: `allow` records its invocation
+    /// to `allow_log` and creates `allowed_flag`; `export` reports blocked
+    /// until `allowed_flag` exists, then succeeds with `{"FOO":"bar"}`. This
+    /// mirrors real direnv's blocked→allowed transition for the auto-allow
+    /// path.
+    fn write_branching_direnv(bin: &Path, allow_log: &Path, allowed_flag: &Path) -> PathBuf {
+        let body = format!(
+            "#!/bin/sh\n\
+             if [ \"$1\" = allow ]; then echo \"$@\" >> '{log}'; : > '{flag}'; exit 0; fi\n\
+             if [ -f '{flag}' ]; then printf '%s' '{{\"FOO\":\"bar\"}}'; exit 0; fi\n\
+             echo 'direnv: error /x/.envrc is blocked. Run `direnv allow` to approve its content' 1>&2\n\
+             exit 1\n",
+            log = allow_log.display(),
+            flag = allowed_flag.display(),
+        );
+        write_fake_direnv(bin, &body)
+    }
+
+    #[test]
+    fn autoallow_on_runs_allow_and_reexports_to_patch() {
+        let bin = tempfile::TempDir::new().unwrap();
+        let state = tempfile::TempDir::new().unwrap();
+        let allow_log = state.path().join("allow.log");
+        let allowed_flag = state.path().join("allowed");
+        let direnv = write_branching_direnv(bin.path(), &allow_log, &allowed_flag);
+        let ws = ws_with_envrc();
+        // autoallow ON: jj-hp runs `direnv allow`, then the re-export succeeds.
+        let patch = compute(ws.path(), true, true, &fake_exporter(direnv, &[]));
+        let EnvPatch::Patch(map) = patch else {
+            panic!("expected Patch after auto-allow, got {patch:?}");
+        };
+        assert_eq!(map.get("FOO"), Some(&Some("bar".to_string())));
+        let recorded = std::fs::read_to_string(&allow_log).unwrap();
+        assert_eq!(
+            recorded.lines().count(),
+            1,
+            "auto-allow must invoke `direnv allow` exactly once"
+        );
+        assert!(
+            recorded.starts_with("allow "),
+            "the recorded invocation must be `direnv allow`, got: {recorded:?}"
+        );
+    }
+
+    #[test]
+    fn autoallow_off_does_not_allow_and_stays_disabled() {
+        let before_signal = BLOCKED_SIGNAL_COUNT.load(Ordering::SeqCst);
+        let bin = tempfile::TempDir::new().unwrap();
+        let state = tempfile::TempDir::new().unwrap();
+        let allow_log = state.path().join("allow.log");
+        let allowed_flag = state.path().join("allowed");
+        let direnv = write_branching_direnv(bin.path(), &allow_log, &allowed_flag);
+        let ws = ws_with_envrc();
+        // autoallow OFF: byte-identical to today — report_blocked → Disabled.
+        assert_eq!(
+            compute(ws.path(), true, false, &fake_exporter(direnv, &[])),
+            EnvPatch::Disabled
+        );
+        assert!(
+            !allow_log.exists(),
+            "autoallow off must never invoke `direnv allow`"
+        );
+        assert_eq!(
+            BLOCKED_SIGNAL_COUNT.load(Ordering::SeqCst),
+            before_signal + 1,
+            "autoallow off must still emit the one visible blocked signal"
+        );
+    }
+
+    #[test]
+    fn autoallow_allow_failure_warns_and_falls_back_to_disabled() {
+        let before_warn = WARN_COUNT.load(Ordering::SeqCst);
+        let bin = tempfile::TempDir::new().unwrap();
+        // `export` is blocked; `allow` itself exits non-zero → never resolves.
+        let direnv = write_fake_direnv(
+            bin.path(),
+            "#!/bin/sh\n\
+             if [ \"$1\" = allow ]; then echo 'allow failed' 1>&2; exit 1; fi\n\
+             echo 'direnv: error /x/.envrc is blocked. Run `direnv allow` to approve its content' 1>&2\n\
+             exit 1\n",
+        );
+        let ws = ws_with_envrc();
+        assert_eq!(
+            compute(ws.path(), true, true, &fake_exporter(direnv, &[])),
+            EnvPatch::Disabled,
+            "a failed `direnv allow` must fall back to Disabled, never fatal"
+        );
+        assert_eq!(
+            WARN_COUNT.load(Ordering::SeqCst),
+            before_warn + 1,
+            "a failed auto-allow must warn exactly once"
+        );
+    }
+
+    #[test]
+    fn autoallow_still_blocked_after_allow_warns_and_falls_back() {
+        let before_warn = WARN_COUNT.load(Ordering::SeqCst);
+        let bin = tempfile::TempDir::new().unwrap();
+        // `allow` succeeds, but the `.envrc` STILL exports blocked afterward
+        // (a mis-configured or racy allow that doesn't take) — the post-allow
+        // re-export re-hits the blocked arm of `resolve_blocked`.
+        let direnv = write_fake_direnv(
+            bin.path(),
+            "#!/bin/sh\n\
+             if [ \"$1\" = allow ]; then exit 0; fi\n\
+             echo 'direnv: error /x/.envrc is blocked. Run `direnv allow` to approve its content' 1>&2\n\
+             exit 1\n",
+        );
+        let ws = ws_with_envrc();
+        assert_eq!(
+            compute(ws.path(), true, true, &fake_exporter(direnv, &[])),
+            EnvPatch::Disabled,
+            "a still-blocked re-export after a successful allow must fall back to Disabled"
+        );
+        assert_eq!(
+            WARN_COUNT.load(Ordering::SeqCst),
+            before_warn + 1,
+            "a still-blocked post-allow re-export must warn exactly once"
+        );
+    }
+
+    #[test]
+    fn autoallow_reexport_failure_after_allow_warns_and_falls_back() {
+        let before_warn = WARN_COUNT.load(Ordering::SeqCst);
+        let bin = tempfile::TempDir::new().unwrap();
+        let state = tempfile::TempDir::new().unwrap();
+        let allowed_flag = state.path().join("allowed");
+        // Stateful shim: `export` reports BLOCKED until `allow` runs (creating
+        // the flag), then FAILS with a non-blocked error. So the first export
+        // hits the blocked arm → `resolve_blocked` → `allow` succeeds → the
+        // post-allow re-export hits the Fail arm (not blocked, exit non-zero).
+        // Without the flag gating, a shim that failed on every export would be
+        // a plain first-attempt Fail and never reach `resolve_blocked` at all.
+        let direnv = write_fake_direnv(
+            bin.path(),
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = allow ]; then : > '{flag}'; exit 0; fi\n\
+                 if [ -f '{flag}' ]; then echo 'direnv: internal error while loading .envrc' 1>&2; exit 1; fi\n\
+                 echo 'direnv: error /x/.envrc is blocked. Run `direnv allow` to approve its content' 1>&2\n\
+                 exit 1\n",
+                flag = allowed_flag.display(),
+            ),
+        );
+        let ws = ws_with_envrc();
+        assert_eq!(
+            compute(ws.path(), true, true, &fake_exporter(direnv, &[])),
+            EnvPatch::Disabled,
+            "a failed re-export after a successful allow must fall back to Disabled"
+        );
+        assert_eq!(
+            WARN_COUNT.load(Ordering::SeqCst),
+            before_warn + 1,
+            "a failed post-allow re-export must warn exactly once"
+        );
+    }
+
+    #[test]
+    fn autoallow_from_precedence() {
+        use std::ffi::OsStr;
+        // Env-var opt-out wins over any config value.
+        assert!(!autoallow_from(Some(OsStr::new("1")), None));
+        assert!(!autoallow_from(Some(OsStr::new("anything")), Some("true")));
+        // Empty env value does NOT disable.
+        assert!(autoallow_from(Some(OsStr::new("")), None));
+        // Config `false`/`off` disable (case/space-insensitive).
+        assert!(!autoallow_from(None, Some("false")));
+        assert!(!autoallow_from(None, Some("  FALSE\n")));
+        assert!(!autoallow_from(None, Some("off")));
+        // Unset / `true` enable.
+        assert!(autoallow_from(None, None));
+        assert!(autoallow_from(None, Some("true")));
+    }
+
+    #[test]
+    fn autoallow_from_unrecognized_value_warns_and_enables() {
+        let before = WARN_COUNT.load(Ordering::SeqCst);
+        assert!(
+            autoallow_from(None, Some("bananas")),
+            "an unrecognized value must still enable"
+        );
+        assert_eq!(
+            WARN_COUNT.load(Ordering::SeqCst),
+            before + 1,
+            "an unrecognized value must warn exactly once"
         );
     }
 
@@ -546,6 +901,7 @@ mod tests {
         let patch = compute(
             ws.path(),
             true,
+            false,
             &fake_exporter(direnv, &[("DIRENV_DIFF", "corrupt")]),
         );
         let EnvPatch::Patch(map) = patch else {
@@ -569,6 +925,7 @@ mod tests {
         let patch = compute(
             ws.path(),
             true,
+            false,
             &fake_exporter(direnv, &[("DIRENV_DIFF", "inherited")]),
         );
         assert!(matches!(patch, EnvPatch::Patch(_)));
@@ -594,7 +951,7 @@ mod tests {
             "#!/bin/sh\necho 'SECRET-DIRENV-CHATTER' 1>&2\nprintf '%s' '{\"A\":\"1\"}'\n",
         );
         let ws = ws_with_envrc();
-        let patch = compute(ws.path(), true, &fake_exporter(direnv, &[]));
+        let patch = compute(ws.path(), true, false, &fake_exporter(direnv, &[]));
         let EnvPatch::Patch(map) = patch else {
             panic!("expected Patch, got {patch:?}");
         };
@@ -613,13 +970,13 @@ mod tests {
         let direnv = write_fake_direnv(bin.path(), &body);
         let ws = ws_with_envrc();
 
-        repo_env_with(ws.path(), true, &fake_exporter(direnv.clone(), &[]));
-        repo_env_with(ws.path(), true, &fake_exporter(direnv.clone(), &[]));
+        repo_env_with(ws.path(), true, false, &fake_exporter(direnv.clone(), &[]));
+        repo_env_with(ws.path(), true, false, &fake_exporter(direnv.clone(), &[]));
         let lines = std::fs::read_to_string(&counter).unwrap().lines().count();
         assert_eq!(lines, 1, "same root must export exactly once");
 
         let ws2 = ws_with_envrc();
-        repo_env_with(ws2.path(), true, &fake_exporter(direnv, &[]));
+        repo_env_with(ws2.path(), true, false, &fake_exporter(direnv, &[]));
         let lines = std::fs::read_to_string(&counter).unwrap().lines().count();
         assert_eq!(lines, 2, "a distinct root exports again");
     }
@@ -633,6 +990,7 @@ mod tests {
             compute(
                 ws.path(),
                 /*enabled=*/ false,
+                /*autoallow=*/ false,
                 &fake_exporter(direnv, &[])
             ),
             EnvPatch::Disabled,
