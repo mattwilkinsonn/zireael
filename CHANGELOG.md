@@ -43,6 +43,24 @@ release tag (jj-hooks, jj-gt, akiflow-cli, and the Homebrew formulae).
   `.envrc.local`) — so hook children resolve git against their own worktree.
   Opt out with `JJ_HOOKS_NO_REPO_ENV=1` or `jj-hooks.repo-env = "off"`.
   Issue jj-hooks#289.
+- The pre-push gate now reuses your warm dev builds instead of building cold in
+  the ephemeral worktree. `jj-hp` points the gate subprocess's
+  `CARGO_TARGET_DIR` at the primary workspace's `target/`, so a Rust gate
+  finishes near-instantly (measured ~2-3s) instead of paying a ~35s cold build
+  even with sccache — on the first gated push as well as later ones. Set
+  unconditionally (harmless for non-cargo repos, which don't read
+  `CARGO_TARGET_DIR`) and after the repo env so it always wins; `hk validate`
+  is unaffected. Opt out with `JJ_HOOKS_NO_GATE_CACHE=1` or
+  `jj-hooks.gate-cache = "off"`. Issue jj-hooks#294.
+- A blocked `.envrc` (a fresh clone you haven't `direnv allow`ed) is now
+  auto-allowed instead of running the gate env-blind: `jj-hp` runs
+  `direnv allow` and re-exports, so the first push already resolves the repo's
+  devenv-pinned toolchain. This mutates direnv's global trust database, so —
+  as with any `direnv allow` — direnv will thereafter auto-load that `.envrc`
+  in interactive shells in that directory too. Never fatal: any failure warns
+  once and falls back to the prior blocked behavior. Opt out with
+  `JJ_HOOKS_NO_DIRENV_ALLOW=1` or `jj-hooks.repo-env-autoallow = false`.
+  Issue jj-hooks#294.
 
 ### Changed — build + CI
 
