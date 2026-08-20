@@ -336,6 +336,43 @@ subprocess environment (the parent env plus `JJ_HOOKS_WORKSPACE`).
   (any non-empty value) or jj config `jj-hooks.repo-env = "off"`, read
   once at the batch entrypoint (`src/repo_env.rs` `repo_env_enabled`).
 
+### Requirement: Gate subprocesses reuse the primary workspace's build cache
+
+Because hooks run in a detached `/tmp` worktree whose cargo `target/`
+starts empty, a Rust gate (`cargo clippy`/`cargo nextest`) would pay a
+cold from-scratch build on every push. Every hook and setup-step
+subprocess SHALL therefore run with `CARGO_TARGET_DIR` pointed at the
+primary workspace's `target/`, so the gate reuses the user's warm dev
+artifacts. The injection SHALL be unconditional (not Rust-gated): a
+non-cargo gate ignores the variable, so it is harmless for JS/nix repos
+and needs no revisit when a repo regrows first-party Rust.
+
+#### Scenario: Gate child sees the primary `target/`
+
+- **Given** a batch entrypoint has run for `workspace_root`
+  (`run_for_update`, `run_for_updates_parallel`, or
+  `run_for_partitioned_updates_parallel`, `src/hooks.rs`),
+- **When** a hook or setup-step subprocess spawns
+  (`src/hooks.rs` `run_subprocess`, `src/setup.rs` `run_steps`),
+- **Then** `apply_gate_cache(&mut cmd, workspace_root)`
+  (`src/gate_cache.rs`) MUST set `CARGO_TARGET_DIR =
+  <workspace_root>/target` on the child, applied AFTER `apply_repo_env`
+  and before `JJ_HOOKS_WORKSPACE` so jj-hp's value wins over any
+  patch-carried or inherited `CARGO_TARGET_DIR`,
+- **And** `hk validate` (`run_hk_validate`) MUST NOT receive it — it is a
+  pkl-cache warm, not a cargo build.
+
+#### Scenario: Opt-out is a byte-identical fallback
+
+- **Given** the mechanism is disabled — env `JJ_HOOKS_NO_GATE_CACHE`
+  (any non-empty value) or jj config `jj-hooks.gate-cache = "off"`, read
+  once at the batch entrypoint (`src/gate_cache.rs` `gate_cache_enabled`),
+- **When** a subprocess spawns,
+- **Then** `apply_gate_cache` MUST be a strict no-op: it MUST NOT clear an
+  inherited `CARGO_TARGET_DIR`, so the child environment is byte-identical
+  to the prior behavior; an unrecognized config value MUST warn via
+  `tracing` and leave the mechanism enabled.
+
 ## Parallel batch execution
 
 The single-bookmark CLI path is sequential: `jj-hp push` loops

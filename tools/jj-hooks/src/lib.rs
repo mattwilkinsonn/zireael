@@ -7,6 +7,7 @@ pub mod bookmark_updates;
 pub mod cli;
 pub mod completions;
 pub mod error;
+pub mod gate_cache;
 pub mod hooks;
 pub mod init;
 pub mod jj;
