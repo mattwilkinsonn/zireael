@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import type { Deps, ShOpts, ShResult } from "./index.ts";
 import {
 	bumpFormulaVersion,
-	bumpPackageJsonVersion,
 	runOnce,
 	validateVersion,
 	verifyBumps,
@@ -36,43 +35,19 @@ describe("validateVersion", () => {
 	});
 });
 
-const PKG_JSON = `{
-	"name": "akiflow-cli",
-	"version": "0.3.7",
-	"description": "Akiflow CLI - Task management from the command line"
-}
-`;
-
-const FORMULA = `class AkiflowCli < Formula
-  desc "Command-line task management"
+const FORMULA = `class JjGt < Formula
+  desc "Graphite-style stacked PR tool for jj"
   version "0.3.7"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/x/releases/download/v#{version}/akiflow-cli-v#{version}-darwin-arm64.tar.gz"
+      url "https://github.com/x/releases/download/v#{version}/jj-gt-v#{version}-darwin-arm64.tar.gz"
       sha256 "9e70c1bafbbf8f212f1ecb90c7ab0824e43acca9bff2dec143f5ce35fb6cde34"
     end
   end
 end
 `;
-
-describe("bumpPackageJsonVersion", () => {
-	test("rewrites the version line and nothing else", () => {
-		const out = bumpPackageJsonVersion(PKG_JSON, "0.4.0");
-		expect(out).toBe(
-			PKG_JSON.replace('"version": "0.3.7"', '"version": "0.4.0"'),
-		);
-		expect(out).toContain('"version": "0.4.0"');
-		expect(out).toContain('"name": "akiflow-cli"');
-		expect(out).not.toContain("0.3.7");
-	});
-
-	test("carries a prerelease bare version verbatim", () => {
-		const out = bumpPackageJsonVersion(PKG_JSON, "0.4.0-rc.1");
-		expect(out).toContain('"version": "0.4.0-rc.1"');
-	});
-});
 
 describe("bumpFormulaVersion", () => {
 	test("rewrites the version line only, leaving url templates intact", () => {
@@ -80,7 +55,7 @@ describe("bumpFormulaVersion", () => {
 		expect(out).toContain('  version "0.4.0"');
 		// The url "...#{version}..." interpolation lines must NOT be touched.
 		expect(out).toContain(
-			'url "https://github.com/x/releases/download/v#{version}/akiflow-cli-v#{version}-darwin-arm64.tar.gz"',
+			'url "https://github.com/x/releases/download/v#{version}/jj-gt-v#{version}-darwin-arm64.tar.gz"',
 		);
 		expect(out).toContain('license "MIT"');
 		expect(out).not.toContain('version "0.3.7"');
@@ -89,34 +64,25 @@ describe("bumpFormulaVersion", () => {
 
 describe("verifyBumps", () => {
 	const cargoOk = 'version = "0.4.0"\nedition = "2024"\n';
-	const pkgOk = '{ "version": "0.4.0" }';
-	const formulasOk = [
-		{ name: "Formula/akiflow-cli.rb", text: 'version "0.4.0"' },
-	];
+	const formulasOk = [{ name: "Formula/jj-gt.rb", text: 'version "0.4.0"' }];
 
 	test("returns no errors when every bump took", () => {
-		expect(verifyBumps(cargoOk, pkgOk, formulasOk, "0.4.0")).toEqual([]);
+		expect(verifyBumps(cargoOk, formulasOk, "0.4.0")).toEqual([]);
 	});
 
 	test("flags a stale Cargo.toml and echoes its version lines", () => {
 		const cargoStale = 'version = "0.3.7"\nedition = "2024"\n';
-		expect(verifyBumps(cargoStale, pkgOk, formulasOk, "0.4.0")).toEqual([
+		expect(verifyBumps(cargoStale, formulasOk, "0.4.0")).toEqual([
 			"error: workspace Cargo.toml version didn't bump to 0.4.0",
 			'version = "0.3.7"',
 		]);
-	});
-
-	test("flags a stale package.json", () => {
-		expect(
-			verifyBumps(cargoOk, '{ "version": "0.3.7" }', formulasOk, "0.4.0"),
-		).toEqual(["error: tools/akiflow-cli/package.json version didn't bump"]);
 	});
 
 	test("flags a stale formula by path", () => {
 		const formulasStale = [
 			{ name: "Formula/jj-gt.rb", text: 'version "0.3.7"' },
 		];
-		expect(verifyBumps(cargoOk, pkgOk, formulasStale, "0.4.0")).toEqual([
+		expect(verifyBumps(cargoOk, formulasStale, "0.4.0")).toEqual([
 			"error: Formula/jj-gt.rb version line didn't bump to 0.4.0",
 		]);
 	});
@@ -187,12 +153,11 @@ const HAPPY_RESPONSES: Record<string, Partial<ShResult>> = {
 };
 
 const HAPPY_FILES = {
-	"tools/akiflow-cli/package.json": '{\n\t"version": "0.3.7"\n}\n',
 	"Cargo.toml": 'version = "0.4.0"\n',
-	"Formula/akiflow-cli.rb": '  version "0.4.0"\n',
+	"Formula/jj-gt.rb": '  version "0.4.0"\n',
 };
 
-const HAPPY_GLOB = { "Formula/*.rb": ["Formula/akiflow-cli.rb"] };
+const HAPPY_GLOB = { "Formula/*.rb": ["Formula/jj-gt.rb"] };
 
 describe("runOnce guards", () => {
 	test("bad version exits 1 before any command runs", async () => {
@@ -218,9 +183,7 @@ describe("runOnce guards", () => {
 		expect(commands).toEqual([
 			{ cmd: "jj", args: ["diff", "--summary", "--ignore-working-copy"] },
 		]);
-		expect(files["tools/akiflow-cli/package.json"]).toBe(
-			HAPPY_FILES["tools/akiflow-cli/package.json"],
-		);
+		expect(files["Formula/jj-gt.rb"]).toBe(HAPPY_FILES["Formula/jj-gt.rb"]);
 	});
 
 	test("@ not descendant of main exits 1", async () => {
@@ -307,10 +270,7 @@ describe("runOnce happy path", () => {
 		]);
 
 		// Side-effect files were rewritten via the pure bump fns.
-		expect(files["tools/akiflow-cli/package.json"]).toContain(
-			'"version": "0.4.0"',
-		);
-		expect(files["Formula/akiflow-cli.rb"]).toContain('version "0.4.0"');
+		expect(files["Formula/jj-gt.rb"]).toContain('version "0.4.0"');
 
 		// Final success echo carries the actions URL.
 		expect(logs.at(-1)).toBe(

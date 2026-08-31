@@ -27,7 +27,6 @@ covers every project:
 | --- | --- | --- |
 | `jj-hooks` | `tools/jj-hooks` | `fmt` + `clippy` + `test` (cargo) |
 | `jj-gt` | `tools/jj-gt` | `fmt` + `clippy` + `test` (cargo; `dependsOn: jj-hooks`) |
-| `akiflow-cli` | `tools/akiflow-cli` | `lint` (biome) + `typecheck` (tsc) + `test` (bun) |
 | `tap` | `Formula` | `brew-style` (guarded when brew absent) |
 | `root` | `.` | `markdownlint` + `actionlint` + `nixfmt` + `deadnix` (devenv.nix) |
 

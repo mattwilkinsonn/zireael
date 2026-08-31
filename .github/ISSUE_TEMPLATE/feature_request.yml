@@ -9,7 +9,6 @@ body:
       options:
         - jj-hooks / jj-hp
         - jj-gt
-        - akiflow-cli (af)
         - Homebrew formula
         - Repo infra (CI, release, monorepo plumbing)
     validations:

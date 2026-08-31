@@ -106,7 +106,7 @@ jobs:
           set -euo pipefail
           brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
           brew trust mattwilkinsonn/zireael
-          for formula in jj-hooks jj-gt akiflow-cli; do
+          for formula in jj-hooks jj-gt; do
             echo "::group::${formula}"
             brew install "mattwilkinsonn/zireael/${formula}"
             brew test "mattwilkinsonn/zireael/${formula}"

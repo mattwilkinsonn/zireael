@@ -4,7 +4,7 @@ Formulae for [zireael](../README.md) tools, installable via:
 
 ```bash
 brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
-brew install mattwilkinsonn/zireael/jj-hooks   # or jj-gt, or akiflow-cli
+brew install mattwilkinsonn/zireael/jj-hooks   # or jj-gt
 ```
 
 ## Available formulae
@@ -13,7 +13,6 @@ brew install mattwilkinsonn/zireael/jj-hooks   # or jj-gt, or akiflow-cli
 | --- | --- | --- |
 | `jj-hooks` | `jj-hooks`, `jj-hp` | Runs pre-commit / lefthook / hk hooks against jj bookmark pushes. |
 | `jj-gt` | `jj-gt` | Bridges jj bookmark stacks and Graphite (gt) PR stacks. |
-| `akiflow-cli` | `af` | Akiflow task-management CLI (fork of `code-yeongyu/akiflow-cli`). |
 
 ## How releases work
 

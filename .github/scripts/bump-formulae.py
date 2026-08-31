@@ -14,7 +14,7 @@ Env vars expected:
 
     VER                              - bare version (e.g. "0.3.0")
     <TOOL>_<SLUG>                    - e.g. JJ_HOOKS_DARWIN_ARM64
-    where TOOL ∈ {JJ_HOOKS, JJ_GT, AKIFLOW_CLI}
+    where TOOL ∈ {JJ_HOOKS, JJ_GT}
     and   SLUG ∈ {DARWIN_ARM64, LINUX_X64, LINUX_ARM64}
 
 Each formula is rewritten only if at least one of its shas
@@ -32,7 +32,6 @@ from pathlib import Path
 TOOLS = {
     "jj-hooks": "JJ_HOOKS",
     "jj-gt": "JJ_GT",
-    "akiflow-cli": "AKIFLOW_CLI",
 }
 
 SLUGS = {

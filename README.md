@@ -8,7 +8,6 @@ Personal monorepo: the public CLI tools I maintain.
 | --- | --- | --- | --- |
 | `jj-hooks` / `jj-hp` | [`tools/jj-hooks`](./tools/jj-hooks) | Rust | Run pre-commit / lefthook / hk hooks against [jj](https://github.com/jj-vcs/jj) bookmark pushes. |
 | `jj-gt` | [`tools/jj-gt`](./tools/jj-gt) | Rust | Bridge jj bookmark stacks and [Graphite](https://graphite.dev) PR stacks. |
-| `akiflow-cli` (`af`) | [`tools/akiflow-cli`](./tools/akiflow-cli) | TypeScript / Bun | [Akiflow](https://akiflow.com) task-management CLI (fork of [`code-yeongyu/akiflow-cli`](https://github.com/code-yeongyu/akiflow-cli)). |
 | Homebrew formulae | [`Formula`](./Formula) | Ruby | `brew install mattwilkinsonn/zireael/<tool>`. |
 
 ### Install
@@ -17,8 +16,12 @@ Personal monorepo: the public CLI tools I maintain.
 
 ```bash
 brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
-brew install mattwilkinsonn/zireael/jj-hooks   # or jj-gt, or akiflow-cli
+brew install mattwilkinsonn/zireael/jj-hooks   # or jj-gt
 ```
+
+> **Tap migration.** The tools have moved to standalone repos. If you tapped
+> `mattwilkinsonn/zireael`, run `brew untap mattwilkinsonn/zireael`, then
+> `brew tap mattwilkinsonn/jj-hooks` / `brew tap mattwilkinsonn/jj-gt`.
 
 #### Cargo (Rust tools)
 
@@ -56,7 +59,7 @@ Each tagged release attaches `tar.gz` binaries for `darwin-arm64`,
 ```bash
 direnv allow        # one-time: enters the devenv shell (rust, bun, node, moon, hk, jj, linters)
 moon ci             # run every affected task (the same gate CI + the pre-push hook run)
-moon run <p>:ci     # one project's checks (p = jj-hooks | jj-gt | akiflow-cli | tap | root)
+moon run <p>:ci     # one project's checks (p = jj-hooks | jj-gt | tap | root)
 ```
 
 CI shape: one workflow ([`.github/workflows/ci.yml`](./.github/workflows/ci.yml)) runs `moon ci` in the devenv shell on every PR.
@@ -79,7 +82,6 @@ This repo replaces these previous standalone repos:
 
 + [`mattwilkinsonn/jj-hooks`](https://github.com/mattwilkinsonn/jj-hooks) → `tools/jj-hooks`
 + [`mattwilkinsonn/jj-gt`](https://github.com/mattwilkinsonn/jj-gt) → `tools/jj-gt`
-+ [`mattwilkinsonn/akiflow-cli`](https://github.com/mattwilkinsonn/akiflow-cli) (fork) → `tools/akiflow-cli`
 + [`mattwilkinsonn/homebrew-tap`](https://github.com/mattwilkinsonn/homebrew-tap) → `Formula`
 
 The CLI-tool repos are archived on GitHub and link back here.
@@ -87,5 +89,4 @@ The CLI-tool repos are archived on GitHub and link back here.
 ## License
 
 Dual-licensed under MIT OR Apache-2.0. See [`LICENSE.md`](./LICENSE.md) for
-details. `tools/akiflow-cli/` carries an extra MIT-only exception inherited
-from its upstream.
+details.

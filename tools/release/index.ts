@@ -3,11 +3,10 @@
 //   release v0.3.0        (or: moon run root:release -- v0.3.0)
 //
 //   1. Validate the version string + working-copy state.
-//   2. Bump the workspace Cargo.toml + tools/akiflow-cli/package.json
-//      + Formula/*.rb to the new version. `cargo set-version --workspace`
-//      handles all Rust members + the internal jj-hooks path-dep version
-//      field in one shot; the akiflow-cli + tap bumps are inline string
-//      transforms (bumpPackageJsonVersion / bumpFormulaVersion).
+//   2. Bump the workspace Cargo.toml + Formula/*.rb to the new version.
+//      `cargo set-version --workspace` handles all Rust members + the
+//      internal jj-hooks path-dep version field in one shot; the tap
+//      bumps are inline string transforms (bumpFormulaVersion).
 //   3. Commit "release: vX.Y.Z" as a new jj change on top of @.
 //   4. Tag @- with the version.
 //   5. Advance the local `main` bookmark to the release commit.
@@ -44,14 +43,6 @@ function validateVersion(v: string): { bare: string } | { error: string } {
 	return { bare: v.slice(1) };
 }
 
-// Port of `sed -i -E "s/^(\s*\"version\":\s*)\"[^\"]+\"/\1\"$bare\"/"`:
-// rewrite the value of every top-of-line `"version": "..."` field.
-// Anchored per line (m flag), so only the field name at line start is
-// touched — not a `"version"` appearing mid-value.
-function bumpPackageJsonVersion(text: string, bare: string): string {
-	return text.replace(/^(\s*"version":\s*)"[^"]+"/gm, `$1"${bare}"`);
-}
-
 // Port of `sed -i -E "s/^(\s*version\s+)\"[^\"]+\"/\1\"$bare\"/"`:
 // rewrite the Ruby `version "..."` line. The `url "...#{version}..."`
 // lines start with `url`, not `version`, so they are left untouched.
@@ -65,7 +56,6 @@ function bumpFormulaVersion(text: string, bare: string): string {
 // each formula's path (for the error message) + its on-disk text.
 function verifyBumps(
 	cargoToml: string,
-	pkgJson: string,
 	formulas: { name: string; text: string }[],
 	bare: string,
 ): string[] {
@@ -78,10 +68,6 @@ function verifyBumps(
 			if (line.startsWith("version = ")) msgs.push(line);
 		}
 		return msgs;
-	}
-	// grep -q "\"version\": \"$bare\"" tools/akiflow-cli/package.json
-	if (!pkgJson.includes(`"version": "${bare}"`)) {
-		return ["error: tools/akiflow-cli/package.json version didn't bump"];
 	}
 	// for formula in Formula/*.rb; do grep -q "version \"$bare\"" ...
 	for (const f of formulas) {
@@ -179,14 +165,6 @@ async function runOnce(deps: Deps, argv: string[]): Promise<number> {
 	if (setVersion.exitCode !== 0) return setVersion.exitCode;
 	log("");
 
-	log(`==> Bumping tools/akiflow-cli/package.json to ${bare}...`);
-	const pkgPath = "tools/akiflow-cli/package.json";
-	await writeFile(
-		pkgPath,
-		bumpPackageJsonVersion(await readFile(pkgPath), bare),
-	);
-	log("");
-
 	log(`==> Bumping Formula/*.rb version lines to ${bare}...`);
 	for (const formula of await glob("Formula/*.rb")) {
 		await writeFile(formula, bumpFormulaVersion(await readFile(formula), bare));
@@ -205,12 +183,7 @@ async function runOnce(deps: Deps, argv: string[]): Promise<number> {
 			text: await readFile(name),
 		})),
 	);
-	const failures = verifyBumps(
-		await readFile("Cargo.toml"),
-		await readFile(pkgPath),
-		formulaFiles,
-		bare,
-	);
+	const failures = verifyBumps(await readFile("Cargo.toml"), formulaFiles, bare);
 	if (failures.length > 0) {
 		for (const line of failures) err(line);
 		return 1;
@@ -257,7 +230,6 @@ async function runOnce(deps: Deps, argv: string[]): Promise<number> {
 export type { Deps, ShOpts, ShResult };
 export {
 	bumpFormulaVersion,
-	bumpPackageJsonVersion,
 	runOnce,
 	validateVersion,
 	verifyBumps,

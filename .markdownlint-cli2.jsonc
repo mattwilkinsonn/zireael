@@ -21,10 +21,9 @@
 		}
 	},
 	// Skip anything inside dependency / build / VCS dirs. Without this,
-	// bare `markdownlint-cli2 "**/*.md"` descends into
-	// tools/akiflow-cli/node_modules/@biomejs/biome/README.fr.md
-	// (a fully HTML-formatted README written by upstream biome) and
-	// dumps 50+ errors that aren't our problem.
+	// bare `markdownlint-cli2 "**/*.md"` descends into bun tools'
+	// node_modules (e.g. a fully HTML-formatted upstream biome
+	// README.fr.md) and dumps 50+ errors that aren't our problem.
 	"ignores": [
 		"**/node_modules/**",
 		"**/target/**",
