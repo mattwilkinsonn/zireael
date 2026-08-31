@@ -49,7 +49,10 @@ All of the following exists today and goes away:
   release artifacts for every monorepo tool, attaches them to a single GitHub
   Release, bumps each Formula/*.rb in-place, and publishes the Rust crates to
   crates.io") and `nightly.yml:3-6` ("Daily cron that runs the full moon gate
-  … plus the tap install smoke-test"). Both are tool-release machinery.
+  … plus the tap install smoke-test"). Both are tool-release machinery. With
+  them goes `.github/scripts/` — it holds only `bump-formulae.py`, whose sole
+  caller is `release.yml:378`'s `bump-tap` job and which rewrites the deleted
+  `Formula/*.rb`.
 - **`.github/rulesets/`** — `main-protection.json` (the checked-in ruleset
   requiring the `"context": "moon CI"` status check,
   `main-protection.json:38`). Branch protection becomes a *resource of the
@@ -170,22 +173,30 @@ With moon gone, the GHA equivalent here is:
   Enforcement is a `bun test` (`refresh-gate.test.ts`) that imports that
   module and fails on any preview/up invocation missing `--refresh` —
   parsing structure, not embedded shell strings (the moon-free analogue of
-  orion's `tools/pulumi-refresh-gate`, whose test likewise parses YAML task
-  fields rather than shell, `affected-scoping.test.ts:28-33`).
-- **Concurrency guard covers preview AND up** — one per-stack GHA
-  `concurrency` group `infra-<stack>` shared by both job kinds.
+  orion's `tools/pulumi-refresh-gate`, whose `gate.test.ts` likewise parses
+  its fixture `moon.yml` and asserts on tokenized argv rather than embedded
+  shell strings).
+- **Concurrency guard covers preview AND up — TWO groups per stack.**
   `preview --refresh` is not read-only: the refresh step takes the stack
-  lease and persists refreshed state, so an unguarded PR preview racing a
-  merge's `up` (or another preview) on the same stack fails with "another
-  update is currently in progress" — reddening a check, or on the up side
-  aborting an apply mid-flight and manufacturing exactly the partial-apply
-  the guard exists to prevent. Up jobs keep no-`cancel-in-progress`; PR
-  preview jobs may safely set `cancel-in-progress: true` against each
-  other.
+  lease and persists refreshed state, so unguarded runs on the same stack
+  collide. `up` jobs use `concurrency: infra-up-<stack>` with
+  `cancel-in-progress: false` — ups serialize on the stack and never cancel
+  each other. `preview` jobs use `concurrency: infra-preview-<stack>` with
+  `cancel-in-progress: true` — a newer preview cancels only a superseded
+  preview of the same stack. The groups MUST be separate: GHA's
+  `cancel-in-progress` is a property of the arriving run and cancels ANY
+  in-progress member of its group regardless of job kind, so a shared group
+  would let a PR preview cancel an `up` mid-apply — exactly the
+  partial-apply the guard exists to prevent. Preview↔up mutual exclusion on
+  a stack is deliberately NOT enforced by concurrency (they are different
+  groups): a preview racing an up hits Pulumi's own state-lease "another
+  update is currently in progress" error, which reddens the preview check
+  rather than corrupting state — fail-loud, not fail-corrupt.
 - **Required check = the stable rollup, never a per-stack pulumi context** —
-  the ruleset's required status check stays the T2 `CI` rollup (the
+  the ruleset's required status check stays the T2 rollup (the
   `ci.yml:70-99` "single stable check context for branch protection"
-  pattern this record already keeps), which reports on every PR. The
+  pattern this record already keeps; named `moon CI` until T4 renames it
+  to `CI` alongside the IaC ruleset), which reports on every PR. The
   per-stack preview contexts (`pulumi (github)`, `pulumi (aws)`, …) are
   informational, NON-required checks: a required context on a
   `paths:`-filtered workflow is a known wedge — a docs-only PR never
@@ -281,7 +292,9 @@ Delete (precise list, grounded in Approach § "What is gutted"):
 `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `clippy.toml`,
 `.prototools`, `tools/` (all six subdirs), `Formula/`, `CHANGELOG.md`,
 `moon.yml`, `.moon/workspace.yml`, `.github/workflows/release.yml`,
-`.github/workflows/nightly.yml`, `.github/rulesets/` (both files),
+`.github/workflows/nightly.yml`, `.github/scripts/` (holds only
+`bump-formulae.py`, dead once release.yml and `Formula/` are gone),
+`.github/rulesets/` (both files),
 `docs/specs/tools/` + `docs/designs/tools/` records that moved with record A.
 Edit: `.gitignore` (drop Rust lines 1-5 and moon lines 33-36),
 `.envrc` (drop `watch_file .prototools`, line 10), `README.md` (rewrite for
@@ -294,7 +307,9 @@ Interfaces:
 
 - Consumes: the post-extraction tree.
 - Produces: a repo whose only substantive content is `docs/`, devenv/direnv
-  config, `.github/` (ci.yml + post-merge.yml pending T2 retool), licenses.
+  config, `.github/` (CODEOWNERS, `ISSUE_TEMPLATE/`, and workflows reduced
+  to ci.yml + post-merge.yml pending T2 retool — `.github/scripts/` is gone
+  with release.yml), licenses.
   `git grep -l 'moon\|proto\|cargo'` over tracked config returns only
   historical docs.
 
@@ -310,14 +325,21 @@ Drop the `fenix` input from `devenv.yaml:9-13`. Define devenv `tasks`:
 pre-push step from `check = "moon ci"` (`hk.pkl:29-31`) to the devenv task
 entrypoint. Rewrite `.github/workflows/ci.yml` + `post-merge.yml` to run the
 devenv lint+test tasks instead of `devenv shell -- moon ci` (`ci.yml:65`);
-keep the single `moon CI`-style rollup job pattern (`ci.yml:70-99`) under a
-new stable check name `CI`.
+keep the single rollup job pattern (`ci.yml:70-99`) and KEEP its check
+context named `moon CI` for now: the LIVE main ruleset (applied out-of-band
+from `main-protection.json:38`) requires the `moon CI` context until T4
+brings the ruleset under IaC, so renaming here would leave every PR —
+including T2's own — unable to satisfy the required check, wedging main
+behind Matt's admin bypass (`.github/rulesets/README.md` § "Two-step
+rollout for new required checks" documents this exact footgun). T4 renames
+the context to `CI` alongside the ruleset update.
 
 Interfaces:
 
 - Consumes: T1's gutted tree.
 - Produces: `devenv.nix`/`devenv.yaml` (bun+pulumi shell), `hk.pkl`
-  (pre-push → devenv tasks), `ci.yml` exposing required check context `CI`;
+  (pre-push → devenv tasks), `ci.yml` still exposing the required check
+  context `moon CI` (renamed to `CI` in T4);
   `devenv shell -- devenv tasks run repo:lint` green locally and in GHA.
 
 ### T3 — infra/pulumi scaffold + Pulumi Cloud auth
@@ -358,7 +380,11 @@ two extracted tool repos + this list grows), each import-adopted
 (`import:` + `protect: true`), squash-merge policy, and a `main` ruleset per
 repo reproducing today's checked-in `main-protection.json` semantics
 (deletion/non-fast-forward/linear-history/PR-required/required status check —
-`main-protection.json:11-41`) with the new `CI` check context. The required
+`main-protection.json:11-41`) with the required check context renamed
+`moon CI` → `CI`: the ruleset resource requires `CI` and `ci.yml`'s rollup
+job is renamed in the same PR, so the rename and the requirement flip land
+atomically (per T2 the context stays `moon CI` until this task; splitting
+them re-opens the wedge). The required
 status check on zireael is ONLY the stable `CI` rollup — the per-stack
 pulumi preview contexts are never added to the required set (they live on a
 `paths:`-filtered workflow and would wedge every non-infra PR; Approach
@@ -485,9 +511,15 @@ policy sub `repo:mattwilkinsonn/zireael:pull_request`),
 path: NO affected-detection — a matrix `up` over ALL stacks (issuer policy
 sub `repo:mattwilkinsonn/zireael:ref:refs/heads/main`), `pulumi up …
 --refresh --yes --non-interactive`, so a pending-run cancellation can never
-silently drop a middle merge's apply. Both job kinds share the per-stack
-`concurrency: infra-<stack>` group — up with no `cancel-in-progress`,
-preview with `cancel-in-progress: true`. `id-token: write` permission; ESC
+silently drop a middle merge's apply. The job kinds use SEPARATE per-stack
+concurrency groups (Approach § GHA deploy): `up` under
+`concurrency: infra-up-<stack>` with `cancel-in-progress: false`
+(serialized, never cancelled), `preview` under
+`concurrency: infra-preview-<stack>` with `cancel-in-progress: true`
+(cancels only a superseded same-stack preview). Preview↔up mutual
+exclusion is not enforced by concurrency; a preview racing an up fails on
+Pulumi's state lease ("another update is currently in progress") —
+fail-loud, not fail-corrupt. `id-token: write` permission; ESC
 envs carry provider creds so the workflow holds no cloud secrets. The
 per-stack preview contexts stay NON-required informational checks; the
 ruleset's required check remains the stable `CI` rollup only (T4).
