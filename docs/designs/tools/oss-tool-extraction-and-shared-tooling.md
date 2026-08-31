@@ -290,9 +290,15 @@ automatically once `repository` in Cargo.toml is updated).
   `tools/jj-hooks/moon.yml`), so the drop stands.
 - **Branch protection:** each standalone re-establishes a main ruleset
   equivalent to `.github/rulesets/main-protection.json` (PR-required, squash
-  only, linear history, one required check context) with the required check
-  renamed from `moon CI` (`main-protection.json:38`) to the new gate's stable
-  context name (`ci`).
+  only, linear history, one required check context), replacing the required
+  check `moon CI` (`main-protection.json:38`). The new context is NOT a
+  uniform `ci`: GitHub reports a reusable-workflow job as
+  `<caller-job> / <called-job>`, so jj-hooks' thin stub (T2.3) surfaces as
+  `<caller-job> / gate`, while jj-gt's ejected hand-written job (T3.3)
+  reports plain `gate`. Either name the caller and gate jobs so both repos
+  land on one string, or record the two distinct required contexts per
+  repo — and in both cases verify the exact reported context name from the
+  first CI run BEFORE creating the ruleset.
 - **Licensing:** MIT OR Apache-2.0 carried over (`Cargo.toml:12`), both
   LICENSE files shipped in release tarballs as today
   (`release.yml:122,134`).
@@ -384,6 +390,14 @@ surfaces. This lands first; T2/T3 consume it.
    contents: write` + `pull-requests: write` (+ `id-token: write` for the
    Nix action). This is the update path for ALL devenv-locked inputs in
    every consumer, including the dev-shared module pin itself.
+   The PR-create step has a repo-setting dependency: opening a PR with the
+   built-in `GITHUB_TOKEN` requires "Allow GitHub Actions to create and
+   approve pull requests" enabled (repo or org Actions settings), else the
+   step fails or silently no-ops — and this workflow is the SOLE update
+   path for devenv-locked inputs. The ruleset-setup checklist for
+   dev-shared AND every consumer stub (T2.3, T3.3) must enable that
+   setting per repo, or the PR-create step must use a PAT/App token
+   instead.
 6. Repo plumbing: README (consumption snippets for all surfaces), `v1` tag +
    tag-move release convention, own thin `ci.yml` (actionlint + markdownlint
    via the reusable workflow's own machinery is circular — use a minimal
@@ -461,8 +475,10 @@ monorepo crate, plus new repo scaffolding.
    ruleset bypass entry.
    **Pre-split asset mirror (resolved decision 2):** re-host the existing
    zireael v0.3.x jj-hooks release tarballs on this repo's Releases page
-   (`gh release create v0.3.11 …` with the existing artifacts) so
-   already-shipped downloads survive record B's private flip.
+   (`gh release create v0.3.11 …` with the existing artifacts). Scope: the
+   mirror restores manual downloads and Homebrew re-tap installs only —
+   pre-built `cargo binstall` for already-published 0.3.x stays broken
+   post-flip (see resolved decision 2).
 6. **Repo meta:** main ruleset (per Global Constraints), README already
    crate-local (copied), CHANGELOG seeded from the monorepo's jj-hooks
    entries.
@@ -542,12 +558,23 @@ akiflow-cli.rb`), and tap-validation entry (`release.yml:425`:
 `for formula in jj-hooks jj-gt akiflow-cli`).
 
 1. Delete `tools/akiflow-cli/` and `Formula/akiflow-cli.rb`.
-2. Purge dangling refs: `release.yml` (`build-akiflow-cli` job, its
-   `needs:` entries at `release.yml:250,298`, the `akiflow-cli` globs in
-   `publish-release`/`bump-tap`/`validate-tap`, the `AKIFLOW_CLI_*` env at
-   `release.yml:375-377`), `.github/scripts/bump-formulae.py`, nightly's tap
-   loop if present, root README, `.prototools` (moot — dies with record B,
-   but no ref may survive this PR either), CHANGELOG note.
+2. Purge dangling refs — the load-bearing one first: the registered moon
+   project source `.moon/workspace.yml:20` (`akiflow-cli:
+   'tools/akiflow-cli'`). This task's PR lands on zireael, whose gate is
+   still `moon ci`, and moon errors on load when a registered project's
+   source directory is missing — deleting `tools/akiflow-cli/` without
+   removing this entry red-gates T4's own PR. Then: `release.yml`
+   (`build-akiflow-cli` job, its `needs:` entries at `release.yml:250,298`,
+   the `akiflow-cli` globs in `publish-release`/`bump-tap`/`validate-tap`,
+   the `AKIFLOW_CLI_*` env at `release.yml:375-377`),
+   `.github/scripts/bump-formulae.py`, nightly's tap loop if present, root
+   README, both issue-template dropdowns
+   (`.github/ISSUE_TEMPLATE/bug_report.yml:2,12` and
+   `feature_request.yml:12` carry `akiflow-cli (af)` options),
+   `Formula/README.md:7,16` (install one-liner + formula table row),
+   `docs/specs/platform/ci.md:30` (project table row), the akiflow
+   MIT-exception note at `LICENSE.md:14-18`, `.prototools` (moot — dies
+   with record B, but no ref may survive this PR either), CHANGELOG note.
 3. No archive/extraction: the code stays in zireael history (clean-snapshot
    rule). Existing releases stay downloadable on the zireael Releases page
    ONLY while zireael stays public — record B flips it private, which kills
@@ -559,7 +586,8 @@ akiflow-cli.rb`), and tap-validation entry (`release.yml:425`:
    artifacts get NO mirror — the tool is dropped and has no standalone; that
    breakage is accepted as part of the same ruling.
 4. Verification: `grep -ri akiflow` over the repo returns only
-   CHANGELOG/history mentions.
+   CHANGELOG/history mentions — reachable with the full purge list above
+   (`.moon/workspace.yml` must be purged regardless, as the gate-breaker).
 
 Interfaces:
 
@@ -569,12 +597,13 @@ Interfaces:
   zireael (this task, unlike T1-T3, lands in the monorepo — it can ride
   with or ahead of record B's repurpose).
 
-### T5 — Re-home jj-hooks issues #300/#301/#302
+### T5 — Re-home jj-hooks issues #300/#301 + design PR #302
 
 The open jj-hooks work must follow the crate to its standalone repo.
 
-1. Close #300, #301, #302 on `mattwilkinsonn/zireael`, each with a pivot
-   note linking the standalone successor.
+1. Close issues #300 and #301 on `mattwilkinsonn/zireael`, each with a
+   pivot note linking the standalone successor; close the unmerged design
+   PR #302 (the record for #301) with the same pivot note.
 2. Re-file on `mattwilkinsonn/jj-hooks`: the #301 bug, and #300's deferred-T3
    scope, carrying over bodies + links back to the zireael originals.
 3. **Adapt-and-carry the #302 design record**
@@ -604,8 +633,8 @@ The open jj-hooks work must follow the crate to its standalone repo.
 
 Interfaces:
 
-- Consumes: zireael issues #300/#301/#302; the #302 record file from the
-  in-flight branch (not zireael main).
+- Consumes: zireael issues #300/#301 + design PR #302; the #302 record file
+  from the in-flight branch (not zireael main).
 - Produces: closed zireael issues with pivot notes; open standalone jj-hooks
   issues; the #302 record living in standalone jj-hooks.
 
@@ -639,11 +668,11 @@ this record confirming both.
 - [ ] T4: akiflow-cli dropped from zireael — code, Formula, release/nightly/
       script refs purged; grep-clean; tap-migration note added to root
       README.
-- [ ] T5: issues #300/#301/#302 closed on zireael with pivot notes; #301 +
-      #300-T3 re-filed on standalone jj-hooks; #302 record adapted (tracking
-      pointer, paths, version constraint) + carried into standalone jj-hooks
-      as its own reviewed docs PR (never merged to zireael), evidence doc
-      carried with it.
+- [ ] T5: issues #300/#301 closed on zireael with pivot notes + design PR
+      #302 closed unmerged; #301 + #300-T3 re-filed on standalone jj-hooks;
+      #302 record adapted (tracking pointer, paths, version constraint) +
+      carried into standalone jj-hooks as its own reviewed docs PR (never
+      merged to zireael), evidence doc carried with it.
 
 ## Resolved decisions
 
@@ -673,11 +702,19 @@ re-litigated.
    artifacts), and T4 adds a tap-migration note to zireael's root README;
    **record B's private flip (its T8) is sequence-gated on both landing**
    (cross-record dependency — see §Sequencing; the infra record's T8 waits
-   on this). This absorbs the earlier "old zireael tap users" open question
-   (old OQ5) — same concern, understated there as "stop receiving bumps"
-   when the real cost is losing download access to everything already
-   shipped. akiflow-cli's old artifacts are deliberately NOT mirrored (the
-   tool is dropped, no standalone exists); that breakage is accepted.
+   on this). Coverage stated honestly: the mirror restores manual downloads
+   and Homebrew re-tap installs only. It does NOT restore pre-built
+   `cargo binstall` for the already-published 0.3.x versions — binstall
+   resolves `{ repo }` from each version's immutable crates.io metadata,
+   which points at soon-private zireael, and never consults the standalone
+   Releases pages; post-flip it 404s and at best falls back to a slow
+   source build. That residual breakage is accepted, exactly as
+   akiflow-cli's is. This absorbs the earlier "old zireael tap users" open
+   question (old OQ5) — same concern, understated there as "stop receiving
+   bumps" when the real cost is losing download access to everything
+   already shipped. akiflow-cli's old artifacts are deliberately NOT
+   mirrored (the tool is dropped, no standalone exists); that breakage is
+   accepted.
 
 ## Open Questions
 
