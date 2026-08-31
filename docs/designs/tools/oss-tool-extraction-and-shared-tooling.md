@@ -574,7 +574,9 @@ akiflow-cli.rb`), and tap-validation entry (`release.yml:425`:
    `Formula/README.md:7,16` (install one-liner + formula table row),
    `docs/specs/platform/ci.md:30` (project table row), the akiflow
    MIT-exception note at `LICENSE.md:14-18`, `.prototools` (moot — dies
-   with record B, but no ref may survive this PR either), CHANGELOG note.
+   with record B, but no ref may survive this PR either), the workspace-member
+   comment at root `Cargo.toml:6` (`# akiflow-cli is bun/TypeScript and is not
+   a workspace member.` — dangling once the crate is gone), CHANGELOG note.
 3. No archive/extraction: the code stays in zireael history (clean-snapshot
    rule). Existing releases stay downloadable on the zireael Releases page
    ONLY while zireael stays public — record B flips it private, which kills
@@ -585,9 +587,10 @@ akiflow-cli.rb`), and tap-validation entry (`release.yml:425`:
    mattwilkinsonn/jj-hooks` / `mattwilkinsonn/jj-gt`). akiflow-cli's old
    artifacts get NO mirror — the tool is dropped and has no standalone; that
    breakage is accepted as part of the same ruling.
-4. Verification: `grep -ri akiflow` over the repo returns only
-   CHANGELOG/history mentions — reachable with the full purge list above
-   (`.moon/workspace.yml` must be purged regardless, as the gate-breaker).
+4. Verification: `grep -ri akiflow` over the repo returns only CHANGELOG and
+   design-record (`docs/designs/`) mentions — legitimately historical —
+   reachable with the full purge list above (`.moon/workspace.yml` must be
+   purged regardless, as the gate-breaker).
 
 Interfaces:
 
