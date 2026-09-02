@@ -4,24 +4,26 @@ Personal monorepo: the public CLI tools I maintain.
 
 ## CLI tools
 
-| Tool | Path | Language | Description |
+The Rust CLI tools have moved to their own standalone repos; this monorepo is
+being repurposed. Each tool now lives at, and is installed from, its own repo:
+
+| Tool | Repo | Language | Description |
 | --- | --- | --- | --- |
-| `jj-hooks` / `jj-hp` | [`tools/jj-hooks`](./tools/jj-hooks) | Rust | Run pre-commit / lefthook / hk hooks against [jj](https://github.com/jj-vcs/jj) bookmark pushes. |
-| `jj-gt` | [`tools/jj-gt`](./tools/jj-gt) | Rust | Bridge jj bookmark stacks and [Graphite](https://graphite.dev) PR stacks. |
-| Homebrew formulae | [`Formula`](./Formula) | Ruby | `brew install mattwilkinsonn/zireael/<tool>`. |
+| `jj-hooks` / `jj-hp` | [`mattwilkinsonn/jj-hooks`](https://github.com/mattwilkinsonn/jj-hooks) | Rust | Run pre-commit / lefthook / hk hooks against [jj](https://github.com/jj-vcs/jj) bookmark pushes. |
+| `jj-gt` | [`mattwilkinsonn/jj-gt`](https://github.com/mattwilkinsonn/jj-gt) | Rust | Bridge jj bookmark stacks and [Graphite](https://graphite.dev) PR stacks. |
 
 ### Install
 
-#### Homebrew (any tool)
+#### Homebrew
 
 ```bash
-brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
-brew install mattwilkinsonn/zireael/jj-hooks   # or jj-gt
+brew install mattwilkinsonn/jj-hooks/jj-hooks   # ships jj-hooks + jj-hp
+brew install mattwilkinsonn/jj-gt/jj-gt
 ```
 
-> **Tap migration.** The tools have moved to standalone repos. If you tapped
+> **Migrating off the old tap.** If you previously tapped
 > `mattwilkinsonn/zireael`, run `brew untap mattwilkinsonn/zireael`, then
-> `brew tap mattwilkinsonn/jj-hooks` / `brew tap mattwilkinsonn/jj-gt`.
+> install from the per-tool taps above.
 
 #### Cargo (Rust tools)
 
@@ -50,9 +52,10 @@ cargo install jj-gt
 
 #### Manual download
 
-Each tagged release attaches `tar.gz` binaries for `darwin-arm64`,
-`linux-x64`, and `linux-arm64` to its GitHub Release. Grab them at
-<https://github.com/mattwilkinsonn/zireael/releases>.
+Each tool's tagged releases attach `tar.gz` binaries for `darwin-arm64`,
+`linux-x64`, and `linux-arm64`. Grab them from the standalone repo's Releases
+page: [jj-hooks](https://github.com/mattwilkinsonn/jj-hooks/releases) /
+[jj-gt](https://github.com/mattwilkinsonn/jj-gt/releases).
 
 ## Development
 
@@ -78,13 +81,14 @@ Domains: `platform/` (CI), `tools/` (jj-gt, jj-hooks), `agents/` (multi-agent co
 
 ## Repository history
 
-This repo replaces these previous standalone repos:
+These tools were briefly consolidated into this monorepo, then moved back to
+their own standalone repos:
 
-+ [`mattwilkinsonn/jj-hooks`](https://github.com/mattwilkinsonn/jj-hooks) → `tools/jj-hooks`
-+ [`mattwilkinsonn/jj-gt`](https://github.com/mattwilkinsonn/jj-gt) → `tools/jj-gt`
-+ [`mattwilkinsonn/homebrew-tap`](https://github.com/mattwilkinsonn/homebrew-tap) → `Formula`
++ [`mattwilkinsonn/jj-hooks`](https://github.com/mattwilkinsonn/jj-hooks) (`jj-hooks` / `jj-hp`)
++ [`mattwilkinsonn/jj-gt`](https://github.com/mattwilkinsonn/jj-gt)
 
-The CLI-tool repos are archived on GitHub and link back here.
+The full monorepo-era history of each tool is preserved here; ongoing work
+happens in the standalone repos.
 
 ## License
 

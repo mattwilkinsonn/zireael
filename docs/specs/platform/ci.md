@@ -119,7 +119,7 @@ confirms the squashed `main` SHA is green.
 
 ### `push: tags v*`
 
-`release.yml`: per-target binary builds (Rust matrix + bun compile),
+`release.yml`: per-target binary builds (Rust matrix),
 one GitHub Release with every tarball + `.sha256`, tap-formula auto-bump
 committed back to `main`, then `cargo publish jj-hooks` → `jj-gt`.
 Prerelease tags (`v0.3.0-rc.1`) skip the tap-bump + cargo-publish jobs.
