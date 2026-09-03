@@ -163,91 +163,10 @@ jobs:
             ${{ runner.temp }}/jj-gt-v*.sha256
           if-no-files-found: error
 
-  # ----- Build the bun compiled binary (`af` for akiflow-cli).
-  build-akiflow-cli:
-    name: Build akiflow-cli (${{ matrix.target_name }})
-    needs: [meta]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target_name: darwin-arm64
-            runs_on: macos-latest
-            bun_target: bun-darwin-arm64
-          - target_name: linux-x64
-            runs_on: ubuntu-latest
-            bun_target: bun-linux-x64
-          - target_name: linux-arm64
-            runs_on: ubuntu-24.04-arm
-            bun_target: bun-linux-arm64
-    runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: tools/akiflow-cli
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3"
-
-      - name: bun install
-        run: bun install --frozen-lockfile
-
-      - name: Compile af binary
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          bun build src/index.ts --compile --target=${{ matrix.bun_target }} --outfile dist/af
-
-      - name: Stage + tar + sha256
-        id: stage
-        working-directory: ${{ runner.temp }}
-        env:
-          VER: ${{ needs.meta.outputs.version }}
-        run: |
-          set -euo pipefail
-          stage="akiflow-cli-v${VER}-${{ matrix.target_name }}"
-          mkdir -p "$stage"
-          cp "$GITHUB_WORKSPACE/tools/akiflow-cli/dist/af" "$stage/af"
-          cp "$GITHUB_WORKSPACE/tools/akiflow-cli/README.md" "$stage/"
-          cp "$GITHUB_WORKSPACE/tools/akiflow-cli/LICENSE" "$stage/"
-          chmod +x "$stage/af"
-          tar -czf "$stage.tar.gz" "$stage"
-          shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
-          {
-              echo "tarball=$stage.tar.gz"
-              echo "checksum=$stage.tar.gz.sha256"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Codesign (macOS)
-        if: runner.os == 'macOS'
-        working-directory: ${{ runner.temp }}
-        env:
-          VER: ${{ needs.meta.outputs.version }}
-        run: |
-          # The compiled binary inside the tarball is already
-          # extracted under `<stage>/af`. Codesign it in place then
-          # re-tar so the published artifact carries the signature.
-          stage="akiflow-cli-v${VER}-${{ matrix.target_name }}"
-          codesign -s - "$stage/af"
-          tar -czf "$stage.tar.gz" "$stage"
-          shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
-
-      - name: Upload akiflow-cli artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: akiflow-cli-${{ matrix.target_name }}
-          path: |
-            ${{ runner.temp }}/akiflow-cli-v*.tar.gz
-            ${{ runner.temp }}/akiflow-cli-v*.sha256
-          if-no-files-found: error
-
   # ----- Create the GitHub Release and attach every tarball.
   publish-release:
     name: Publish GitHub Release
-    needs: [meta, build-rust, build-akiflow-cli]
+    needs: [meta, build-rust]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -288,14 +207,12 @@ jobs:
               release/jj-hooks-v*.tar.gz \
               release/jj-hooks-v*.sha256 \
               release/jj-gt-v*.tar.gz \
-              release/jj-gt-v*.sha256 \
-              release/akiflow-cli-v*.tar.gz \
-              release/akiflow-cli-v*.sha256
+              release/jj-gt-v*.sha256
 
   # ----- Bump every Formula/*.rb with the new version + sha256s.
   bump-tap:
     name: Bump Homebrew tap formulae
-    needs: [meta, build-rust, build-akiflow-cli, publish-release]
+    needs: [meta, build-rust, publish-release]
     runs-on: ubuntu-latest
     # Skip prereleases — tap should only track stable.
     if: needs.meta.outputs.prerelease == 'false'
@@ -346,10 +263,10 @@ jobs:
         run: |
           set -euo pipefail
           ver="${{ needs.meta.outputs.version }}"
-          for tool in jj-hooks jj-gt akiflow-cli; do
+          for tool in jj-hooks jj-gt; do
               for slug in darwin-arm64 linux-x64 linux-arm64; do
                   # Find the .sha256 file; artifact-name prefix varies
-                  # (rust-* vs akiflow-cli-*) so just glob.
+                  # (rust-* prefix) so just glob.
                   file=$(find artifacts -name "${tool}-v${ver}-${slug}.tar.gz.sha256" | head -1)
                   if [ -z "$file" ]; then
                       echo "error: missing sha256 for ${tool} ${slug}" >&2
@@ -372,9 +289,6 @@ jobs:
           JJ_GT_DARWIN_ARM64: ${{ steps.shas.outputs.jj-gt-darwin-arm64 }}
           JJ_GT_LINUX_X64: ${{ steps.shas.outputs.jj-gt-linux-x64 }}
           JJ_GT_LINUX_ARM64: ${{ steps.shas.outputs.jj-gt-linux-arm64 }}
-          AKIFLOW_CLI_DARWIN_ARM64: ${{ steps.shas.outputs.akiflow-cli-darwin-arm64 }}
-          AKIFLOW_CLI_LINUX_X64: ${{ steps.shas.outputs.akiflow-cli-linux-x64 }}
-          AKIFLOW_CLI_LINUX_ARM64: ${{ steps.shas.outputs.akiflow-cli-linux-arm64 }}
         run: python3 .github/scripts/bump-formulae.py
 
       - name: Commit + push
@@ -422,7 +336,7 @@ jobs:
           set -euo pipefail
           brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
           brew trust mattwilkinsonn/zireael
-          for formula in jj-hooks jj-gt akiflow-cli; do
+          for formula in jj-hooks jj-gt; do
             echo "::group::${formula}"
             brew install "mattwilkinsonn/zireael/${formula}"
             brew test "mattwilkinsonn/zireael/${formula}"

@@ -1,10 +1,9 @@
 // Build debug binaries and install them to ~/.cargo/bin (a dir already on
 // most PATHs). Dev convenience for running the just-built tools locally.
 //
-//   install-debug              # all three tools
+//   install-debug              # both tools
 //   install-debug jj-hooks     # jj-hooks + jj-hp
 //   install-debug jj-gt
-//   install-debug akiflow-cli  # the `af` binary
 //
 // On Linux, writing over an in-use executable fails with ETXTBSY (text
 // file busy), so each binary is unlinked before the fresh copy lands (a
@@ -25,7 +24,7 @@
 import { copyFile, mkdir as fsMkdir, rm as fsRm } from "node:fs/promises";
 import { $ } from "bun";
 
-type Target = "all" | "jj-hooks" | "jj-gt" | "akiflow-cli";
+type Target = "all" | "jj-hooks" | "jj-gt";
 
 // A single unit of the install plan. `plan()` produces these in
 // execution order so tests can assert the sequence without running
@@ -57,7 +56,6 @@ function parseTarget(argv: string[]): Target | { error: string } {
 		case "all":
 		case "jj-hooks":
 		case "jj-gt":
-		case "akiflow-cli":
 			return arg;
 		default:
 			return { error: arg };
@@ -73,10 +71,7 @@ function computeDest(env: Record<string, string | undefined>): string {
 
 // Ordered build+install plan for a target: the compiler invocations and
 // install_bin calls in the exact sequence the bash `case` ran them.
-// `all` chains the three tools in bash order (jj-hooks, jj-gt,
-// akiflow-cli). akiflow-cli's two bun steps run inside tools/akiflow-cli
-// and its `af` install is unsigned — bun's compiled binaries don't trip
-// Gatekeeper.
+// `all` chains the two tools in bash order (jj-hooks, jj-gt).
 function plan(target: Target, dest: string): Step[] {
 	const jjHooks: Step[] = [
 		{
@@ -109,29 +104,13 @@ function plan(target: Target, dest: string): Step[] {
 		{ kind: "install", src: "target/debug/jj-gt", name: "jj-gt", sign: true },
 		{ kind: "log", msg: `Installed debug build (jj-gt) to ${dest}` },
 	];
-	const akiflowCli: Step[] = [
-		{
-			kind: "build",
-			cmd: ["bun", "install", "--frozen-lockfile"],
-			cwd: "tools/akiflow-cli",
-		},
-		{
-			kind: "build",
-			cmd: ["bun", "build", "src/index.ts", "--compile", "--outfile", "af"],
-			cwd: "tools/akiflow-cli",
-		},
-		{ kind: "install", src: "tools/akiflow-cli/af", name: "af", sign: false },
-		{ kind: "log", msg: `Installed debug build (af) to ${dest}` },
-	];
 	switch (target) {
 		case "jj-hooks":
 			return jjHooks;
 		case "jj-gt":
 			return jjGt;
-		case "akiflow-cli":
-			return akiflowCli;
 		case "all":
-			return [...jjHooks, ...jjGt, ...akiflowCli];
+			return [...jjHooks, ...jjGt];
 	}
 }
 
@@ -165,7 +144,7 @@ async function runOnce(deps: Deps, argv: string[]): Promise<number> {
 	await deps.mkdir(dest);
 	if (typeof target === "object") {
 		deps.err(`error: unknown tool '${target.error}'`);
-		deps.err("valid: all | jj-hooks | jj-gt | akiflow-cli");
+		deps.err("valid: all | jj-hooks | jj-gt");
 		return 1;
 	}
 	for (const step of plan(target, dest)) {

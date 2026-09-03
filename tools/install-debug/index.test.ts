@@ -65,7 +65,6 @@ describe("parseTarget", () => {
 	test("each tool passes through", () => {
 		expect(parseTarget(["jj-hooks"])).toBe("jj-hooks");
 		expect(parseTarget(["jj-gt"])).toBe("jj-gt");
-		expect(parseTarget(["akiflow-cli"])).toBe("akiflow-cli");
 	});
 	test("unknown tool returns error carrying the bad arg", () => {
 		expect(parseTarget(["nope"])).toEqual({ error: "nope" });
@@ -138,40 +137,15 @@ describe("plan", () => {
 		]);
 	});
 
-	test("akiflow-cli: two bun builds in tools/akiflow-cli, af install is UNSIGNED", () => {
-		const steps = plan("akiflow-cli", dest);
-		expect(builds(steps)).toEqual([
-			{
-				kind: "build",
-				cmd: ["bun", "install", "--frozen-lockfile"],
-				cwd: "tools/akiflow-cli",
-			},
-			{
-				kind: "build",
-				cmd: ["bun", "build", "src/index.ts", "--compile", "--outfile", "af"],
-				cwd: "tools/akiflow-cli",
-			},
-		]);
-		expect(installs(steps)).toEqual([
-			{ kind: "install", src: "tools/akiflow-cli/af", name: "af", sign: false },
-		]);
-	});
-
-	test("all chains jj-hooks, jj-gt, akiflow-cli in bash order", () => {
+	test("all chains jj-hooks, jj-gt in bash order", () => {
 		const steps = plan("all", dest);
 		expect(installs(steps).map((i) => i.name)).toEqual([
 			"jj-hooks",
 			"jj-hp",
 			"jj-gt",
-			"af",
 		]);
-		// sign flags: cargo bins signed, af unsigned.
-		expect(installs(steps).map((i) => i.sign)).toEqual([
-			true,
-			true,
-			true,
-			false,
-		]);
+		// sign flags: all cargo bins signed.
+		expect(installs(steps).map((i) => i.sign)).toEqual([true, true, true]);
 	});
 });
 
@@ -192,9 +166,9 @@ describe("installBin", () => {
 		expect(r.logs).toEqual(["Codesigned jj-gt"]);
 	});
 
-	test("darwin + sign=false → no codesign (af case)", async () => {
+	test("darwin + sign=false → no codesign", async () => {
 		const r = recorder({ platform: "darwin" });
-		await installBin(r.deps, "/d/bin", "tools/akiflow-cli/af", "af", false);
+		await installBin(r.deps, "/d/bin", "target/debug/jj-gt", "jj-gt", false);
 		expect(r.sh).toEqual([]);
 		expect(r.logs).toEqual([]);
 	});
@@ -215,7 +189,7 @@ describe("runOnce", () => {
 		expect(r.mkdir).toEqual(["/fake/cargo/bin"]);
 		expect(r.errs).toEqual([
 			"error: unknown tool 'bogus'",
-			"valid: all | jj-hooks | jj-gt | akiflow-cli",
+			"valid: all | jj-hooks | jj-gt",
 		]);
 		expect(r.sh).toEqual([]);
 	});
@@ -236,26 +210,6 @@ describe("runOnce", () => {
 		]);
 	});
 
-	test("akiflow-cli on darwin: two bun builds w/ cwd, unsigned install, no codesign", async () => {
-		const r = recorder({ platform: "darwin" });
-		const code = await runOnce(r.deps, ["akiflow-cli"]);
-		expect(code).toBe(0);
-		expect(r.sh).toEqual([
-			{
-				cmd: ["bun", "install", "--frozen-lockfile"],
-				cwd: "tools/akiflow-cli",
-			},
-			{
-				cmd: ["bun", "build", "src/index.ts", "--compile", "--outfile", "af"],
-				cwd: "tools/akiflow-cli",
-			},
-		]);
-		expect(r.cp).toEqual([
-			{ src: "tools/akiflow-cli/af", dest: "/fake/cargo/bin/af" },
-		]);
-		expect(r.logs).toEqual([`Installed debug build (af) to /fake/cargo/bin`]);
-	});
-
 	test("failed cargo build aborts with that exit code, no install", async () => {
 		const r = recorder({ shExit: () => 42 });
 		const code = await runOnce(r.deps, ["jj-gt"]);
@@ -264,7 +218,7 @@ describe("runOnce", () => {
 		expect(r.logs).toEqual([]);
 	});
 
-	test("all on darwin: codesigns the three cargo bins, not af", async () => {
+	test("all on darwin: codesigns the two cargo bin sets", async () => {
 		const r = recorder({ platform: "darwin" });
 		const code = await runOnce(r.deps, []);
 		expect(code).toBe(0);

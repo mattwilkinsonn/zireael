@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a bug in any zireael tool (jj-hooks, jj-gt, akiflow-cli, or the Homebrew formulae).
+description: Report a bug in any zireael tool (jj-hooks, jj-gt, or the Homebrew formulae).
 labels: ["bug"]
 body:
   - type: dropdown
@@ -9,7 +9,6 @@ body:
       options:
         - jj-hooks / jj-hp
         - jj-gt
-        - akiflow-cli (af)
         - Homebrew formula
         - Repo infra (CI, release, monorepo plumbing)
         - Not sure

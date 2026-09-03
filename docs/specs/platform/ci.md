@@ -27,7 +27,6 @@ covers every project:
 | --- | --- | --- |
 | `jj-hooks` | `tools/jj-hooks` | `fmt` + `clippy` + `test` (cargo) |
 | `jj-gt` | `tools/jj-gt` | `fmt` + `clippy` + `test` (cargo; `dependsOn: jj-hooks`) |
-| `akiflow-cli` | `tools/akiflow-cli` | `lint` (biome) + `typecheck` (tsc) + `test` (bun) |
 | `tap` | `Formula` | `brew-style` (guarded when brew absent) |
 | `root` | `.` | `markdownlint` + `actionlint` + `nixfmt` + `deadnix` (devenv.nix) |
 
@@ -120,7 +119,7 @@ confirms the squashed `main` SHA is green.
 
 ### `push: tags v*`
 
-`release.yml`: per-target binary builds (Rust matrix + bun compile),
+`release.yml`: per-target binary builds (Rust matrix),
 one GitHub Release with every tarball + `.sha256`, tap-formula auto-bump
 committed back to `main`, then `cargo publish jj-hooks` → `jj-gt`.
 Prerelease tags (`v0.3.0-rc.1`) skip the tap-bump + cargo-publish jobs.
