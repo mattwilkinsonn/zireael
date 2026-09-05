@@ -98,10 +98,12 @@ step exists; revival is a content PR plus admin-plane setup:
   actor. NOTE: the standalones' "main protection" ruleset (jj-hooks id
   16553812) carries `pull_request` + `required_status_checks: ci / gate`; its
   bypass-actor list is NOT readable from the box (the API omits `bypass_actors`
-  for a non-admin token — `current_user_can_bypass: "never"`), and four
-  `zireael-release[bot]` commits on zireael main with no associated PR (e.g.
-  `e615876 chore(tap): bump formulae to v0.3.11`, zero PRs) indicate the App IS
-  a bypass actor there, consistent with the release.yml:214-227 comment. Either
+  for a non-admin token — `current_user_can_bypass: "never"`), and every
+  `zireael-release[bot]` tap-bump commit on zireael main — nine of them, all
+  post-dating the ruleset's 2026-05-26 creation — carries no associated PR
+  (e.g. `e615876 chore(tap): bump formulae to v0.3.11`, zero PRs), which
+  indicates the App IS a bypass actor there, consistent with the
+  release.yml:214-227 comment. Either
   way those rules do NOT apply to the tap.
 
 ### 2. Re-point each standalone's `bump-tap` at the tap repo
@@ -132,7 +134,9 @@ Change, per repo:
   workspace, so `python3 .github/scripts/bump-formulae.py` (`release.yml:281`)
   fails before any Formula logic. Instead keep the self checkout (the script
   lives there) and ADD a second `actions/checkout` for
-  `mattwilkinsonn/homebrew-tap` under `path: tap` with the App token. Run the
+  `mattwilkinsonn/homebrew-tap` under `path: tap` AND `fetch-depth: 0` (the
+  retained rebase-onto-`origin/main` guard fails across the default depth-1
+  boundary) with the App token. Run the
   rewrite via the absolute script path with `working-directory: tap` (so
   `bump-formulae.py`'s CWD-relative `Path("Formula")` resolves to the tap's
   `Formula/`), and run the whole Commit+push step (`release.yml:282-306`) with
@@ -574,10 +578,10 @@ work. OQ1 was put to Matt and RESOLVED (below); OQ2-OQ4 stand as designed.
    tap is a local clone): T9 `disable!`-stamps `Formula/jj-hooks.rb` +
    `Formula/jj-gt.rb` AND re-points `Formula/README.md` + the root `README.md`
    Homebrew block — every file under the tap dir is client-durable, not just
-   the `.rb`. These are the ONLY surfaces that reach existing zireael-tap
-   users after the flip. Still NOT
-   load-bearing: a zireael pinned issue or final-release note (invisible
-   post-flip, serve only the pre-flip window). T9 is DEFERRABLE off the green
+   the `.rb`. These are the ONLY surfaces that reach existing zireael-tap users
+   after the flip. Still NOT load-bearing: a zireael pinned issue or
+   final-release note (invisible post-flip, serve only the pre-flip window). T9
+   is DEFERRABLE off the green
    gate but MUST land before infra T8.
 3. **Retire the per-repo standalone taps or leave as silent dupes?**
    **Recommendation: retire explicitly (T7)** with the same `disable!` +
