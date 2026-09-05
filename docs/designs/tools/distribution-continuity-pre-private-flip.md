@@ -96,10 +96,13 @@ step exists; revival is a content PR plus admin-plane setup:
   `required_status_checks` (the tap has no CI) and NO `pull_request` rule, so
   the release-time `git push origin HEAD:main` from `bump-tap` needs no bypass
   actor. NOTE: the standalones' "main protection" ruleset (jj-hooks id
-  16553812) has `bypass_actors: []` (verified live) — its `pull_request` +
-  `ci / gate` rules do NOT apply to the tap, and the release.yml:214-227
-  comment claiming "the App is in the bypass actors list" is stale (a
-  discrepancy to reconcile separately, not a pattern to mirror).
+  16553812) carries `pull_request` + `required_status_checks: ci / gate`; its
+  bypass-actor list is NOT readable from the box (the API omits `bypass_actors`
+  for a non-admin token — `current_user_can_bypass: "never"`), and four
+  `zireael-release[bot]` commits on zireael main with no associated PR (e.g.
+  `e615876 chore(tap): bump formulae to v0.3.11`, zero PRs) indicate the App IS
+  a bypass actor there, consistent with the release.yml:214-227 comment. Either
+  way those rules do NOT apply to the tap.
 
 ### 2. Re-point each standalone's `bump-tap` at the tap repo
 
@@ -111,7 +114,7 @@ checks out `ref: main` of the SAME repo with the App token, `:281` runs
 the repo itself (`release.yml:327`:
 `brew tap mattwilkinsonn/jj-hooks https://github.com/mattwilkinsonn/jj-hooks`).
 The jj-gt workflow is structurally identical
-(`jj-gt/.github/workflows/release.yml:204-307,328`).
+(`jj-gt/.github/workflows/release.yml:203-307,328`).
 
 Change, per repo:
 
@@ -292,9 +295,9 @@ Interfaces:
 - Produces: `mattwilkinsonn/homebrew-tap` `Formula/{jj-hooks,jj-gt}.rb` @
   0.3.11 + canonical README. `brew tap mattwilkinsonn/tap` installable at
   0.3.11 immediately on merge.
-- Depends on: the bot having push to `homebrew-tap` — SATISFIED (T6 step 0
-  done; `push:true` verified). Blocks: T6 (ruleset needs the repo
-  live-shaped) and the v0.3.12 `validate-tap` legs.
+- Depends on: nothing outstanding — the bot push grant (T6 step 0) is already
+  in place (`push:true` verified). Blocks: T6 **step 3** (the ruleset needs the
+  repo live-shaped) and the v0.3.12 `validate-tap` legs.
 
 ### T2 — Harden + re-point jj-hooks `release.yml` (BOX-DOABLE)
 
@@ -318,8 +321,12 @@ PR against `mattwilkinsonn/jj-hooks`, two concerns in one workflow file:
      the token is CURRENT-repo only and the tap push 403s.
    - **Dual checkout:** keep the self checkout (`release.yml:234`, for
      `.github/scripts/bump-formulae.py`) and ADD a second `actions/checkout`
-     for `mattwilkinsonn/homebrew-tap` at `path: tap` with the App token. Run
-     the rewrite (`release.yml:273-281`) via the absolute script path with
+     for `mattwilkinsonn/homebrew-tap` at `path: tap` with the App token AND
+     `fetch-depth: 0` — the retained fetch+rebase guard (`release.yml:304-306`)
+     rebases onto `origin/main`, which fails across the default shallow
+     (depth-1) boundary; the self checkout already carries `fetch-depth: 0`
+     for the same reason (`release.yml:241`). Run the rewrite
+     (`release.yml:273-281`) via the absolute script path with
      `working-directory: tap`, and run the Commit+push step
      (`release.yml:282-306`) with `working-directory: tap` so `origin` is the
      tap remote. Add a REQUIRED pre-bump guard step BEFORE the rewrite: `test
@@ -328,9 +335,11 @@ PR against `mattwilkinsonn/jj-hooks`, two concerns in one workflow file:
      formula and returns 0, and Commit+push's own `git diff --quiet Formula/`
      (`release.yml:287-290`) then exits 0 "nothing to bump", so an un-revived
      or partially-revived tap yields a GREEN bump-tap that ships nothing.
-     Serialization: T6 step 4 sequences the tags for THIS release; a durable
-     fix is a `concurrency:` group keyed on the shared tap across both repos'
-     workflows (follow-up).
+     Serialization: T6 step 4 sequences the tags for THIS release; a cross-repo
+     `concurrency:` group is NOT available (Actions concurrency groups are
+     repository-scoped), so the durable fix is a bounded fetch/rebase/push
+     retry loop in the Commit+push step, making a non-fast-forward rejection
+     self-healing (follow-up).
    - **validate-tap:** change `release.yml:327-332` to `brew tap
      mattwilkinsonn/tap`, `brew trust mattwilkinsonn/tap`, install/test
      `mattwilkinsonn/tap/jj-hooks`. Update the in-file comments that still say
@@ -354,9 +363,11 @@ Same changes as T2 against `mattwilkinsonn/jj-gt`'s structurally identical
 workflow — idempotent `publish-release`
 (`jj-gt/.github/workflows/release.yml:198-200`), the SAME three coordinated
 `bump-tap` changes (token `owner` + `repositories:` listing BOTH `jj-gt` AND
-`homebrew-tap` at `release.yml:227-231`; dual checkout with
+`homebrew-tap` at `release.yml:227-231`; dual checkout with the tap checkout
+at `fetch-depth: 0` (the retained fetch+rebase guard fails across the default
+shallow boundary; the self checkout carries it at `release.yml:240`) and
 `working-directory: tap` at `:233-245`/`:283-307`; REQUIRED pre-bump guard on
-`tap/Formula/jj-gt.rb`, per T2/M1), and `validate-tap` → `mattwilkinsonn/tap`
+`tap/Formula/jj-gt.rb`, per T2), and `validate-tap` → `mattwilkinsonn/tap`
 (`release.yml:328-335`). jj-gt's script only touches `jj-gt.rb` (its per-tool
 `TOOLS` dict, `bump-formulae.py:32-34`), so the two tools never clobber each
 other's formula in the shared tap. One change unique to jj-gt: its
@@ -422,7 +433,11 @@ record's execution, executed by Matt. Ordered steps:
 1. Install the `zireael-release` App
    (<https://github.com/apps/zireael-release> → settings) on
    `mattwilkinsonn/jj-hooks`, `mattwilkinsonn/jj-gt`,
-   `mattwilkinsonn/homebrew-tap`.
+   `mattwilkinsonn/homebrew-tap`. While in the admin session, read each
+   standalone ruleset's `bypass_actors` (the box's non-admin token cannot —
+   the API omits the key, `current_user_can_bypass: "never"`) and confirm the
+   `zireael-release` App is listed; the record infers this from bot commits on
+   protected main with no associated PR.
 2. On both standalones: set repo variable `RELEASE_BOT_APP_ID`, secret
    `RELEASE_BOT_PRIVATE_KEY`; verify `CARGO_REGISTRY_TOKEN` is valid
    (present but dated 2026-05 — re-mint if expired); delete the stale
@@ -432,8 +447,8 @@ record's execution, executed by Matt. Ordered steps:
    has zero CI) and no `pull_request` rule, so `bump-tap`'s
    `git push origin HEAD:main` (App token) needs NO bypass actor. Do NOT
    mirror the standalones' ruleset wholesale: theirs adds `pull_request` +
-   `ci / gate` with `bypass_actors: []` (verified live) — copied onto the tap
-   that would BLOCK the bot's direct push, the opposite of the intent.
+   `ci / gate` (its bypass-actor list is not box-readable) — copied onto the
+   tap that would BLOCK the bot's direct push, the opposite of the intent.
 4. After T1-T5 are merged, push the tags ONE AT A TIME to avoid the shared-tap
    race (the two workflows aren't serialized): push jj-hooks `v0.3.12`, watch
    its `release` run to green (bump-tap has pushed `jj-hooks.rb` to the tap),
@@ -447,8 +462,8 @@ Interfaces:
   `release` runs; jj-hooks/jj-gt 0.3.12 on crates.io with
   `repository` → standalone; consolidated tap bumped to 0.3.12 by
   `zireael-release[bot]`.
-- Depends on: T1 (ruleset target), T2-T5 merged (before step 4). Blocks:
-  T7, T8, and infra T8.
+- Depends on: T1 (for step 3 only — steps 0-2 are independent), T2-T5 merged
+  (before step 4). Blocks: T7, T8, and infra T8.
 
 ### T7 — Retire the per-repo standalone taps (BOX-DOABLE, post-green)
 
@@ -495,7 +510,7 @@ pulled onto a tapped user's machine by `brew update`): (a) `disable!`-stamp
 `Formula/jj-hooks.rb` and `Formula/jj-gt.rb` with `date:
 "<merge-date-or-earlier>", because: "moved to the mattwilkinsonn/tap tap"` —
 the date MUST be past BEFORE the infra-T8 flip, else the only post-flip
-surface degrades to a deprecation warning (see T7/M4); (b) rewrite
+surface degrades to a deprecation warning (see T7); (b) rewrite
 `Formula/README.md:5-8`'s install block from `brew tap mattwilkinsonn/zireael`
 to `brew tap mattwilkinsonn/tap` + `brew install mattwilkinsonn/tap/<formula>`;
 (c) re-point `README.md:19-26`'s Homebrew block and its "Migrating off the old
@@ -552,7 +567,7 @@ work. OQ1 was put to Matt and RESOLVED (below); OQ2-OQ4 stand as designed.
    steps are needed for jj-gt's *next* release regardless. Assumption
    designed against: both crates ship 0.3.12 pre-flip.
 2. **Migration-comms surface set.** **Recommendation: three web-durable
-   surfaces PLUS three client-durable files.** Web: both standalone READMEs
+   surfaces PLUS four client-durable files.** Web: both standalone READMEs
    (T4/T5), the tap repo README (T1), and crates.io via the packaged README
    (free with the 0.3.12 publish). Client-durable (all on soon-private zireael
    but pulled onto tapped users' machines by a pre-flip `brew update`, since a
@@ -560,8 +575,7 @@ work. OQ1 was put to Matt and RESOLVED (below); OQ2-OQ4 stand as designed.
    `Formula/jj-gt.rb` AND re-points `Formula/README.md` + the root `README.md`
    Homebrew block — every file under the tap dir is client-durable, not just
    the `.rb`. These are the ONLY surfaces that reach existing zireael-tap
-   users after the flip; an earlier draft wrongly classified all zireael
-   surfaces as transient and named only the two `.rb` files. Still NOT
+   users after the flip. Still NOT
    load-bearing: a zireael pinned issue or final-release note (invisible
    post-flip, serve only the pre-flip window). T9 is DEFERRABLE off the green
    gate but MUST land before infra T8.
