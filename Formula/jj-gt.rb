@@ -4,6 +4,9 @@ class JjGt < Formula
   version "0.3.11"
   license any_of: ["MIT", "Apache-2.0"]
 
+  # Retired: jj-gt now ships from the mattwilkinsonn/tap tap.
+  disable! date: "2026-09-05", because: "moved to the mattwilkinsonn/tap tap"
+
   on_macos do
     on_arm do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/jj-gt-v#{version}-darwin-arm64.tar.gz"

@@ -1,10 +1,24 @@
-# Homebrew tap
+# Homebrew formulae (retired)
 
-Formulae for [zireael](../README.md) tools, installable via:
+These formulae are **retired**. `jj-hooks` and `jj-gt` now ship from the
+consolidated [`mattwilkinsonn/tap`](https://github.com/mattwilkinsonn/homebrew-tap):
 
 ```bash
-brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
-brew install mattwilkinsonn/zireael/jj-hooks   # or jj-gt
+brew tap mattwilkinsonn/tap
+brew install mattwilkinsonn/tap/jj-hooks   # or jj-gt
+```
+
+Both `Formula/*.rb` here carry a Homebrew `disable!` stamp, so a `brew`
+command against this tap errors out and points at the tap above. If you
+previously tapped `mattwilkinsonn/zireael`, uninstall the tools and untap it
+before tapping the new one — Homebrew refuses to install a same-named formula
+from a second tap while the old one is still installed:
+
+```bash
+brew uninstall jj-hooks jj-gt      # only the ones you actually installed
+brew untap mattwilkinsonn/zireael
+brew tap mattwilkinsonn/tap
+brew install mattwilkinsonn/tap/jj-hooks mattwilkinsonn/tap/jj-gt
 ```
 
 ## Available formulae
@@ -14,25 +28,11 @@ brew install mattwilkinsonn/zireael/jj-hooks   # or jj-gt
 | `jj-hooks` | `jj-hooks`, `jj-hp` | Runs pre-commit / lefthook / hk hooks against jj bookmark pushes. |
 | `jj-gt` | `jj-gt` | Bridges jj bookmark stacks and Graphite (gt) PR stacks. |
 
-## How releases work
+## Why these are retired
 
-Each formula tracks the GitHub Release tarballs attached to a `v*` tag on
-this monorepo. The `release.yml` workflow at the repo root:
-
-1. Builds release binaries for `darwin-arm64`, `linux-x64`, `linux-arm64`.
-2. Computes SHA256 for every tarball.
-3. Rewrites the `version` line and per-platform `sha256` strings in each
-   `Formula/*.rb` in-place.
-4. Commits the bumped formulae back to `main` and creates the GitHub Release.
-
-**Don't hand-edit the `version` or `sha256` lines** — the workflow owns them.
-
-## Adding a new tool
-
-When a new `tools/<name>/` lands and needs a Homebrew formula:
-
-1. Add a stub `Formula/<name>.rb` here with `version "0.0.0"` and four
-   zero-filled `sha256` values.
-2. Add the tool's binary build to `.github/workflows/release.yml`'s matrix.
-3. Add a per-formula bump step to the same workflow.
-4. Tag the next release — the workflow will fill in the real values.
+Both tools moved to their own standalone repos
+([`jj-hooks`](https://github.com/mattwilkinsonn/jj-hooks),
+[`jj-gt`](https://github.com/mattwilkinsonn/jj-gt)) and now release through the
+consolidated `mattwilkinsonn/tap`. The formulae here are frozen at their last
+monorepo release (0.3.11) and `disable!`-stamped; they receive no further
+updates. Install from `mattwilkinsonn/tap` (top of this file).
