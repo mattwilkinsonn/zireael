@@ -19,12 +19,8 @@ brew tap mattwilkinsonn/tap
 brew install mattwilkinsonn/tap/jj-hooks mattwilkinsonn/tap/jj-gt
 ```
 
-On a fresh machine with no older tap, just the last two lines:
-
-```bash
-brew tap mattwilkinsonn/tap
-brew install mattwilkinsonn/tap/jj-hooks   # or jj-gt
-```
+On a fresh machine with no older tap, just the last two lines above (drop
+whichever tool you don't want).
 
 ## Available formulae
 

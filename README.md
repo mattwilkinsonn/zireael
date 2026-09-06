@@ -28,9 +28,11 @@ brew install mattwilkinsonn/tap/jj-gt
 > same-named formula from a second tap while the old one is still installed:
 >
 > ```bash
-> brew uninstall jj-hooks jj-gt      # only the ones you actually installed
-> brew untap mattwilkinsonn/zireael  # only the taps you actually added —
-> brew untap mattwilkinsonn/jj-hooks # `brew tap` lists yours
+> # Only the tools/taps you actually have — brew errors on an unknown keg or
+> # an un-added tap. `brew tap` lists what you currently have tapped.
+> brew uninstall jj-hooks jj-gt
+> brew untap mattwilkinsonn/zireael
+> brew untap mattwilkinsonn/jj-hooks
 > brew untap mattwilkinsonn/jj-gt
 > brew tap mattwilkinsonn/tap
 > brew install mattwilkinsonn/tap/jj-hooks mattwilkinsonn/tap/jj-gt
