@@ -1,13 +1,22 @@
 class JjHooks < Formula
   desc "Run pre-commit / lefthook / hk hooks against jj bookmark pushes"
-  homepage "https://github.com/mattwilkinsonn/zireael/tree/main/tools/jj-hooks"
+  homepage "https://github.com/mattwilkinsonn/jj-hooks"
   version "0.3.11"
   license any_of: ["MIT", "Apache-2.0"]
+
+  # Retired: jj-hooks now ships from the mattwilkinsonn/tap tap. The date must
+  # stay strictly in the past. Homebrew hard-errors when `date <= Date.today`
+  # (it is only deprecated `if disable_date > Date.today`) but renders the
+  # message tense off `date < Date.today`, so ON the date it errors while
+  # still saying "will be disabled". Backdating makes the two agree.
+  # Needs Homebrew >= 4.4.32 for `replacement_formula:`.
+  disable! date: "2026-09-04",
+           because: "moved to the mattwilkinsonn/tap tap",
+           replacement_formula: "mattwilkinsonn/tap/jj-hooks"
 
   on_macos do
     on_arm do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/jj-hooks-v#{version}-darwin-arm64.tar.gz"
-      # SHA256 is bumped by .github/workflows/release.yml when a tag is pushed.
       sha256 "1b5ef42e1b7418426c5f8e63fc26bc1fb976f8ef5ab9acd0a1c22bd12ef339f4"
     end
   end

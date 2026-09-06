@@ -106,8 +106,8 @@ step.
 ### Via Homebrew tap
 
 ```bash
-brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
-brew install mattwilkinsonn/zireael/jj-gt
+brew tap mattwilkinsonn/tap
+brew install mattwilkinsonn/tap/jj-gt
 ```
 
 ### From source

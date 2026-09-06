@@ -81,10 +81,9 @@ def main() -> int:
 
         # For each slug: anchor on the preceding url line so the
         # sha256 directly below it is the one we replace. The
-        # regex tolerates intervening blank or comment lines (the
-        # initial formulae include a "# SHA256 is bumped by ..."
-        # nudge above the first sha256, so without this we'd skip
-        # the darwin-arm64 entry on the first release).
+        # regex tolerates blank or comment lines between a url and
+        # its sha256, so a formula that annotates its sha lines
+        # still gets bumped.
         for slug, sha in shas.items():
             pattern = re.compile(
                 rf'(url\s+"[^"]*-{re.escape(slug)}\.tar\.gz"\s*\n'
