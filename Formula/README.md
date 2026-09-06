@@ -4,8 +4,15 @@ These formulae are **retired**. `jj-hooks` and `jj-gt` now ship from the
 consolidated [`mattwilkinsonn/tap`](https://github.com/mattwilkinsonn/homebrew-tap).
 
 Both `Formula/*.rb` here carry a Homebrew `disable!` stamp, so `brew install`
-or `brew upgrade` against this tap errors out and points at the tap above
-(`brew uninstall` still works — you need it for the migration below).
+or `brew upgrade` against this tap fails with the replacement command:
+
+```text
+Error: jj-hooks has been disabled because it moved to the mattwilkinsonn/tap tap!
+Replacement:
+  brew install --formula mattwilkinsonn/tap/jj-hooks
+```
+
+`brew uninstall` is unaffected — you need it for the migration below.
 
 You are reading this from a clone of the `mattwilkinsonn/zireael` tap, so
 migrate: uninstall the tools and untap it *before* tapping the new one —
