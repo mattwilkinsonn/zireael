@@ -1,24 +1,29 @@
 # Homebrew formulae (retired)
 
 These formulae are **retired**. `jj-hooks` and `jj-gt` now ship from the
-consolidated [`mattwilkinsonn/tap`](https://github.com/mattwilkinsonn/homebrew-tap):
+consolidated [`mattwilkinsonn/tap`](https://github.com/mattwilkinsonn/homebrew-tap).
 
-```bash
-brew tap mattwilkinsonn/tap
-brew install mattwilkinsonn/tap/jj-hooks   # or jj-gt
-```
+Both `Formula/*.rb` here carry a Homebrew `disable!` stamp, so `brew install`
+or `brew upgrade` against this tap errors out and points at the tap above
+(`brew uninstall` still works — you need it for the migration below).
 
-Both `Formula/*.rb` here carry a Homebrew `disable!` stamp, so a `brew`
-command against this tap errors out and points at the tap above. If you
-previously tapped `mattwilkinsonn/zireael`, uninstall the tools and untap it
-before tapping the new one — Homebrew refuses to install a same-named formula
-from a second tap while the old one is still installed:
+You are reading this from a clone of the `mattwilkinsonn/zireael` tap, so
+migrate: uninstall the tools and untap it *before* tapping the new one —
+Homebrew refuses to install a same-named formula from a second tap while the
+old one is still installed.
 
 ```bash
 brew uninstall jj-hooks jj-gt      # only the ones you actually installed
 brew untap mattwilkinsonn/zireael
 brew tap mattwilkinsonn/tap
 brew install mattwilkinsonn/tap/jj-hooks mattwilkinsonn/tap/jj-gt
+```
+
+On a fresh machine with no older tap, just the last two lines:
+
+```bash
+brew tap mattwilkinsonn/tap
+brew install mattwilkinsonn/tap/jj-hooks   # or jj-gt
 ```
 
 ## Available formulae

@@ -1,6 +1,6 @@
 class JjHooks < Formula
   desc "Run pre-commit / lefthook / hk hooks against jj bookmark pushes"
-  homepage "https://github.com/mattwilkinsonn/zireael/tree/main/tools/jj-hooks"
+  homepage "https://github.com/mattwilkinsonn/jj-hooks"
   version "0.3.11"
   license any_of: ["MIT", "Apache-2.0"]
 
@@ -10,7 +10,6 @@ class JjHooks < Formula
   on_macos do
     on_arm do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/jj-hooks-v#{version}-darwin-arm64.tar.gz"
-      # SHA256 is bumped by .github/workflows/release.yml when a tag is pushed.
       sha256 "1b5ef42e1b7418426c5f8e63fc26bc1fb976f8ef5ab9acd0a1c22bd12ef339f4"
     end
   end

@@ -1,6 +1,6 @@
 class JjGt < Formula
   desc "Bridge jj bookmark stacks and Graphite (gt) PR stacks"
-  homepage "https://github.com/mattwilkinsonn/zireael/tree/main/tools/jj-gt"
+  homepage "https://github.com/mattwilkinsonn/jj-gt"
   version "0.3.11"
   license any_of: ["MIT", "Apache-2.0"]
 
@@ -10,7 +10,6 @@ class JjGt < Formula
   on_macos do
     on_arm do
       url "https://github.com/mattwilkinsonn/zireael/releases/download/v#{version}/jj-gt-v#{version}-darwin-arm64.tar.gz"
-      # SHA256 is bumped by .github/workflows/release.yml when a tag is pushed.
       sha256 "774fc0ef45d65e2c6238838c0f9f6b98cd43f619e37010f91046ed76852941c3"
     end
   end

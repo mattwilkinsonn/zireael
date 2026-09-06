@@ -29,7 +29,9 @@ brew install mattwilkinsonn/tap/jj-gt
 >
 > ```bash
 > brew uninstall jj-hooks jj-gt      # only the ones you actually installed
-> brew untap mattwilkinsonn/zireael
+> brew untap mattwilkinsonn/zireael  # only the taps you actually added —
+> brew untap mattwilkinsonn/jj-hooks # `brew tap` lists yours
+> brew untap mattwilkinsonn/jj-gt
 > brew tap mattwilkinsonn/tap
 > brew install mattwilkinsonn/tap/jj-hooks mattwilkinsonn/tap/jj-gt
 > ```

@@ -14,7 +14,7 @@ runner.
 | --- | --- | --- | --- | --- |
 | `ci` | `ci.yml` | `moon ci` (affected) | PR | ubuntu |
 | `post-merge` | `post-merge.yml` | `moon ci` scoped to the merge diff | push: main | ubuntu |
-| `nightly` | `nightly.yml` | `moon run :ci` (full) + tap-install smoke | cron + dispatch | ubuntu + macos |
+| `nightly` | `nightly.yml` | `moon run :ci` (full) | cron + dispatch | ubuntu + macos |
 | `release` | `release.yml` | matrix builds + publish + tap bump + crates publish | push: tags `v*` | per-target |
 
 ## The moon gate
@@ -107,10 +107,9 @@ leaves the machine.
 ### `schedule` (nightly backstop)
 
 06:00 UTC daily + `workflow_dispatch`. Skipped when `main` hasn't advanced
-since the last nightly. Runs `moon run :ci` (full, all projects) on Linux;
-`tap:ci` on macOS; and the tap-install smoke test
-(`brew install`/`test` each published formula). A `report` job posts the
-aggregate status to the HEAD commit.
+since the last nightly. Runs `moon run :ci` (full, all projects) on Linux and
+`tap:ci` on macOS. A `report` job posts the aggregate status to the HEAD
+commit.
 
 ### `push: main`
 
@@ -164,7 +163,6 @@ Every job has a `timeout-minutes` cap. `cargo nextest` uses
 | `ci.yml` | moon ci (linux) | 30m |
 | `post-merge.yml` | moon ci | 30m |
 | `nightly.yml` | moon run :ci / tap | 45m |
-| `nightly.yml` | validate-tap | 15m |
 | `release.yml` | per-target build | 30m |
 
 `release.yml`'s `strategy.fail-fast: false` lets each target's failure
