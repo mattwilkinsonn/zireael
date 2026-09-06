@@ -5,8 +5,11 @@ class JjGt < Formula
   license any_of: ["MIT", "Apache-2.0"]
 
   # Retired: jj-gt now ships from the mattwilkinsonn/tap tap. The date must
-  # stay in the past: Homebrew only hard-errors once `date < Date.today`, and
-  # on the date itself it still says "will be disabled".
+  # stay strictly in the past. Homebrew hard-errors when `date <= Date.today`
+  # (it is only deprecated `if disable_date > Date.today`) but renders the
+  # message tense off `date < Date.today`, so ON the date it errors while
+  # still saying "will be disabled". Backdating makes the two agree.
+  # Needs Homebrew >= 4.4.32 for `replacement_formula:`.
   disable! date: "2026-09-04",
            because: "moved to the mattwilkinsonn/tap tap",
            replacement_formula: "mattwilkinsonn/tap/jj-gt"
