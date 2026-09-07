@@ -16,13 +16,17 @@ old one is still installed:
 ```bash
 brew uninstall jj-hooks jj-gt      # only the ones you actually installed
 brew untap mattwilkinsonn/zireael
+brew tap mattwilkinsonn/tap
+brew install mattwilkinsonn/tap/jj-hooks mattwilkinsonn/tap/jj-gt
 ```
 
-This repo is going private, so these files stop being fetchable and carry no
-`disable!` stamp: a stamp only reaches machines that run `brew update` while
-the tap is still readable, which is a window this repo will not have. Anyone
-left on the old tap sees a download failure instead, and recovers with the
-commands above. Both tools moved to their own standalone repos
+This repo is going private, after which these formulae stop resolving and
+their release assets stop downloading. They carry no Homebrew `disable!`
+stamp. A stamp is only read after `brew update` refreshes the tap clone, and
+Homebrew refreshes it on the same commands that fetch the tarball
+(`brew install`, `brew upgrade`, `brew outdated`), so for almost everyone the
+stamp would fire on the same invocation as the download failure and buy
+nothing. Both tools moved to their own standalone repos
 ([`jj-hooks`](https://github.com/mattwilkinsonn/jj-hooks),
 [`jj-gt`](https://github.com/mattwilkinsonn/jj-gt)), whose READMEs document
 the same install path.

@@ -186,14 +186,23 @@ Web surfaces (see OQ2): the two standalone READMEs (update the Homebrew section
 `brew tap mattwilkinsonn/jj-hooks …` — to `brew tap mattwilkinsonn/tap`, plus a
 short "migrating from the zireael tap" untap/retap block), the tap repo's own
 README (move 1), and the crates.io README (free: crates.io renders the packaged
-`README.md`, so the 0.3.12 publish ships it). Client-durable surface:
-`disable!`-stamp zireael's own `Formula/*.rb` pointing at `mattwilkinsonn/tap`
-BEFORE the flip (T9) — a Homebrew tap is a local git clone, so a user who runs
-`brew update` pre-flip pulls the stamp into their machine, where it survives
-the repo going private and turns their next install/upgrade into an actionable
-error naming the new tap (instead of an opaque git-fetch failure). A transient
-courtesy note on zireael's README covers the pre-flip window but is not
-load-bearing.
+`README.md`, so the 0.3.12 publish ships it).
+
+**Amended 2026-09-07 (Matt): the `disable!` stamps are withdrawn.** This
+decision originally added a client-durable surface — `disable!`-stamp
+zireael's own `Formula/*.rb` pointing at `mattwilkinsonn/tap` before the flip,
+on the reasoning that a tap is a local git clone, so a user who refreshed
+pre-flip kept the stamp after the repo went private. That reasoning is sound
+but buys very little: Homebrew refreshes a tap clone on the same commands that
+fetch the tarball (`brew install`, `brew upgrade`, `brew outdated` —
+`utils/auto-update.sh:145-155`; there is no background refresh, `brew
+autoupdate` being a third-party tap), so for almost every user the stamp fires
+on the same invocation as the download failure it was meant to pre-empt. It
+only helps someone who refreshes pre-flip and then does not touch these tools
+until after. Against a sub-10-star user base that mostly installs via cargo,
+Matt accepted the post-flip 404 instead. The surviving comms are the web
+surfaces above, which do not depend on the flip. A transient courtesy note on
+zireael's README covers the pre-flip window but is not load-bearing.
 
 ### App identity (settled)
 
@@ -467,26 +476,19 @@ Interfaces:
   `repository` → standalone; consolidated tap bumped to 0.3.12 by
   `zireael-release[bot]`.
 - Depends on: T1 (for step 3 only — steps 0-2 are independent), T2-T5 merged
-  (before step 4). Blocks: T7, T8, and infra T8.
+  (before step 4). Blocks: T8 and infra T8 (T7 dropped).
 
-### T7 — Retire the per-repo standalone taps (BOX-DOABLE, post-green)
+### T7 — DROPPED 2026-09-07 (was: retire the per-repo standalone taps)
 
-Per OQ3's recommendation: after the v0.3.12 runs are green, one PR per
-standalone stamping its in-repo `Formula/<tool>.rb` with `disable! date:
-"<merge-date-or-earlier>", because: "moved to the mattwilkinsonn/tap tap"`
-(the exact pattern the old conventional tap used at 0.2.1, whose date
-`"2026-05-26"` is already past). The date MUST be at or before the merge date:
-Homebrew's `disable!` only HARD-ERRORS once `date` is in the past
-(`formula.rb` `disable!`) — a future date merely deprecates (a warning;
-install still succeeds). With a past date, per-repo-tap users get an
-actionable error instead of a silently stale formula. `bump-tap` no longer
-touches these files after T2/T3, so without this they rot silently.
-
-Interfaces:
-
-- Consumes: `jj-hooks/Formula/jj-hooks.rb`, `jj-gt/Formula/jj-gt.rb`.
-- Produces: disabled per-repo formulae pointing at `mattwilkinsonn/tap`.
-- Depends on: T6 green. Blocks: nothing (not on the T8 gate).
+This task assumed users had tapped `mattwilkinsonn/jj-hooks` or
+`mattwilkinsonn/jj-gt` directly. They could not have: Homebrew resolves a tap
+only from a repo named `homebrew-<name>`, and neither repo is. The in-repo
+`Formula/jj-hooks.rb` and `Formula/jj-gt.rb` arrived as scaffolding in the
+extraction commits (`0c56e080`, `f64aa7ff`), and no README in either repo — or
+in zireael — ever instructed a direct tap of them. A `disable!` stamp there
+would redirect a user population that cannot exist, so there is nothing to
+retire. Both files should simply be deleted as dead scaffolding, tracked
+separately from this record. See OQ3.
 
 ### T8 — Confirm the sequence gate to the infra record (BOX-DOABLE)
 
@@ -508,29 +510,29 @@ Interfaces:
 
 ### T9 — Client-durable retirement of the zireael tap (BOX-DOABLE, pre-flip)
 
-PR against `mattwilkinsonn/zireael`, FOUR client-durable files (a tap is a
-local git clone, so EVERY file under the tap dir — not just the `.rb` — is
-pulled onto a tapped user's machine by `brew update`): (a) `disable!`-stamp
-`Formula/jj-hooks.rb` and `Formula/jj-gt.rb` with `date:
-"<merge-date-or-earlier>", because: "moved to the mattwilkinsonn/tap tap"` —
-the date MUST be past BEFORE the infra-T8 flip, else the only post-flip
-surface degrades to a deprecation warning (see T7); (b) rewrite
-`Formula/README.md:5-8`'s install block from `brew tap mattwilkinsonn/zireael`
-to `brew tap mattwilkinsonn/tap` + `brew install mattwilkinsonn/tap/<formula>`;
-(c) re-point `README.md:19-26`'s Homebrew block and its "Migrating off the old
-tap" note from the per-tool taps to `mattwilkinsonn/tap`. Because a tap is a
-local git clone, a user who runs `brew update` before the flip pulls these
-locally, where they persist after zireael goes private — the only migration
-surface that reaches existing zireael-tap users AFTER the flip. Pairs with T7
-(which retires the never-used per-repo taps); this retires the tap that has
-real users.
+PR against `mattwilkinsonn/zireael`, re-pointing the client-facing docs at
+`mattwilkinsonn/tap`: (a) rewrite `Formula/README.md`'s install block from
+`brew tap mattwilkinsonn/zireael` to `brew tap mattwilkinsonn/tap` + `brew
+install mattwilkinsonn/tap/<formula>`, with a self-contained
+uninstall/untap/retap recovery block; (b) re-point `README.md:19-26`'s
+Homebrew block and its "Migrating off the old tap" note from the per-tool taps
+to `mattwilkinsonn/tap`.
+
+**Amended 2026-09-07 (Matt): the `disable!` stamps this task originally
+specified are withdrawn** — see decision 5. The task shipped without them; the
+formulae stay frozen at 0.3.11 and unstamped. Rationale in brief: Homebrew
+only re-reads a tap clone on the commands that also fetch the tarball, so the
+stamp would fire on the same invocation as the download failure for nearly
+every user, and Matt accepted the post-flip 404 rather than carry a surface
+that buys a narrow slice. T7 (the never-used per-repo taps) was dropped
+outright — those repos are not named `homebrew-*`, so they were never
+tappable.
 
 Interfaces:
 
-- Consumes: `zireael/Formula/jj-hooks.rb`, `zireael/Formula/jj-gt.rb`,
-  `zireael/Formula/README.md`, `zireael/README.md`.
-- Produces: disabled zireael-tap formulae pointing at `mattwilkinsonn/tap`,
-  merged to zireael main before the flip.
+- Consumes: `zireael/Formula/README.md`, `zireael/README.md`.
+- Produces: zireael-tap docs pointing at `mattwilkinsonn/tap`, merged to
+  zireael main before the flip.
 - Depends on: T1 (the pointed-to tap should be live). Blocks: nothing on the
   v0.3.12 green gate, but MUST merge before infra T8 (it is a pre-flip
   user-facing comm). Not gated on the green runs.
@@ -547,11 +549,11 @@ Interfaces:
       OQ1)
 - [ ] T6: admin runbook executed — App installs, vars/secrets, tap ruleset,
       tag pushes, green runs (LAPTOP)
-- [ ] T7: per-repo standalone formulae disable!-stamped (BOX-DOABLE,
-      post-green)
+- [x] T7: DROPPED — the per-repo standalone formulae were never tappable
+      (neither repo is named `homebrew-*`), so there was no user to redirect
 - [ ] T8: sequence gate confirmed to the infra record (BOX-DOABLE)
-- [ ] T9: zireael tap formulae disable!-stamped → mattwilkinsonn/tap
-      (BOX-DOABLE, pre-flip, client-durable)
+- [ ] T9: zireael tap docs re-pointed → mattwilkinsonn/tap; `disable!` stamps
+      withdrawn 2026-09-07 (BOX-DOABLE, pre-flip)
 
 ## Open Questions
 
@@ -573,23 +575,26 @@ work. OQ1 was put to Matt and RESOLVED (below); OQ2-OQ4 stand as designed.
 2. **Migration-comms surface set.** **Recommendation: three web-durable
    surfaces PLUS four client-durable files.** Web: both standalone READMEs
    (T4/T5), the tap repo README (T1), and crates.io via the packaged README
-   (free with the 0.3.12 publish). Client-durable (all on soon-private zireael
-   but pulled onto tapped users' machines by a pre-flip `brew update`, since a
-   tap is a local clone): T9 `disable!`-stamps `Formula/jj-hooks.rb` +
-   `Formula/jj-gt.rb` AND re-points `Formula/README.md` + the root `README.md`
-   Homebrew block — every file under the tap dir is client-durable, not just
-   the `.rb`. These are the ONLY surfaces that reach existing zireael-tap users
-   after the flip. Still NOT load-bearing: a zireael pinned issue or
-   final-release note (invisible post-flip, serve only the pre-flip window). T9
-   is DEFERRABLE off the green
-   gate but MUST land before infra T8.
+   (free with the 0.3.12 publish). Client-durable: T9 re-points
+   `Formula/README.md` + the root `README.md` Homebrew block. **Amended
+   2026-09-07:** this originally also specified `disable!` stamps on both
+   `.rb` files, called here "the ONLY surfaces that reach existing
+   zireael-tap users after the flip". That claim overstated their reach —
+   Homebrew re-reads a tap clone only on the commands that also fetch the
+   tarball, so a stamp lands on the same invocation as the download failure
+   for nearly every user. Matt withdrew the stamps and accepted the post-flip
+   404; the web surfaces above carry the migration. Still NOT load-bearing: a
+   zireael pinned issue or final-release note (invisible post-flip, serve only
+   the pre-flip window). T9 is DEFERRABLE off the green gate but MUST land
+   before infra T8.
 3. **Retire the per-repo standalone taps or leave as silent dupes?**
-   **Recommendation: retire explicitly (T7)** with the same `disable!` +
-   pointer pattern the old conventional tap used — a user who tapped
-   `mattwilkinsonn/jj-hooks` gets an error naming the new tap instead of
-   silently pinning to 0.3.11 forever. Deleting `Formula/` outright is
-   worse (brew reports the formula as vanished, no pointer). DEFERRABLE —
-   post-green cleanup, not on the flip gate.
+   **Amended 2026-09-07: DROPPED, the question was malformed.** It assumed a
+   user could have tapped `mattwilkinsonn/jj-hooks` or `mattwilkinsonn/jj-gt`.
+   Homebrew only taps a repo named `homebrew-<name>`, and neither is, so those
+   in-repo `Formula/*.rb` were never installable — they were carried over as
+   scaffolding by the extraction commits (`0c56e080`, `f64aa7ff`) and no
+   README ever pointed at them. There is no user to redirect and nothing to
+   retire. Correct disposition is deleting both files as dead scaffolding.
 4. **Is a crates.io README/`repository` re-point worth a version bump on its
    own?** **Recommendation: moot under the plan** — 0.3.12 (T4/T5) carries
    it as a side effect; never bump solely for metadata. The question only
