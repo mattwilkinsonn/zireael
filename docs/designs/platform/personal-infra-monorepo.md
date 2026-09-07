@@ -1,21 +1,24 @@
 # Design: repurpose zireael as the personal-infra Pulumi monorepo
 
-Status: Draft — **premise superseded, do not execute as written (see below)**
+Status: Draft
 
-> [!IMPORTANT]
-> **zireael is being archived, not flipped private, and the private monorepo gets a
-> new repo name (TBD).** An archived GitHub repo is read-only for code, branches and
-> releases, so zireael cannot host this monorepo. That voids T1 (nothing to gut — the
-> new repo starts empty), T8 (archiving replaces the `visibility` flip), the global
-> constraint at "Repo flips private only in T8", and the 6 hard-coded
-> `repo:mattwilkinsonn/zireael:*` OIDC subjects plus the `zireael-*` Pulumi project
-> names, which must re-point at the new repo.
+> [!NOTE]
+> **This record's plan stands as written: zireael flips private and hosts this
+> monorepo.** An earlier revision of this banner said the premise was superseded
+> by archiving zireael instead — that is withdrawn.
 >
-> Reason the flip was dropped: both retired Homebrew formulae fetch release assets
-> from `github.com/mattwilkinsonn/zireael/releases/...`, so privating the repo 404s
-> every user who had not yet migrated. Archiving keeps those assets alive.
+> The concern was that both retired Homebrew formulae fetch release assets from
+> `github.com/mattwilkinsonn/zireael/releases/...`, so privating 404s anyone who
+> has not migrated to `mattwilkinsonn/tap`. Matt's ruling: accept the 404. These
+> are sub-10-star CLI tools, most users install via cargo, and a stranded user
+> recovers by tapping `mattwilkinsonn/tap` (documented in both tool READMEs).
+> Archiving was rejected because it leaves zireael a permanently dead repo that
+> only redirects at the tap.
 >
-> A full amendment PR is blocked on the new repo name. Detail: issue #310.
+> Consequence: T1, T8, the "repo flips private only in T8" constraint, the
+> `repo:mattwilkinsonn/zireael:*` OIDC subjects and the `zireael-*` Pulumi
+> project names are all **valid as written** — no re-pointing, and no new repo
+> name is needed. Detail: issue #310.
 
 ## Problem / Intent
 
