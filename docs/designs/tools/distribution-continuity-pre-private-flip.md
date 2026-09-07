@@ -193,14 +193,16 @@ decision originally added a client-durable surface — `disable!`-stamp
 zireael's own `Formula/*.rb` pointing at `mattwilkinsonn/tap` before the flip,
 on the reasoning that a tap is a local git clone, so a user who refreshed
 pre-flip kept the stamp after the repo went private. That reasoning is sound
-but buys very little: Homebrew refreshes a tap clone on the same commands that
-install or upgrade (`brew install`, `brew upgrade` —
-`utils/auto-update.sh:145-155`; there is no background refresh, `brew
-autoupdate` being a third-party tap), so for almost every user the stamp fires
-on the same invocation as the download failure it was meant to pre-empt.
-`brew outdated` refreshes without downloading, so a stamp would surface there
-slightly earlier — the one real slice this gives up, along with a user who
-refreshes pre-flip and then does not touch these tools until after. Against a
+but buys very little. Homebrew reports a disabled formula on `brew install`
+and `brew upgrade`, which are also the commands that fetch the tarball, so for
+almost every user the stamp fires on the same invocation as the download
+failure it was meant to pre-empt. Other commands do refresh the tap clone —
+`outdated`, `bundle`, `release`, and two-argument `tap`
+(`utils/auto-update.sh:144-152`); there is no background refresh, `brew
+autoupdate` being a third-party tap — but none of them report a disabled
+formula (`cmd/outdated.rb` never references `DeprecateDisable`), so the stamp
+stays invisible on those paths. What it gives up is the user who refreshes
+pre-flip and then does not touch these tools until after. Against a
 sub-10-star user base that mostly installs via cargo,
 Matt accepted the post-flip 404 instead. The surviving comms are the web
 surfaces above, which do not depend on the flip. A transient courtesy note on
@@ -496,8 +498,10 @@ is empty in practice, for two independent reasons.
 The instruction most readers would have met cannot work. zireael's root README
 pointed at both taps (`9637603:README.md:22-24`) using the one-argument
 `brew tap mattwilkinsonn/jj-hooks`, which is a shortcut for
-`https://github.com/mattwilkinsonn/homebrew-jj-hooks` (`cmd/tap.rb:17-26`) — a
-repo that does not exist. Anyone who followed it got a tap failure.
+`https://github.com/mattwilkinsonn/homebrew-jj-hooks` (`tap.rb:303`
+`full_repository = "homebrew-#{repository}"`, consumed by `default_remote` at
+`tap.rb:412-414`; documented at `cmd/tap.rb:19`) — a repo that does not exist.
+Anyone who followed it got a tap failure.
 
 A working instruction did exist, but only briefly. Both standalone READMEs
 shipped the two-argument form, which takes an explicit URL and ignores the
@@ -604,11 +608,11 @@ work. OQ1 was put to Matt and RESOLVED (below); OQ2-OQ4 stand as designed.
    2026-09-07:** this originally also specified `disable!` stamps on both
    `.rb` files, called here "the ONLY surfaces that reach existing
    zireael-tap users after the flip". That claim overstated their reach —
-   Homebrew re-reads a tap clone on `brew install` and `brew upgrade`, which
-   are also the commands that fetch the tarball, so a stamp lands on the same
-   invocation as the download failure for nearly every user (`brew outdated`
-   refreshes without downloading, the one exception).
-   Matt withdrew the stamps and accepted the post-flip
+   Homebrew reports a disabled formula on `brew install` and `brew upgrade`,
+   which are also the commands that fetch the tarball, so a stamp lands on the
+   same invocation as the download failure for nearly every user. The
+   commands that refresh without downloading do not report a disabled formula
+   at all (see decision 5). Matt withdrew the stamps and accepted the post-flip
    404; the web surfaces above carry the migration. Still NOT load-bearing: a
    zireael pinned issue or final-release note (invisible post-flip, serve only
    the pre-flip window). T9 is DEFERRABLE off the green gate but MUST land
