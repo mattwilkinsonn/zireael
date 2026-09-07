@@ -193,16 +193,21 @@ decision originally added a client-durable surface — `disable!`-stamp
 zireael's own `Formula/*.rb` pointing at `mattwilkinsonn/tap` before the flip,
 on the reasoning that a tap is a local git clone, so a user who refreshed
 pre-flip kept the stamp after the repo went private. That reasoning is sound
-but buys very little. Homebrew reports a disabled formula on `brew install`
-and `brew upgrade`, which are also the commands that fetch the tarball, so for
-almost every user the stamp fires on the same invocation as the download
-failure it was meant to pre-empt. Other commands do refresh the tap clone —
-`outdated`, `bundle`, `release`, and two-argument `tap`
-(`utils/auto-update.sh:144-152`); there is no background refresh, `brew
-autoupdate` being a third-party tap — but none of them report a disabled
-formula (`cmd/outdated.rb` never references `DeprecateDisable`), so the stamp
-stays invisible on those paths. What it gives up is the user who refreshes
-pre-flip and then does not touch these tools until after. Against a
+but buys very little. A stamp is reported by the install path
+(`formula_installer.rb:327-339` raises `CannotInstallFormulaError` on
+`:disabled`), which `brew install`, `brew upgrade` and `brew bundle` all
+reach — `bundle` by running a child `brew install` and printing its output
+(`bundle/installer.rb:306`, `bundle.rb:42`). Those are also the commands that
+fetch the tarball, so for almost every user the stamp fires on the same
+invocation as the download failure it was meant to pre-empt. The remaining
+refresh triggers are `outdated`, `release` and two-argument `tap`
+(`utils/auto-update.sh:144-152`; there is no background refresh, `brew
+autoupdate` being a third-party tap). Of these, `brew outdated` was checked
+and does not report a disabled formula (`cmd/outdated.rb` never references
+`DeprecateDisable`); `release` is a maintainer command and two-argument `tap`
+re-taps rather than installs, so neither is a user-facing miss worth weighing.
+What the withdrawal gives up is the user who refreshes pre-flip and then does
+not touch these tools until after. Against a
 sub-10-star user base that mostly installs via cargo,
 Matt accepted the post-flip 404 instead. The surviving comms are the web
 surfaces above, which do not depend on the flip. A transient courtesy note on
@@ -507,10 +512,10 @@ A working instruction did exist, but only briefly. Both standalone READMEs
 shipped the two-argument form, which takes an explicit URL and ignores the
 `homebrew-` convention entirely (`jj-hooks/README.md:62-63` at `0c56e080`,
 `jj-gt/README.md:113-114` at `f64aa7ff`) — the same form zireael's own tap
-always used. It was live for about eleven hours on 2026-09-05 (published
-10:54, re-pointed at the consolidated tap by `73dc3dd1`/`b41ed4d4` at 21:43)
-before T4/T5 replaced it. On a sub-10-star pair of tools, an eleven-hour
-window on a weekday is not a real install base.
+always used. It was live for about eleven hours on Saturday 2026-09-05
+(published 10:54, re-pointed at the consolidated tap by `73dc3dd1`/`b41ed4d4`
+at 21:43) before T4/T5 replaced it. On a sub-10-star pair of tools, an
+eleven-hour weekend window is not a real install base.
 
 The formulae themselves (`Formula/jj-hooks.rb`, `Formula/jj-gt.rb`) arrived as
 scaffolding in those same extraction commits. With no installed population, a
@@ -547,9 +552,10 @@ to `mattwilkinsonn/tap`.
 
 **Amended 2026-09-07 (Matt): the `disable!` stamps this task originally
 specified are withdrawn** — see decision 5. The task shipped without them; the
-formulae stay at 0.3.11 and unstamped. Rationale in brief: Homebrew re-reads a
-tap clone on `brew install` and `brew upgrade`, the same commands that fetch
-the tarball, so the stamp would fire on the same invocation as the download
+formulae stay at 0.3.11 and unstamped. Rationale in brief: a disabled formula
+is reported by the install path — `brew install`, `brew upgrade`, `brew
+bundle` — which are the same commands that fetch the tarball, so the stamp
+would fire on the same invocation as the download
 failure for nearly every user, and Matt accepted the post-flip 404 rather than
 carry a surface that buys a narrow slice. T7 was dropped outright — the
 per-repo taps had no meaningful installed population: the widely-published
@@ -607,12 +613,12 @@ work. OQ1 was put to Matt and RESOLVED (below); OQ2-OQ4 stand as designed.
    `Formula/README.md` + the root `README.md` Homebrew block. **Amended
    2026-09-07:** this originally also specified `disable!` stamps on both
    `.rb` files, called here "the ONLY surfaces that reach existing
-   zireael-tap users after the flip". That claim overstated their reach —
-   Homebrew reports a disabled formula on `brew install` and `brew upgrade`,
-   which are also the commands that fetch the tarball, so a stamp lands on the
-   same invocation as the download failure for nearly every user. The
-   commands that refresh without downloading do not report a disabled formula
-   at all (see decision 5). Matt withdrew the stamps and accepted the post-flip
+   zireael-tap users after the flip". That claim overstated their reach — a
+   stamp is reported by the install path, which `brew install`, `brew upgrade`
+   and `brew bundle` all reach, and those are the same commands that fetch the
+   tarball, so a stamp lands on the same invocation as the download failure
+   for nearly every user (see decision 5). Matt withdrew the stamps and
+   accepted the post-flip
    404; the web surfaces above carry the migration. Still NOT load-bearing: a
    zireael pinned issue or final-release note (invisible post-flip, serve only
    the pre-flip window). T9 is DEFERRABLE off the green gate but MUST land
