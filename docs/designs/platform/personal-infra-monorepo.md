@@ -1,6 +1,21 @@
 # Design: repurpose zireael as the personal-infra Pulumi monorepo
 
-Status: Draft
+Status: Draft — **premise superseded, do not execute as written (see below)**
+
+> [!IMPORTANT]
+> **zireael is being archived, not flipped private, and the private monorepo gets a
+> new repo name (TBD).** An archived GitHub repo is read-only for code, branches and
+> releases, so zireael cannot host this monorepo. That voids T1 (nothing to gut — the
+> new repo starts empty), T8 (archiving replaces the `visibility` flip), the global
+> constraint at "Repo flips private only in T8", and the 6 hard-coded
+> `repo:mattwilkinsonn/zireael:*` OIDC subjects plus the `zireael-*` Pulumi project
+> names, which must re-point at the new repo.
+>
+> Reason the flip was dropped: both retired Homebrew formulae fetch release assets
+> from `github.com/mattwilkinsonn/zireael/releases/...`, so privating the repo 404s
+> every user who had not yet migrated. Archiving keeps those assets alive.
+>
+> A full amendment PR is blocked on the new repo name. Detail: issue #310.
 
 ## Problem / Intent
 
