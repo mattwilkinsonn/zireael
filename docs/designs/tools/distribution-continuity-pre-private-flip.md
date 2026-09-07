@@ -235,10 +235,11 @@ monorepo. Consolidation costs one extra checkout target in `bump-tap` and
 buys one tap name across all future tool churn.
 
 **Amended 2026-09-07:** the "three tap paths in the wild" counted here were
-documented tap *names*, not installed clones. The jj-hooks and jj-gt taps were
-never reachable by the one-argument `brew tap` (see T7), so only the zireael
-tap ever had users. The consolidation verdict is unchanged — it rests on
-having one durable name for future tool churn, which stands on its own.
+documented tap *names*. In practice only the zireael tap accumulated users:
+the jj-hooks and jj-gt taps were reachable only through the two-argument
+`brew tap`, which their READMEs published for about eleven hours before T4/T5
+re-pointed them (see T7). The consolidation verdict is unchanged — it rests
+on having one durable name for future tool churn, which stands on its own.
 
 **No-new-release minimal continuity.** Skip v0.3.12; rely on the mirrored
 0.3.11 assets + tap re-point alone. Cheapest, but leaves the crates.io
@@ -488,21 +489,29 @@ Interfaces:
 
 ### T7 — DROPPED 2026-09-07 (was: retire the per-repo standalone taps)
 
-This task assumed users had tapped `mattwilkinsonn/jj-hooks` or
-`mattwilkinsonn/jj-gt` directly. In practice nobody could have. The
-one-argument `brew tap mattwilkinsonn/jj-hooks` is a shortcut that resolves to
-`https://github.com/mattwilkinsonn/homebrew-jj-hooks` (`cmd/tap.rb:17-26`),
-which does not exist. The two-argument form with an explicit URL taps any repo
-regardless of name — that is how zireael's own tap worked
-(`brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael`)
-— but no published instruction ever used it for the per-tool repos. zireael's
-root README did briefly point at them (`9637603:README.md:22-24`), in the
-one-argument form, so anyone who followed it got a tap failure rather than a
-working tap. The in-repo `Formula/jj-hooks.rb` and `Formula/jj-gt.rb` arrived
-as scaffolding in the extraction commits (`0c56e080`, `f64aa7ff`). There is no
-installed population to redirect, so a `disable!` stamp there would reach
-nobody. Both files should simply be deleted as dead scaffolding, tracked
-separately from this record. See OQ3.
+This task assumed a population of users who had tapped
+`mattwilkinsonn/jj-hooks` or `mattwilkinsonn/jj-gt` directly. That population
+is empty in practice, for two independent reasons.
+
+The instruction most readers would have met cannot work. zireael's root README
+pointed at both taps (`9637603:README.md:22-24`) using the one-argument
+`brew tap mattwilkinsonn/jj-hooks`, which is a shortcut for
+`https://github.com/mattwilkinsonn/homebrew-jj-hooks` (`cmd/tap.rb:17-26`) — a
+repo that does not exist. Anyone who followed it got a tap failure.
+
+A working instruction did exist, but only briefly. Both standalone READMEs
+shipped the two-argument form, which takes an explicit URL and ignores the
+`homebrew-` convention entirely (`jj-hooks/README.md:62-63` at `0c56e080`,
+`jj-gt/README.md:113-114` at `f64aa7ff`) — the same form zireael's own tap
+always used. It was live for about eleven hours on 2026-09-05 (published
+10:54, re-pointed at the consolidated tap by `73dc3dd1`/`b41ed4d4` at 21:43)
+before T4/T5 replaced it. On a sub-10-star pair of tools, an eleven-hour
+window on a weekday is not a real install base.
+
+The formulae themselves (`Formula/jj-hooks.rb`, `Formula/jj-gt.rb`) arrived as
+scaffolding in those same extraction commits. With no installed population, a
+`disable!` stamp there reaches nobody, so both files should simply be deleted
+as dead scaffolding, tracked separately from this record. See OQ3.
 
 ### T8 — Confirm the sequence gate to the infra record (BOX-DOABLE)
 
@@ -539,9 +548,9 @@ tap clone on `brew install` and `brew upgrade`, the same commands that fetch
 the tarball, so the stamp would fire on the same invocation as the download
 failure for nearly every user, and Matt accepted the post-flip 404 rather than
 carry a surface that buys a narrow slice. T7 was dropped outright — the
-per-repo taps had no installed users, because the only instruction ever
-published for them used the one-argument `brew tap`, which cannot resolve
-`homebrew-jj-hooks`/`homebrew-jj-gt` (see T7).
+per-repo taps had no meaningful installed population: the widely-published
+instruction used a `brew tap` form that cannot resolve, and the working form
+was live for only about eleven hours (see T7).
 
 Interfaces:
 
@@ -564,8 +573,8 @@ Interfaces:
       OQ1)
 - [ ] T6: admin runbook executed — App installs, vars/secrets, tap ruleset,
       tag pushes, green runs (LAPTOP)
-- [x] T7: DROPPED — the per-repo standalone taps had no installed users (the
-      only published instruction used a `brew tap` form that cannot resolve)
+- [x] T7: DROPPED — the per-repo standalone taps had no meaningful installed
+      population (working instruction was live ~11 hours; see T7)
 - [ ] T8: sequence gate confirmed to the infra record (BOX-DOABLE)
 - [ ] T9: zireael tap docs re-pointed → mattwilkinsonn/tap; `disable!` stamps
       withdrawn 2026-09-07 (BOX-DOABLE, pre-flip)
@@ -605,13 +614,14 @@ work. OQ1 was put to Matt and RESOLVED (below); OQ2-OQ4 stand as designed.
    the pre-flip window). T9 is DEFERRABLE off the green gate but MUST land
    before infra T8.
 3. **Retire the per-repo standalone taps or leave as silent dupes?**
-   **Amended 2026-09-07: DROPPED, the question was malformed.** It assumed a
-   user could have tapped `mattwilkinsonn/jj-hooks` or `mattwilkinsonn/jj-gt`.
+   **Amended 2026-09-07: DROPPED, the premise does not hold.** It assumed an
+   installed population on `mattwilkinsonn/jj-hooks` / `mattwilkinsonn/jj-gt`.
    The one-argument `brew tap` derives `homebrew-<repo>`, which for these two
-   does not exist; the two-argument form would work but was never published
-   for them. The only instruction that ever pointed at these taps
-   (`9637603:README.md:22-24`) used the one-argument form and would have
-   failed. So the installed population is empty in practice, and the in-repo
+   does not exist, so zireael's published pointer
+   (`9637603:README.md:22-24`) would have failed for anyone who tried it. The
+   two-argument form does work and was published in both standalone READMEs,
+   but only for about eleven hours on 2026-09-05 before T4/T5 re-pointed them
+   at the consolidated tap. That is not a real install base, so the in-repo
    `Formula/*.rb` — scaffolding from the extraction commits (`0c56e080`,
    `f64aa7ff`) — redirect nobody. Correct disposition is deleting both files
    as dead scaffolding.
