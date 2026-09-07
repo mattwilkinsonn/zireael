@@ -24,10 +24,11 @@ This repo is going private, after which these formulae stop resolving and
 their release assets stop downloading. They carry no Homebrew `disable!`
 stamp. A stamp is only read after `brew update` refreshes the tap clone, and
 the commands that install or upgrade — `brew install`, `brew upgrade`, and
-`brew bundle`, which runs `brew install` for you — are the same ones that
-fetch the tarball. So on those paths the stamp fires on the same invocation as
-the download failure and buys nothing. Both tools moved to their own
-standalone repos ([`jj-hooks`](https://github.com/mattwilkinsonn/jj-hooks),
+`brew bundle`, which runs `brew install` for anything not already installed —
+are the same ones that fetch the tarball. So on those paths the stamp fires
+on the same invocation as the download failure and buys nothing. Both tools
+moved to their own standalone repos
+([`jj-hooks`](https://github.com/mattwilkinsonn/jj-hooks),
 [`jj-gt`](https://github.com/mattwilkinsonn/jj-gt)), whose READMEs document
 the same install path.
 

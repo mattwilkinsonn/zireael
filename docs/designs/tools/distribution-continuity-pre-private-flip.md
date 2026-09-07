@@ -197,23 +197,29 @@ but buys very little. A stamp is reported from the install path
 (`formula_installer.rb:327-339` raises `CannotInstallFormulaError` on
 `:disabled`), reached by `brew install` and `brew upgrade`, and by `brew
 bundle` when it runs a child `brew install` and prints its output
-(`bundle/installer.rb:306`, `bundle.rb:42`). Those are also the commands that
-fetch the tarball, so where the stamp fires at all it fires on the same
+(`bundle/installer.rb:306-307`, `bundle.rb:42`). Those are also the commands
+that fetch the tarball, so where the stamp fires at all it fires on the same
 invocation as the download failure it was meant to pre-empt. Two gaps are
-worth naming. A user whose formula is already installed and current does not
-reach the install path — `brew install` returns early (`cmd/install.rb:274`),
-so that user sees neither the stamp nor the 404 until they next upgrade. And
-other commands refresh the clone without installing — `outdated`, `release`,
-two-argument `tap`, and the `bump*` family (`utils/auto-update.sh:144-184`;
-there is no background refresh, `brew autoupdate` being a third-party tap) —
-of which only `outdated` is a normal-user command, and it was checked: it does
-not report a disabled formula (`cmd/outdated.rb` never references
-`DeprecateDisable`). The rest are maintainer commands. So what the withdrawal
-gives up is the user who refreshes pre-flip and then does not touch these
-tools until after. Against a sub-10-star user base that mostly installs via
-cargo, Matt accepted the post-flip 404 instead. The surviving comms are the web
-surfaces above, which do not depend on the flip. A transient courtesy note on
-zireael's README covers the pre-flip window but is not load-bearing.
+worth naming. A user whose formula is already installed and current never
+reaches the install path at all: `brew install` returns early
+(`cmd/install.rb:262-275`), and `brew upgrade` returns before building an
+installer when nothing is outdated (`cmd/upgrade.rb:426`). A `disable!` stamp
+does not change the version, so a formula frozen at 0.3.11 never becomes
+outdated and that user would never have seen the stamp — the gap is permanent,
+not deferred, which makes the withdrawal cost less rather than more. Second,
+some commands refresh the clone without installing — `outdated`, `release`,
+two-argument `tap`, and parts of the `bump*` family (`bump`,
+`bump-formula-pr`, `bump-cask-pr`, `bump-unversioned-casks`;
+`utils/auto-update.sh:144-184`; there is no background refresh, `brew
+autoupdate` being a third-party tap). `release` and the `bump*` commands are
+maintainer commands. The two user-facing ones were checked and neither reports
+a disabled formula: `cmd/outdated.rb` and `cmd/tap.rb` never reference
+`DeprecateDisable`. So what the withdrawal gives up is the user who refreshes
+pre-flip and then does not touch these tools until after. Against a
+sub-10-star user base that mostly installs via cargo, Matt accepted the
+post-flip 404 instead. The surviving comms are the web surfaces above, which
+do not depend on the flip. A transient courtesy note on zireael's README
+covers the pre-flip window but is not load-bearing.
 
 ### App identity (settled)
 
@@ -558,8 +564,8 @@ formulae stay at 0.3.11 and unstamped. Rationale in brief: a disabled formula
 is reported from the install path — `brew install`, `brew upgrade`, and `brew
 bundle` when it shells out to one — which are the same commands that fetch the
 tarball, so where the stamp fires it fires on the same invocation as the
-download failure, and Matt accepted the post-flip 404 rather than
-carry a surface that buys a narrow slice. T7 was dropped outright — the
+download failure, and Matt accepted the post-flip 404 rather than carry a
+surface that buys a narrow slice. T7 was dropped outright — the
 per-repo taps had no meaningful installed population: the widely-published
 instruction used a `brew tap` form that cannot resolve, and the working form
 was live for only about eleven hours (see T7).
@@ -617,14 +623,14 @@ work. OQ1 was put to Matt and RESOLVED (below); OQ2-OQ4 stand as designed.
    `.rb` files, called here "the ONLY surfaces that reach existing
    zireael-tap users after the flip". That claim overstated their reach — a
    stamp is reported from the install path, reached by `brew install`, `brew
-   upgrade` and `brew bundle`, and those are the same commands that fetch the
-   tarball, so where a stamp lands it lands on the same invocation as the
-   download failure (see decision 5, which also names the two gaps). Matt
-   withdrew the stamps and accepted the post-flip
-   404; the web surfaces above carry the migration. Still NOT load-bearing: a
-   zireael pinned issue or final-release note (invisible post-flip, serve only
-   the pre-flip window). T9 is DEFERRABLE off the green gate but MUST land
-   before infra T8.
+   upgrade`, and `brew bundle` when it shells out to a child `brew install`,
+   and those are the same commands that fetch the tarball, so where a stamp
+   lands it lands on the same invocation as the download failure (see
+   decision 5, which also names the two gaps). Matt withdrew the stamps and
+   accepted the post-flip 404; the web surfaces above carry the migration.
+   Still NOT load-bearing: a zireael pinned issue or final-release note
+   (invisible post-flip, serve only the pre-flip window). T9 is DEFERRABLE
+   off the green gate but MUST land before infra T8.
 3. **Retire the per-repo standalone taps or leave as silent dupes?**
    **Amended 2026-09-07: DROPPED, the premise does not hold.** It assumed an
    installed population on `mattwilkinsonn/jj-hooks` / `mattwilkinsonn/jj-gt`.
