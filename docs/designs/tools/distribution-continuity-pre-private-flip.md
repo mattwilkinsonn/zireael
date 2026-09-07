@@ -199,27 +199,31 @@ but buys very little. A stamp is reported from the install path
 bundle` when it runs a child `brew install` and prints its output
 (`bundle/installer.rb:306-307`, `bundle.rb:42`). Those are also the commands
 that fetch the tarball, so where the stamp fires at all it fires on the same
-invocation as the download failure it was meant to pre-empt. Two gaps are
-worth naming. A user whose formula is already installed and current never
-reaches the install path at all: `brew install` returns early
-(`cmd/install.rb:262-275`), and `brew upgrade` returns before building an
-installer when nothing is outdated (`cmd/upgrade.rb:426`). A `disable!` stamp
-does not change the version, so a formula frozen at 0.3.11 never becomes
-outdated and that user would never have seen the stamp — the gap is permanent,
-not deferred, which makes the withdrawal cost less rather than more. Second,
-some commands refresh the clone without installing — `outdated`, `release`,
-two-argument `tap`, and parts of the `bump*` family (`bump`,
+invocation as the download failure it was meant to pre-empt. Two things are
+worth naming. First, a user whose formula is already installed and current
+does not reach the install path via `brew install` (returns early,
+`cmd/install.rb:262-275`) or `brew upgrade` (returns before building an
+installer when nothing is outdated, `cmd/upgrade.rb:426`), and since a
+`disable!` stamp does not change the version, a formula frozen at 0.3.11 never
+becomes outdated. That user would reach it through `brew reinstall`, which
+filters only on `pinned?` and goes straight to the installer
+(`cmd/reinstall.rb:175-201`) — a real slice the withdrawal gives up, though a
+reinstall against a private repo fails on the download regardless. Second,
+some commands trigger an auto-update without installing — `outdated`,
+`release`, two-argument `tap`, and parts of the `bump*` family (`bump`,
 `bump-formula-pr`, `bump-cask-pr`, `bump-unversioned-casks`;
 `utils/auto-update.sh:144-184`; there is no background refresh, `brew
 autoupdate` being a third-party tap). `release` and the `bump*` commands are
-maintainer commands. The two user-facing ones were checked and neither reports
-a disabled formula: `cmd/outdated.rb` and `cmd/tap.rb` never reference
-`DeprecateDisable`. So what the withdrawal gives up is the user who refreshes
-pre-flip and then does not touch these tools until after. Against a
-sub-10-star user base that mostly installs via cargo, Matt accepted the
-post-flip 404 instead. The surviving comms are the web surfaces above, which
-do not depend on the flip. A transient courtesy note on zireael's README
-covers the pre-flip window but is not load-bearing.
+maintainer commands. The two user-facing ones were checked behaviourally:
+`cmd/outdated.rb` prints version strings only (`:154`, `:156`) and `cmd/tap.rb`
+lists or clones taps, and neither calls `disabled?` or `pretty_install_status`.
+Note that `brew info` does print the stamp (`cmd/info.rb:483-487`) without
+downloading, so a curious user could still see it. So the main slice the
+withdrawal gives up is the user who refreshes pre-flip and then does not touch
+these tools until after. Against a sub-10-star user base that mostly installs
+via cargo, Matt accepted the post-flip 404 instead. The surviving comms are
+the web surfaces above, which do not depend on the flip. A transient courtesy
+note on zireael's README covers the pre-flip window but is not load-bearing.
 
 ### App identity (settled)
 
