@@ -197,7 +197,7 @@ but buys very little. A stamp is reported from the install path
 (`formula_installer.rb:327-339` raises `CannotInstallFormulaError` on
 `:disabled`), reached by `brew install` and `brew upgrade`, and by `brew
 bundle` when it runs a child `brew install` and prints its output
-(`bundle/installer.rb:306-307`, `bundle.rb:42`). Those are also the commands
+(`bundle/installer.rb:300-302`, `bundle.rb:42`). Those are also the commands
 that fetch the tarball, so where the stamp fires at all it fires on the same
 invocation as the download failure it was meant to pre-empt. Two things are
 worth naming. First, a user whose formula is already installed and current
@@ -205,23 +205,39 @@ does not reach the install path via `brew install` (returns early,
 `cmd/install.rb:262-275`) or `brew upgrade` (returns before building an
 installer when nothing is outdated, `cmd/upgrade.rb:426`), and since a
 `disable!` stamp does not change the version, a formula frozen at 0.3.11 never
-becomes outdated. That user would reach it through `brew reinstall`, which
-filters only on `pinned?` and goes straight to the installer
-(`cmd/reinstall.rb:175-201`) — a real slice the withdrawal gives up, though a
-reinstall against a private repo fails on the download regardless. Second,
-some commands trigger an auto-update without installing — `outdated`,
-`release`, two-argument `tap`, and parts of the `bump*` family (`bump`,
-`bump-formula-pr`, `bump-cask-pr`, `bump-unversioned-casks`;
+becomes outdated. That user would reach it through `brew reinstall`, whose only
+per-formula filter is `pinned?` (`cmd/reinstall.rb:175-195`) and which reaches
+the stamp on a default invocation through `Install.enqueue_formulae`
+(`cmd/reinstall.rb:262` → `install.rb:279-287` → `:170`
+`prelude_fetch_formulae` → `formula_installer.rb:334-339`). The direct prelude
+at `cmd/reinstall.rb:201` is the `--no-ask` path only, gated at `:198` by
+`if !ask && …` with ask mode the default (`:131`, `:41-43`). That is a real
+slice the withdrawal gives up, and the stamp fires before any bottle or source
+download is enqueued (`formula_installer.rb:334-339` precedes `:350` and
+`:359-363`), so a stamped formula would have failed with an actionable message
+rather than a 404. Unstamped, the same reinstall 404s on the asset URL —
+unless the 0.3.11 tarball is still cached, in which case it succeeds silently
+(`download_queue.rb:65`). Second, some commands trigger an auto-update without
+installing — `outdated`, `release`, two-argument `tap`, and parts of the
+`bump*` family (`bump`, `bump-formula-pr`, `bump-cask-pr`,
+`bump-unversioned-casks`;
 `utils/auto-update.sh:144-184`; there is no background refresh, `brew
 autoupdate` being a third-party tap). `release` and the `bump*` commands are
-maintainer commands. The two user-facing ones were checked behaviourally:
-`cmd/outdated.rb` prints version strings only (`:154`, `:156`) and `cmd/tap.rb`
-lists or clones taps, and neither calls `disabled?` or `pretty_install_status`.
-Note that `brew info` does print the stamp (`cmd/info.rb:483-487`) without
-downloading, so a curious user could still see it. So the main slice the
-withdrawal gives up is the user who refreshes pre-flip and then does not touch
-these tools until after. Against a sub-10-star user base that mostly installs
-via cargo, Matt accepted the post-flip 404 instead. The surviving comms are
+maintainer commands. The two user-facing commands in that list were checked
+behaviourally: `cmd/outdated.rb` prints version strings only (`:154`, `:156`,
+and the `--json=v2` path at `:182-222`) and `cmd/tap.rb` lists or clones taps
+(`:52`, `:55-60`); neither reaches `DeprecateDisable.type`/`.message`, which is
+where every stamp report in the tree originates (`formula_installer.rb:327,329`,
+`cmd/info.rb:482`, `cask/installer.rb:224,227`, `cask/upgrade.rb:48,62`,
+`cask/info.rb:20`). The list is not the whole refresh surface:
+`brew update-if-needed` sets `HOMEBREW_AUTO_UPDATE_COMMAND` itself
+(`cmd/update-if-needed.sh:3-6`) and `brew update` refreshes the clone directly,
+and neither reports a disabled formula. Note that `brew info` does print the
+stamp (`cmd/info.rb:483-487`) without downloading, so a curious user could
+still see it. So the main slice the withdrawal gives up is the user who
+refreshes pre-flip and then does not touch these tools until after. Against a
+sub-10-star user base that mostly installs via cargo, Matt accepted the
+post-flip 404 instead. The surviving comms are
 the web surfaces above, which do not depend on the flip. A transient courtesy
 note on zireael's README covers the pre-flip window but is not load-bearing.
 
@@ -565,14 +581,15 @@ to `mattwilkinsonn/tap`.
 **Amended 2026-09-07 (Matt): the `disable!` stamps this task originally
 specified are withdrawn** — see decision 5. The task shipped without them; the
 formulae stay at 0.3.11 and unstamped. Rationale in brief: a disabled formula
-is reported from the install path — `brew install`, `brew upgrade`, and `brew
-bundle` when it shells out to one — which are the same commands that fetch the
-tarball, so where the stamp fires it fires on the same invocation as the
-download failure, and Matt accepted the post-flip 404 rather than carry a
-surface that buys a narrow slice. T7 was dropped outright — the
-per-repo taps had no meaningful installed population: the widely-published
-instruction used a `brew tap` form that cannot resolve, and the working form
-was live for only about eleven hours (see T7).
+is reported from the install path — `brew install`, `brew upgrade`, `brew
+reinstall`, and `brew bundle` when it shells out to one. For all but reinstall
+those are the same commands that fetch the tarball, so where the stamp fires it
+fires on the same invocation as the download failure; on reinstall it fires
+first, which is the slice decision 5 concedes. Matt accepted the post-flip 404
+rather than carry a surface that buys a narrow slice. T7 was dropped
+outright — the per-repo taps had no meaningful installed population: the
+widely-published instruction used a `brew tap` form that cannot resolve, and
+the working form was live for only about eleven hours (see T7).
 
 Interfaces:
 
@@ -627,10 +644,11 @@ work. OQ1 was put to Matt and RESOLVED (below); OQ2-OQ4 stand as designed.
    `.rb` files, called here "the ONLY surfaces that reach existing
    zireael-tap users after the flip". That claim overstated their reach — a
    stamp is reported from the install path, reached by `brew install`, `brew
-   upgrade`, and `brew bundle` when it shells out to a child `brew install`,
-   and those are the same commands that fetch the tarball, so where a stamp
-   lands it lands on the same invocation as the download failure (see
-   decision 5, which also names the two gaps). Matt withdrew the stamps and
+   upgrade`, `brew reinstall`, and `brew bundle` when it shells out to a child
+   `brew install`, and for all but reinstall those are the same commands that
+   fetch the tarball, so where a stamp lands it lands on the same invocation as
+   the download failure (see decision 5, which names the reinstall slice given
+   up and the non-installing refresh commands). Matt withdrew the stamps and
    accepted the post-flip 404; the web surfaces above carry the migration.
    Still NOT load-bearing: a zireael pinned issue or final-release note
    (invisible post-flip, serve only the pre-flip window). T9 is DEFERRABLE
