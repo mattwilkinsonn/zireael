@@ -17,13 +17,26 @@ being repurposed. Each tool now lives at, and is installed from, its own repo:
 #### Homebrew
 
 ```bash
-brew install mattwilkinsonn/jj-hooks/jj-hooks   # ships jj-hooks + jj-hp
-brew install mattwilkinsonn/jj-gt/jj-gt
+brew tap mattwilkinsonn/tap
+brew install mattwilkinsonn/tap/jj-hooks   # ships jj-hooks + jj-hp
+brew install mattwilkinsonn/tap/jj-gt
 ```
 
-> **Migrating off the old tap.** If you previously tapped
-> `mattwilkinsonn/zireael`, run `brew untap mattwilkinsonn/zireael`, then
-> install from the per-tool taps above.
+> **Migrating off an old tap.** If you previously tapped
+> `mattwilkinsonn/zireael` (or a per-tool tap), uninstall the tools and untap
+> it before tapping `mattwilkinsonn/tap` — Homebrew refuses to install a
+> same-named formula from a second tap while the old one is still installed:
+>
+> ```bash
+> # Only the tools/taps you actually have — brew errors on an unknown keg or
+> # an un-added tap. `brew tap` lists what you currently have tapped.
+> brew uninstall jj-hooks jj-gt
+> brew untap mattwilkinsonn/zireael
+> brew untap mattwilkinsonn/jj-hooks
+> brew untap mattwilkinsonn/jj-gt
+> brew tap mattwilkinsonn/tap
+> brew install mattwilkinsonn/tap/jj-hooks mattwilkinsonn/tap/jj-gt
+> ```
 
 #### Cargo (Rust tools)
 

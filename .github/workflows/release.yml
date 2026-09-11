@@ -315,34 +315,6 @@ jobs:
           git rebase origin/main
           git push origin HEAD:main
 
-  # ----- Validate the freshly published tap installs end-to-end.
-  validate-tap:
-    name: Validate tap (${{ matrix.os }})
-    needs: [meta, bump-tap]
-    if: needs.meta.outputs.prerelease == 'false'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    env:
-      HOMEBREW_NO_AUTO_UPDATE: "1"
-    steps:
-      - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@main
-      - name: Tap, install, and test every formula
-        run: |
-          set -euo pipefail
-          brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
-          brew trust mattwilkinsonn/zireael
-          for formula in jj-hooks jj-gt; do
-            echo "::group::${formula}"
-            brew install "mattwilkinsonn/zireael/${formula}"
-            brew test "mattwilkinsonn/zireael/${formula}"
-            echo "::endgroup::"
-          done
-
   # ----- Publish to crates.io.
   #
   # Two-step in dependency order: jj-hooks first (no internal deps),

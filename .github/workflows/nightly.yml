@@ -1,9 +1,9 @@
 name: nightly
 
 # Daily cron that runs the full moon gate unconditionally (ignores
-# affected detection) plus the tap install smoke-test. Catches drift from
-# upstream auto-updates (the devenv/nixpkgs linters, brew formulae, npm
-# registry) that a code-change PR wouldn't trigger.
+# affected detection). Catches drift from upstream auto-updates (the
+# devenv/nixpkgs linters, npm registry) that a code-change PR wouldn't
+# trigger.
 #
 # Skipped when `main` hasn't advanced since the last nightly. The `report`
 # job posts the aggregate result back to the HEAD commit.
@@ -84,35 +84,6 @@ jobs:
       - name: moon run tap:ci
         run: devenv shell -- moon run tap:ci
 
-  # End-to-end tap install smoke test (not a moon task — it exercises the
-  # published Homebrew formulae, not the repo build).
-  validate-tap:
-    name: validate tap install (nightly, ${{ matrix.os }})
-    needs: changes
-    if: needs.changes.outputs.run == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    env:
-      HOMEBREW_NO_AUTO_UPDATE: "1"
-    steps:
-      - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@main
-      - name: Tap, install, and test every formula
-        run: |
-          set -euo pipefail
-          brew tap mattwilkinsonn/zireael https://github.com/mattwilkinsonn/zireael
-          brew trust mattwilkinsonn/zireael
-          for formula in jj-hooks jj-gt; do
-            echo "::group::${formula}"
-            brew install "mattwilkinsonn/zireael/${formula}"
-            brew test "mattwilkinsonn/zireael/${formula}"
-            echo "::endgroup::"
-          done
-
   # Post the aggregate nightly result to the HEAD commit so it shows in
   # the commit's checks dropdown (scheduled runs don't auto-attach).
   report:
@@ -121,7 +92,6 @@ jobs:
       - changes
       - moon-ci
       - moon-ci-darwin
-      - validate-tap
     if: always() && needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     permissions:

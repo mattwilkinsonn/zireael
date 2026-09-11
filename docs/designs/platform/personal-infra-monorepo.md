@@ -2,6 +2,24 @@
 
 Status: Draft
 
+> [!NOTE]
+> **This record's plan stands as written: zireael flips private and hosts this
+> monorepo.** An earlier revision of this banner said the premise was superseded
+> by archiving zireael instead — that is withdrawn.
+>
+> The concern was that both retired Homebrew formulae fetch release assets from
+> `github.com/mattwilkinsonn/zireael/releases/...`, so privating 404s anyone who
+> has not migrated to `mattwilkinsonn/tap`. Matt's ruling: accept the 404. These
+> are sub-10-star CLI tools, most users install via cargo, and a stranded user
+> recovers by tapping `mattwilkinsonn/tap` (documented in both tool READMEs).
+> Archiving was rejected because it leaves zireael a permanently dead repo that
+> only redirects at the tap.
+>
+> Consequence: T1, T8, the "repo flips private only in T8" constraint, the
+> `repo:mattwilkinsonn/zireael:*` OIDC subjects and the `zireael-*` Pulumi
+> project names are all **valid as written** — no re-pointing, and no new repo
+> name is needed. Detail: issue #310.
+
 ## Problem / Intent
 
 Once jj-hooks and jj-gt are extracted to standalone repos and akiflow-cli is
