@@ -30,8 +30,10 @@ This record cites three sibling records by letter:
 - **Record B** — `docs/designs/tools/distribution-continuity-pre-private-flip.md`:
   consolidate Homebrew distribution into `mattwilkinsonn/homebrew-tap` before
   this repo flips private. Merged (#313); executing (#312).
-- **Record C** — `docs/designs/tools/standalone-release-driver.md`: port the
-  release driver out of `tools/release/` into dev-shared. In review.
+- **Record C** — issue #327: port the release driver out of `tools/release/`
+  into dev-shared. Filed; not started. (Its design record was closed unmerged
+  as oversized for the change — #327 carries the plan.)
+
 ## Problem / Intent
 
 Once jj-hooks and jj-gt are extracted to standalone repos and akiflow-cli is
@@ -340,16 +342,18 @@ Preconditions (all three, in order):
 1. **Record A's extraction PRs are merged** and the standalone tool repos
    exist.
 2. **Record B (distribution continuity) has reached its own terminal gate** —
-   v0.3.12 live on crates.io and `brew tap mattwilkinsonn/tap` installing it
-   (record B's T8). Until that holds, the consolidated tap is unproven and
-   this repo's `Formula/` copies are still the fallback seed material.
-3. **Record C (standalone release driver) has landed the driver in
-   dev-shared.** `tools/release/` holds the *only* copy of the driver
-   (`tools/release/index.ts`, 274 lines + its test suite); record C ports it
-   to `dev-shared/release/index.ts`. Deleting `tools/` before that port is
-   merged destroys the source with no replacement — record C states the
-   constraint directly: the seed material is "never destroyed before its
-   replacement is proven."
+   SATISFIED 2026-09-11. v0.3.12 is live on crates.io for both crates, both
+   tap formulae are pinned `version "0.3.12"`, and the `bump-tap` +
+   `validate-tap` jobs ran green against the consolidated tap on macOS and
+   Linux. The tap is proven; this repo's `Formula/` copies are no longer
+   needed as fallback seed material.
+3. **Record C (standalone release driver, #327) has landed the driver in
+   dev-shared.** NOT yet satisfied. `tools/release/` holds the *only* copy of
+   the driver (`tools/release/index.ts`, 274 lines + its test suite); #327
+   ports it to `dev-shared/release/index.ts`. Deleting `tools/` before that
+   port is merged destroys the source with no replacement, and #327 keeps
+   this repo's copy as the rollback path until one real release has been cut
+   through the shared driver.
 
 **If T1 runs before precondition 3, split it:** delete everything in the list
 except `tools/release/`, and retire that directory in a follow-up once the
