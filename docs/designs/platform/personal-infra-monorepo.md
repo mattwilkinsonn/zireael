@@ -20,6 +20,20 @@ Status: Draft
 > project names are all **valid as written** — no re-pointing, and no new repo
 > name is needed. Detail: issue #310.
 
+## Related records
+
+This record cites three sibling records by letter:
+
+- **Record A** — `docs/designs/tools/oss-tool-extraction-and-shared-tooling.md`:
+  extract jj-hooks and jj-gt to standalone repos, drop akiflow-cli. Merged
+  (#303/#304); execution complete.
+- **Record B** — `docs/designs/tools/distribution-continuity-pre-private-flip.md`:
+  consolidate Homebrew distribution into `mattwilkinsonn/homebrew-tap` before
+  this repo flips private. Merged (#313); executing (#312).
+- **Record C** — issue #327: port the release driver out of `tools/release/`
+  into dev-shared. Filed; not started. (Its design record was closed unmerged
+  as oversized for the change — #327 carries the plan.)
+
 ## Problem / Intent
 
 Once jj-hooks and jj-gt are extracted to standalone repos and akiflow-cli is
@@ -56,13 +70,17 @@ All of the following exists today and goes away:
 - **Root Rust workspace** — `Cargo.toml:1-7` declares
   `members = ["tools/jj-hooks", "tools/jj-gt", …]`; plus `Cargo.lock`. Gone
   with the extraction.
-- **`tools/`** — `jj-hooks/`, `jj-gt/`, `akiflow-cli/`, `release/`,
-  `install-debug/`, `setup-live-test-fixture/` (all six dirs listed in
-  `.moon/workspace.yml:16-23`). The release/install tooling exists only to
-  ship the extracted tools.
-- **`Formula/`** — the Homebrew tap (`akiflow-cli.rb`, `jj-gt.rb`,
-  `jj-hooks.rb`, `moon.yml`, `README.md`). Formulae move with their tools
-  (record A).
+- **`tools/`** — `jj-hooks/`, `jj-gt/`, `release/`, `install-debug/`,
+  `setup-live-test-fixture/` (five dirs; `akiflow-cli/` was already dropped by
+  record A, #311). The release/install tooling exists only to ship the
+  extracted tools. **`tools/release/` is gated — see the T1 precondition
+  below: it holds the only copy of the release driver, which record C ports
+  into dev-shared.**
+- **`Formula/`** — the retired in-repo tap (`jj-gt.rb`, `jj-hooks.rb`,
+  `moon.yml`, `README.md`; `akiflow-cli.rb` already gone with #311).
+  Superseded by the consolidated `mattwilkinsonn/homebrew-tap`, which is now
+  the sole tap (record B). These copies are dead weight, not material to
+  move.
 - **Release/nightly workflows** — `.github/workflows/release.yml:7-9` ("Builds
   release artifacts for every monorepo tool, attaches them to a single GitHub
   Release, bumps each Formula/*.rb in-place, and publishes the Rust crates to
@@ -308,7 +326,8 @@ binds from the first protected import.
 
 Delete (precise list, grounded in Approach § "What is gutted"):
 `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `clippy.toml`,
-`.prototools`, `tools/` (all six subdirs), `Formula/`, `CHANGELOG.md`,
+`.prototools`, `tools/` (five subdirs — but see precondition 3 on
+`tools/release/`), `Formula/`, `CHANGELOG.md`,
 `moon.yml`, `.moon/workspace.yml`, `.github/workflows/release.yml`,
 `.github/workflows/nightly.yml`, `.github/scripts/` (holds only
 `bump-formulae.py`, dead once release.yml and `Formula/` are gone),
@@ -318,8 +337,29 @@ Edit: `.gitignore` (drop Rust lines 1-5 and moon lines 33-36),
 `.envrc` (drop `watch_file .prototools`, line 10), `README.md` (rewrite for
 the new purpose).
 
-Precondition: record A's extraction PRs are merged and the standalone tool
-repos exist.
+Preconditions (all three, in order):
+
+1. **Record A's extraction PRs are merged** and the standalone tool repos
+   exist.
+2. **Record B (distribution continuity) has reached its own terminal gate** —
+   SATISFIED 2026-09-11. v0.3.12 is live on crates.io for both crates, both
+   tap formulae are pinned `version "0.3.12"`, and the `bump-tap` +
+   `validate-tap` jobs ran green against the consolidated tap on macOS and
+   Linux. The tap is proven; this repo's `Formula/` copies are no longer
+   needed as fallback seed material.
+3. **Record C (standalone release driver, #327) has landed the driver in
+   dev-shared.** NOT yet satisfied. `tools/release/` holds the *only* copy of
+   the driver (`tools/release/index.ts`, 274 lines + its test suite); #327
+   ports it to `dev-shared/release/index.ts`. Deleting `tools/` before that
+   port is merged destroys the source with no replacement, and #327 keeps
+   this repo's copy as the rollback path until one real release has been cut
+   through the shared driver.
+
+**If T1 runs before precondition 3, split it:** delete everything in the list
+except `tools/release/`, and retire that directory in a follow-up once the
+dev-shared driver is proven by a green release. A partial T1 is correct here;
+an early `tools/` delete is not recoverable from this repo once it is
+private.
 
 Interfaces:
 
